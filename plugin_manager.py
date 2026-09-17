@@ -204,28 +204,22 @@ class PluginManager:
     def get_store_catalog(self) -> list[dict]:
         return STORE_CATALOG
 
-    def sync_with_system_tools(self):
-        """Injeta as ferramentas ativas dos plug-ins diretamente no TOOL_REGISTRY e GEMINI_FUNCTION_DECLARATIONS."""
+    def rebuild_registry(self):
+        """
+        Reconstrói o registro do sistema garantindo que apenas ferramentas
+        de plug-ins ativamente habilitados permaneçam acessíveis ao modelo.
+        """
         try:
             import system_tools
             active_tools = self.get_active_tools()
-            
-            # Registra handlers no TOOL_REGISTRY
-            for t in active_tools:
-                system_tools.TOOL_REGISTRY[t.name] = t.handler
-
-            # Registra schemas em GEMINI_FUNCTION_DECLARATIONS se não existirem
-            existing_names = {d["name"] for d in system_tools.GEMINI_FUNCTION_DECLARATIONS}
-            for t in active_tools:
-                if t.name not in existing_names:
-                    system_tools.GEMINI_FUNCTION_DECLARATIONS.append({
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters
-                    })
-            logger.info(f"Sincronização concluída: {len(active_tools)} ferramentas de plug-ins registradas.")
+            system_tools.rebuild_registry(active_tools)
+            logger.info(f"Reconstrução de plug-ins concluída: {len(active_tools)} ferramentas ativas no sistema.")
         except Exception as e:
-            logger.error(f"Erro ao sincronizar ferramentas de plug-ins: {e}")
+            logger.error(f"Erro ao reconstruir ferramentas de plug-ins: {e}")
+
+    def sync_with_system_tools(self):
+        """Alias para rebuild_registry mantendo compatibilidade retroativa."""
+        self.rebuild_registry()
 
 # Instância única global do gerenciador
 plugin_manager = PluginManager()

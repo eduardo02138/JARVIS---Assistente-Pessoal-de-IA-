@@ -31,6 +31,7 @@ import datetime
 import psutil
 import shutil
 import glob
+import preferences_manager
 
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
 
@@ -270,19 +271,38 @@ def open_application(app_name: str) -> dict:
     target_match = aliases_game.get(clean_name, clean_name)
 
     try:
+        # Consulta preferências salvas para este jogo (ex: launcher favorito)
+        saved_game_pref = preferences_manager.get_preference("game_preferences", clean_name) or preferences_manager.get_preference("game_preferences", target_match)
+        pref_distribuidora = saved_game_pref.get("distribuidora", "").lower() if isinstance(saved_game_pref, dict) else ""
+
         games_info = list_installed_games()
+        all_matches = []
         for g in games_info.get("jogos", []):
             gn = g["nome"].lower()
             if target_match in gn or gn in target_match:
-                cmd = g["comando"].split()
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                return {
-                    "sucesso": True,
-                    "tipo": "jogo",
-                    "jogo": g["nome"],
-                    "distribuidora": g["distribuidora"],
-                    "mensagem": f"Iniciando o jogo '{g['nome']}' através da {g['distribuidora']}, senhor. Bom jogo!"
-                }
+                all_matches.append(g)
+
+        if all_matches:
+            # Se o usuário tiver preferência por distribuidora (ex: Epic vs Steam), prioriza
+            chosen_game = all_matches[0]
+            if pref_distribuidora:
+                for cand in all_matches:
+                    if pref_distribuidora in cand.get("distribuidora", "").lower():
+                        chosen_game = cand
+                        break
+
+            cmd = chosen_game["comando"].split()
+            if isinstance(saved_game_pref, dict) and saved_game_pref.get("custom_args"):
+                cmd.extend(saved_game_pref["custom_args"].split())
+
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {
+                "sucesso": True,
+                "tipo": "jogo",
+                "jogo": chosen_game["nome"],
+                "distribuidora": chosen_game["distribuidora"],
+                "mensagem": f"Iniciando o jogo '{chosen_game['nome']}' através da {chosen_game['distribuidora']}, senhor. Bom jogo!"
+            }
     except Exception as exc:
         pass
 
@@ -436,20 +456,213 @@ def open_website(url: str) -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir o site: {str(e)}"}
 
-def play_music(query: str) -> dict:
-    """Busca e toca qualquer música, álbum ou artista no YouTube no navegador."""
+def play_music(query: str, platform: str = None) -> dict:
+    """
+    Busca e toca qualquer música, álbum ou artista na plataforma preferida do usuário (YouTube, Spotify, Deezer).
+    Se 'platform' não for informada, consulta a preferência padrão gravada na memória persistente.
+    Se nenhuma preferência estiver cadastrada, solicita que o assistente pergunte a preferência do usuário.
+    """
     import urllib.parse
+
+    target_platform = platform.strip().lower() if platform else None
+    saved_platform = preferences_manager.get_preference("default_apps", "music_platform")
+
+    # Se a plataforma não veio no parâmetro, checa a memória persistente
+    if not target_platform:
+        if saved_platform:
+            target_platform = str(saved_platform).lower()
+        else:
+            # Não há preferência cadastrada: avisa para perguntar ao usuário
+            return {
+                "sucesso": True,
+                "status": "definir_preferencia",
+                "precisa_perguntar_preferencia": True,
+                "query": query,
+                "mensagem": (
+                    f"Senhor, ainda não temos uma plataforma padrão de música definida em suas preferências. "
+                    f"Pergunte educadamente ao senhor: 'Senhor, qual plataforma prefere utilizar como padrão para reproduzir músicas: YouTube ou Spotify?' "
+                    f"Quando o senhor responder, salve a escolha dele chamando manage_user_preference(action='set', category='default_apps', key='music_platform', value=escolha) "
+                    f"e em seguida toque a música com play_music(query='{query}', platform=escolha)."
+                )
+            }
+    else:
+        # Se veio plataforma e a memória ainda estava vazia, ou se foi explicitamente definida, salva como padrão
+        if not saved_platform:
+            preferences_manager.set_preference("default_apps", "music_platform", target_platform)
+
     encoded = urllib.parse.quote(query)
-    music_url = f"https://www.youtube.com/results?search_query={encoded}"
-    try:
-        subprocess.Popen(["xdg-open", music_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    # Execução por plataforma
+    if "spotify" in target_platform:
+        spotify_bin = shutil.which("spotify")
+        if spotify_bin:
+            try:
+                subprocess.Popen([spotify_bin, f"--uri=spotify:search:{encoded}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return {
+                    "sucesso": True,
+                    "plataforma": "Spotify (Desktop)",
+                    "busca": query,
+                    "mensagem": f"Reproduzindo '{query}' no aplicativo Spotify, senhor."
+                }
+            except Exception:
+                pass
+        spotify_url = f"https://open.spotify.com/search/{encoded}"
+        try:
+            subprocess.Popen(["xdg-open", spotify_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {
+                "sucesso": True,
+                "plataforma": "Spotify (Web)",
+                "busca": query,
+                "mensagem": f"Reproduzindo '{query}' no Spotify, senhor."
+            }
+        except Exception as e:
+            return {"sucesso": False, "mensagem": f"Falha ao abrir Spotify: {str(e)}"}
+
+    elif "deezer" in target_platform:
+        deezer_url = f"https://www.deezer.com/search/{encoded}"
+        try:
+            subprocess.Popen(["xdg-open", deezer_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {
+                "sucesso": True,
+                "plataforma": "Deezer",
+                "busca": query,
+                "mensagem": f"Reproduzindo '{query}' no Deezer, senhor."
+            }
+        except Exception as e:
+            return {"sucesso": False, "mensagem": f"Falha ao abrir Deezer: {str(e)}"}
+
+    else:
+        # Padrão YouTube
+        music_url = f"https://www.youtube.com/results?search_query={encoded}"
+        try:
+            subprocess.Popen(["xdg-open", music_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {
+                "sucesso": True,
+                "plataforma": "YouTube",
+                "busca": query,
+                "mensagem": f"Reproduzindo '{query}' no YouTube, senhor. Boa sessão."
+            }
+        except Exception as e:
+            return {"sucesso": False, "mensagem": f"Falha ao iniciar reprodução no YouTube: {str(e)}"}
+
+# ----------------- GERENCIAMENTO DE MEMÓRIA & PREFERÊNCIAS -----------------
+def manage_user_preference(action: str, category: str, key: str = None, value: str = None) -> dict:
+    """
+    Gerencia preferências e memórias persistentes do usuário.
+    'action': 'get', 'set', 'list', 'delete'.
+    'category': 'default_apps', 'game_preferences', 'file_associations', 'custom_memories'.
+    """
+    action = action.strip().lower()
+    category = category.strip().lower()
+
+    if action == "list":
+        if category:
+            data = preferences_manager.load_preferences().get(category, {})
+            return {"sucesso": True, "categoria": category, "dados": data, "mensagem": f"Preferências da categoria '{category}' recuperadas, senhor."}
+        else:
+            data = preferences_manager.get_all_preferences()
+            return {"sucesso": True, "todas_preferencias": data, "mensagem": "Todas as preferências e memórias foram recuperadas, senhor."}
+
+    if not key:
+        return {"sucesso": False, "mensagem": "A chave (key) é obrigatória para esta ação."}
+
+    key = key.strip().lower()
+
+    if action == "get":
+        val = preferences_manager.get_preference(category, key)
         return {
             "sucesso": True,
-            "busca": query,
-            "mensagem": f"Reproduzindo '{query}' no YouTube, senhor. Boa sessão."
+            "categoria": category,
+            "chave": key,
+            "valor": val,
+            "mensagem": f"A preferência gravada para '{key}' em '{category}' é: '{val}', senhor." if val is not None else f"Nenhuma preferência gravada para '{key}' em '{category}', senhor."
         }
+
+    elif action == "set":
+        if value is None:
+            return {"sucesso": False, "mensagem": "O valor (value) é obrigatório para definir uma preferência."}
+        ok = preferences_manager.set_preference(category, key, value)
+        return {
+            "sucesso": ok,
+            "categoria": category,
+            "chave": key,
+            "valor": value,
+            "mensagem": f"Preferência gravada com sucesso na sua memória persistente, senhor: '{key}' definida como '{value}'." if ok else "Falha ao gravar preferência."
+        }
+
+    elif action == "delete":
+        ok = preferences_manager.delete_preference(category, key)
+        return {
+            "sucesso": ok,
+            "mensagem": f"Preferência '{key}' removida com sucesso da memória, senhor." if ok else "Falha ao remover preferência."
+        }
+
+    return {"sucesso": False, "mensagem": f"Ação de preferência '{action}' desconhecida."}
+
+def set_game_preference(game_name: str, preferred_distributor: str, custom_args: str = None) -> dict:
+    """
+    Grava na memória persistente qual launcher/distribuidora (Steam, Epic, Lutris, Heroic)
+    ou argumentos o senhor prefere usar para um jogo específico.
+    """
+    clean_game = game_name.strip().lower()
+    val = {
+        "distribuidora": preferred_distributor.strip().lower(),
+        "custom_args": custom_args.strip() if custom_args else ""
+    }
+    ok = preferences_manager.set_preference("game_preferences", clean_game, val)
+    return {
+        "sucesso": ok,
+        "jogo": clean_game,
+        "distribuidora_preferida": preferred_distributor,
+        "mensagem": f"Memória atualizada: agora o jogo '{game_name}' será iniciado prioritariamente via {preferred_distributor}, senhor."
+    }
+
+def open_default_app(app_type: str, target: str = None) -> dict:
+    """
+    Abre o aplicativo padrão configurado pelo usuário para um tipo específico de tarefa ou arquivo.
+    Tipos suportados: 'browser', 'music', 'email', 'text_editor', 'image_viewer', 'video_player'.
+    """
+    clean_type = app_type.strip().lower()
+    app_pref = preferences_manager.get_preference("default_apps", clean_type, "default")
+
+    try:
+        if clean_type == "browser":
+            url = target or "https://www.google.com"
+            if app_pref != "default" and shutil.which(app_pref):
+                subprocess.Popen([app_pref, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            else:
+                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {"sucesso": True, "mensagem": f"Navegador padrão aberto com sucesso, senhor."}
+
+        elif clean_type == "text_editor":
+            editor = app_pref if app_pref != "default" else "antigravity"
+            file_target = target or "."
+            if shutil.which(editor):
+                subprocess.Popen([editor, file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            else:
+                subprocess.Popen(["xdg-open", file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {"sucesso": True, "mensagem": f"Editor de texto ({editor}) aberto para '{file_target}', senhor."}
+
+        elif clean_type == "email":
+            mailto = f"mailto:{target}" if target else "mailto:"
+            subprocess.Popen(["xdg-open", mailto], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return {"sucesso": True, "mensagem": "Cliente de e-mail padrão aberto, senhor."}
+
+        elif clean_type in ["image_viewer", "video_player", "music"]:
+            if target and os.path.exists(os.path.expanduser(target)):
+                subprocess.Popen(["xdg-open", os.path.expanduser(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return {"sucesso": True, "mensagem": f"Arquivo '{target}' aberto com o visualizador padrão, senhor."}
+            else:
+                return {"sucesso": False, "mensagem": f"Por favor, especifique o caminho do arquivo para abrir com o {clean_type}."}
+
+        else:
+            if target:
+                subprocess.Popen(["xdg-open", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return {"sucesso": True, "mensagem": f"Alvo '{target}' aberto com aplicativo padrão do sistema, senhor."}
+            return {"sucesso": False, "mensagem": f"Tipo de aplicativo '{clean_type}' não reconhecido."}
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao iniciar reprodução de música: {str(e)}"}
+        return {"sucesso": False, "mensagem": f"Erro ao abrir aplicativo padrão: {str(e)}"}
+
 
 def take_screenshot(filename: str = None) -> dict:
     """Tira uma captura de tela completa e salva com nome de arquivo personalizado."""
@@ -562,7 +775,7 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
         cmd = ["/home/edu/.local/bin/agy"]
         if continue_session:
             cmd.append("-c")
-        cmd.extend(["-p", clean_p, "--dangerously-skip-permissions"])
+        cmd.extend(["-p", clean_p])
         res = subprocess.run(
             cmd,
             cwd="/home/edu/Documentos/assistente",
@@ -772,13 +985,17 @@ GEMINI_FUNCTION_DECLARATIONS = [
     },
     {
         "name": "play_music",
-        "description": "Busca e reproduz qualquer música, cantor, banda ou gênero no YouTube no navegador.",
+        "description": "Busca e reproduz qualquer música, cantor, banda ou gênero musical. Se a plataforma não for especificada, utilizará a preferência salva pelo usuário ou perguntará educadamente na primeira vez se prefere YouTube ou Spotify.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query": {
                     "type": "STRING",
                     "description": "Nome da música, artista ou playlist desejada (ex: 'Queen Bohemian Rhapsody', 'AC/DC', 'synthwave lo-fi')."
+                },
+                "platform": {
+                    "type": "STRING",
+                    "description": "Plataforma opcional para reproduzir ('youtube', 'spotify', 'deezer'). Se omitido, consulta a preferência padrão na memória."
                 }
             },
             "required": ["query"]
@@ -795,6 +1012,72 @@ GEMINI_FUNCTION_DECLARATIONS = [
                     "description": "Nome opcional do arquivo para salvar a captura (ex: 'erro_antigravity.png' ou 'grafico.png')."
                 }
             }
+        }
+    },
+    {
+        "name": "manage_user_preference",
+        "description": "Consulta, salva, lista ou remove preferências e memórias persistentes do usuário (aplicativos padrão, plataformas favoritas, hábitos ou configurações).",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "Ação desejada: 'get' (consultar), 'set' (salvar/atualizar), 'list' (listar categoria), 'delete' (remover)."
+                },
+                "category": {
+                    "type": "STRING",
+                    "description": "Categoria da preferência: 'default_apps', 'game_preferences', 'file_associations', 'custom_memories'."
+                },
+                "key": {
+                    "type": "STRING",
+                    "description": "Nome da chave da preferência (ex: 'music_platform', 'browser', 'gta v', 'nome_favorito')."
+                },
+                "value": {
+                    "type": "STRING",
+                    "description": "Valor a ser salvo quando a ação for 'set' (ex: 'spotify', 'youtube', 'firefox')."
+                }
+            },
+            "required": ["action", "category"]
+        }
+    },
+    {
+        "name": "set_game_preference",
+        "description": "Grava na memória persistente a distribuidora/launcher (Steam, Epic, Lutris, Heroic) ou parâmetros customizados preferidos para iniciar um jogo específico.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "game_name": {
+                    "type": "STRING",
+                    "description": "Nome do jogo (ex: 'GTA 5', 'Red Dead', 'Marvel Rivals')."
+                },
+                "preferred_distributor": {
+                    "type": "STRING",
+                    "description": "Distribuidora ou plataforma preferida (ex: 'steam', 'epic', 'heroic', 'lutris')."
+                },
+                "custom_args": {
+                    "type": "STRING",
+                    "description": "Argumentos ou parâmetros adicionais opcionais de inicialização."
+                }
+            },
+            "required": ["game_name", "preferred_distributor"]
+        }
+    },
+    {
+        "name": "open_default_app",
+        "description": "Abre o aplicativo padrão configurado pelo usuário no sistema para uma categoria ou tipo de arquivo (semelhante aos Aplicativos Padrão do Windows).",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "app_type": {
+                    "type": "STRING",
+                    "description": "Tipo de aplicativo ou tarefa: 'browser', 'music', 'email', 'text_editor', 'image_viewer', 'video_player'."
+                },
+                "target": {
+                    "type": "STRING",
+                    "description": "Arquivo, endereço web ou destinatário a ser aberto no aplicativo correspondente."
+                }
+            },
+            "required": ["app_type"]
         }
     }
 ]
@@ -818,7 +1101,37 @@ TOOL_REGISTRY = {
     "open_website": open_website,
     "play_music": play_music,
     "take_screenshot": take_screenshot,
+    "manage_user_preference": manage_user_preference,
+    "set_game_preference": set_game_preference,
+    "open_default_app": open_default_app,
 }
+
+# Cópias imutáveis de referência para reconstrução dinâmica
+BASE_TOOL_REGISTRY = dict(TOOL_REGISTRY)
+BASE_GEMINI_FUNCTION_DECLARATIONS = list(GEMINI_FUNCTION_DECLARATIONS)
+
+def rebuild_registry(dynamic_tools: list):
+    """
+    Restaura o registro base do sistema e injeta exclusivamente as ferramentas
+    dos plug-ins ativos, garantindo que desativações expurguem as funções do modelo.
+    """
+    global TOOL_REGISTRY, GEMINI_FUNCTION_DECLARATIONS
+    TOOL_REGISTRY.clear()
+    TOOL_REGISTRY.update(BASE_TOOL_REGISTRY)
+
+    GEMINI_FUNCTION_DECLARATIONS.clear()
+    GEMINI_FUNCTION_DECLARATIONS.extend(BASE_GEMINI_FUNCTION_DECLARATIONS)
+
+    existing_names = set(BASE_TOOL_REGISTRY.keys())
+    for t in dynamic_tools:
+        TOOL_REGISTRY[t.name] = t.handler
+        if t.name not in existing_names:
+            GEMINI_FUNCTION_DECLARATIONS.append({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters
+            })
+            existing_names.add(t.name)
 
 
 

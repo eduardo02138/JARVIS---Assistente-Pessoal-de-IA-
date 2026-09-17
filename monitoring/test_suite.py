@@ -122,3 +122,148 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# ==============================================================================
+# TESTES DE SEGURANÇA, POLICY ENGINE E CICLO DE VIDA DE PLUG-INS (FASE P0)
+# ==============================================================================
+
+def test_localhost_binding():
+    """Garante que a configuração padrão de host do JARVIS é 127.0.0.1 (Loopback)."""
+    host = os.environ.get("JARVIS_HOST", "127.0.0.1")
+    is_local = host in ("127.0.0.1", "localhost")
+    log_test("Segurança de Rede (127.0.0.1 Loopback)", is_local, f"Host configurado: {host}")
+    assert is_local, f"Host inseguro detectado: {host}"
+    return is_local
+
+def test_permission_bypass_removed():
+    """Garante que --dangerously-skip-permissions foi removido do antigravity_run_prompt."""
+    import inspect
+    import system_tools
+    source = inspect.getsource(system_tools.antigravity_run_prompt)
+    has_dangerous_flag = "--dangerously-skip-permissions" in source
+    success = not has_dangerous_flag
+    log_test("Remoção de Privilégio Excessivo (--dangerously-skip-permissions)", success, "Flag perigosa eliminada do código" if success else "FLAG PERIGOSA ENCONTRADA!")
+    assert success
+    return success
+
+def test_policy_engine_classification():
+    """Valida a categorização de ferramentas e níveis de risco no Policy Engine."""
+    from policy_engine import policy_engine, RiskLevel
+    dec_read = policy_engine.evaluate("get_system_status")
+    dec_write = policy_engine.evaluate("open_application", {"app_name": "gedit"})
+    dec_ext = policy_engine.evaluate("social_feed_post_update", {"channel": "discord", "text": "oi"})
+    dec_priv = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "verifique os testes"})
+
+    success = (
+        dec_read.risk_level == RiskLevel.READ and dec_read.allowed and
+        dec_write.risk_level == RiskLevel.LOW_WRITE and dec_write.allowed and
+        dec_ext.risk_level == RiskLevel.EXTERNAL_WRITE and dec_ext.allowed and
+        dec_priv.risk_level == RiskLevel.PRIVILEGED and dec_priv.allowed
+    )
+    detail = f"READ: {dec_read.allowed} | LOW_WRITE: {dec_write.allowed} | EXTERNAL: {dec_ext.allowed} | PRIVILEGED: {dec_priv.allowed}"
+    log_test("Policy Engine (Controle de Riscos & Capacidades)", success, detail)
+    assert success
+    return success
+
+def test_plugin_lifecycle_purge():
+    """Garante que desativar um plug-in expurga totalmente suas ferramentas do sistema."""
+    from plugin_manager import plugin_manager
+    import system_tools
+
+    # Ativa
+    plugin_manager.toggle_plugin("smart_home", enabled=True)
+    assert "smart_home_set_light" in system_tools.TOOL_REGISTRY
+
+    # Desativa e verifica expurgo
+    plugin_manager.toggle_plugin("smart_home", enabled=False)
+    purged = "smart_home_set_light" not in system_tools.TOOL_REGISTRY
+    schemas = [d["name"] for d in system_tools.GEMINI_FUNCTION_DECLARATIONS]
+    schema_purged = "smart_home_set_light" not in schemas
+
+    # Reativa e verifica não duplicação
+    plugin_manager.toggle_plugin("smart_home", enabled=True)
+    tools_count = len(plugin_manager._plugins["smart_home"].get_tools())
+    no_dup = tools_count == 3
+
+    success = purged and schema_purged and no_dup
+    detail = f"Expurgo no TOOL_REGISTRY: {purged} | Expurgo nos Schemas: {schema_purged} | Sem Duplicatas: {no_dup} ({tools_count} tools)"
+    log_test("Ciclo de Vida de Plug-ins (Expurgo & Idempotência)", success, detail)
+    assert success
+    return success
+
+def test_mock_plugin_transparency():
+    """Valida se plug-ins com estado simulado identificam mock=True explicitamente."""
+    from plugin_manager import plugin_manager
+    sh = plugin_manager._plugins["smart_home"]
+    res_sh = sh.set_light("sala", True)
+
+    sf = plugin_manager._plugins["social_feed"]
+    res_sf = sf.check_notifications()
+
+    ls = plugin_manager._plugins["live_stream"]
+    res_ls = ls.read_chat_summary()
+
+    success = (
+        res_sh.get("mock") is True and
+        res_sf.get("mock") is True and
+        res_ls.get("mock") is True
+    )
+    detail = f"Smart Home: {res_sh.get('mock')} | Social: {res_sf.get('mock')} | Live: {res_ls.get('mock')}"
+    log_test("Transparência de Mocks (mock=True explícito)", success, detail)
+    assert success
+    return success
+
+def test_game_companion_timer():
+    """Testa criação e expiração de timer tático no plug-in Game Companion."""
+    from plugin_manager import plugin_manager
+    gc = plugin_manager._plugins["game_companion"]
+    gc.timers.clear()
+    gc.start_tactical_timer("Boss Respawn", 0)  # Expira imediatamente
+    time.sleep(0.05)
+    expired = gc.check_expired_timers()
+
+    success = "Boss Respawn" in expired
+    log_test("Game Companion (Worker & Timers Táticos)", success, f"Timers expirados detectados: {expired}")
+    assert success
+    return success
+
+def test_api_auth_protection():
+    """Garante que requisições HTTP mutantes sem token retornam 401 Unauthorized."""
+    from fastapi.testclient import TestClient
+    from server import app, JARVIS_SECRET_TOKEN
+
+    client = TestClient(app)
+
+    # 1. Sem token -> 401
+    r_unauth = client.post("/api/debug/inject-prompt", json={"prompt": "teste"})
+    unauth_blocked = r_unauth.status_code == 401
+
+    # 2. Com token correto -> 200
+    r_auth = client.post(
+        "/api/debug/inject-prompt",
+        json={"prompt": "teste autorizado"},
+        headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN}
+    )
+    auth_allowed = r_auth.status_code == 200
+
+    success = unauth_blocked and auth_allowed
+    detail = f"Sem token: {r_unauth.status_code} (esperado 401) | Com token: {r_auth.status_code} (esperado 200)"
+    log_test("Autenticação de API (Proteção contra Injection & LAN)", success, detail)
+    assert success
+    return success
+
+# Wrapper assíncrono para execução interativa direta via CLI
+async def run_p0_suite():
+    print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
+    test_localhost_binding()
+    test_permission_bypass_removed()
+    test_policy_engine_classification()
+    test_plugin_lifecycle_purge()
+    test_mock_plugin_transparency()
+    test_game_companion_timer()
+    test_api_auth_protection()
+    print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--p0":
+        asyncio.run(run_p0_suite())

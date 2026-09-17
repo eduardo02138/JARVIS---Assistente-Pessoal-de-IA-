@@ -39,7 +39,16 @@ class JarvisPlugin:
         self._tools: list[ToolSpec] = []
 
     def register_tool(self, name: str, description: str, parameters: dict, handler: Callable[..., Any]):
-        """Registra uma função como ferramenta exposta à IA."""
+        """Registra uma função como ferramenta exposta à IA (evita duplicações)."""
+        for idx, existing in enumerate(self._tools):
+            if existing.name == name:
+                self._tools[idx] = ToolSpec(
+                    name=name,
+                    description=description,
+                    parameters=parameters,
+                    handler=handler
+                )
+                return
         self._tools.append(ToolSpec(
             name=name,
             description=description,

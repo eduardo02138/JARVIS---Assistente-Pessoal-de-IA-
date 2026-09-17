@@ -14,9 +14,11 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import secrets
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException, Request, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from policy_engine import policy_engine
 from google import genai
 from google.genai import types
 
@@ -29,6 +31,37 @@ from monitoring.logger import (
 )
 
 app = FastAPI(title="JARVIS AI Assistant - Gemini Live")
+
+JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
+if not JARVIS_SECRET_TOKEN:
+    JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
+
+async def verify_auth_token(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_jarvis_token: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+):
+    """Exige token de autorização para ações de mutação ou controle."""
+    req_token = None
+    if authorization and authorization.startswith("Bearer "):
+        req_token = authorization.split("Bearer ")[1].strip()
+    elif x_jarvis_token:
+        req_token = x_jarvis_token.strip()
+    elif token:
+        req_token = token.strip()
+
+    if req_token != JARVIS_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
+    return req_token
+
+@app.get("/api/auth/token")
+async def get_session_token(request: Request):
+    """Permite apenas ao cliente local no loopback obter o token da sessão ativa."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Acesso restrito ao localhost.")
+    return {"status": "ok", "token": JARVIS_SECRET_TOKEN}
 
 @app.on_event("startup")
 async def startup_event():
@@ -82,7 +115,7 @@ async def get_plugins_store():
     return plugin_manager.get_store_catalog()
 
 @app.post("/api/plugins/toggle")
-async def toggle_plugin_endpoint(payload: dict):
+async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_auth_token)):
     plugin_id = payload.get("plugin_id")
     enabled = payload.get("enabled")
     res = plugin_manager.toggle_plugin(plugin_id, enabled)
@@ -90,7 +123,7 @@ async def toggle_plugin_endpoint(payload: dict):
     return res
 
 @app.post("/api/plugins/install")
-async def install_plugin_endpoint(payload: dict):
+async def install_plugin_endpoint(payload: dict, _=Depends(verify_auth_token)):
     plugin_id = payload.get("plugin_id")
     res = plugin_manager.install_plugin(plugin_id)
     record_event("plugin_install", {"plugin_id": plugin_id, "result": res})
@@ -113,7 +146,7 @@ async def download_log():
     return JSONResponse({"status": "error", "message": "Arquivo de log não encontrado"}, status_code=404)
 
 @app.post("/api/debug/clear-logs")
-async def clear_system_logs():
+async def clear_system_logs(_=Depends(verify_auth_token)):
     clear_logs()
     return {"status": "ok", "message": "Logs limpos com sucesso"}
 
@@ -177,13 +210,29 @@ async def test_all_accounts():
 @app.post("/api/inject_prompt")
 @app.post("/api/inject-prompt")
 @app.post("/api/debug/inject-prompt")
-async def inject_prompt(payload: dict):
+async def inject_prompt(payload: dict, _=Depends(verify_auth_token)):
     prompt = payload.get("prompt", "").strip()
     if not prompt:
         return JSONResponse({"status": "error", "message": "Prompt vazio"}, status_code=400)
     await active_session_queue.put(prompt)
     record_event("user_text", {"text": prompt, "source": "debug_injector"})
     return {"status": "ok", "message": f"Prompt injetado com sucesso: '{prompt}'"}
+
+@app.get("/api/preferences")
+async def get_preferences_endpoint():
+    import preferences_manager
+    return preferences_manager.get_all_preferences()
+
+@app.post("/api/preferences")
+async def update_preferences_endpoint(payload: dict):
+    import preferences_manager
+    cat = payload.get("category", "default_apps")
+    key = payload.get("key")
+    val = payload.get("value")
+    if not key:
+        return JSONResponse({"status": "error", "message": "Chave obrigatória"}, status_code=400)
+    ok = preferences_manager.set_preference(cat, key, val)
+    return {"status": "ok" if ok else "error", "preferences": preferences_manager.get_all_preferences()}
 
 # ----------------- PROMPT & FERRAMENTAS DO JARVIS -----------------
 JARVIS_SYSTEM_INSTRUCTION = """
@@ -202,8 +251,9 @@ Diretrizes fundamentais:
    - Tirar capturas de tela e salvar com nomes personalizados na pasta de imagens ('take_screenshot').
    - Alterar o volume do sistema ('adjust_volume') e gravar/ler anotações ('take_quick_note', 'read_notes').
    - Controlar a IDE Antigravity do Senhor: abrir projetos ('antigravity_open_workspace'), abrir a pasta de auditoria gemini ('antigravity_open_gemini_bridge'), abrir arquivos em linhas específicas ('antigravity_open_file'), listar servidores MCP da IDE ('antigravity_list_mcps') e delegar tarefas complexas ao agente da IDE ('antigravity_run_prompt').
+   - Consultar e salvar preferências e aplicativos padrão ('manage_user_preference', 'set_game_preference', 'open_default_app').
    Invoque as ferramentas automaticamente sempre que o pedido do senhor envolver essas ações.
-6. RETORNO DE FERRAMENTAS OBRIGATÓRIO: SEMPRE que executar uma ferramenta (como list_installed_games, open_application, get_gpu_status, get_system_status, antigravity_list_mcps, antigravity_open_file, antigravity_run_prompt, set_ide_mode, etc.), você DEVE responder em áudio imediatamente em seguida ao Senhor, comunicando os dados obtidos de forma concisa e natural. Nunca fique em silêncio após executar uma ferramenta.
+6. RETORNO DE FERRAMENTAS OBRIGATÓRIO: SEMPRE que executar uma ferramenta (como list_installed_games, open_application, get_gpu_status, get_system_status, antigravity_list_mcps, antigravity_open_file, antigravity_run_prompt, set_ide_mode, manage_user_preference, etc.), você DEVE responder em áudio imediatamente em seguida ao Senhor, comunicando os dados obtidos de forma concisa e natural. Nunca fique em silêncio após executar uma ferramenta.
 7. MODO IDE & INTEGRAÇÃO CONTÍNUA COM ANTIGRAVITY:
    - ATIVAÇÃO: Quando o senhor falar "iniciar modo IDE", "ativar modo IDE" ou termos equivalentes, chame IMEDIATAMENTE `set_ide_mode(enabled=True)`. Anuncie prontidão dizendo que a conexão com o agente Antigravity está ativa e que manterá o canal de programação aberto.
    - DESATIVAÇÃO: Quando o senhor falar "sair do modo IDE", "encerrar modo IDE", "desativar modo IDE", chame `set_ide_mode(enabled=False)` e confirme o retorno ao modo padrão.
@@ -221,6 +271,11 @@ Diretrizes fundamentais:
 10. CANAL DE AUDITORIA & PASTA GEMINI:
    - Sempre que o senhor pedir para abrir a pasta gemini, abrir a ponte de desenvolvimento ou consultar o canal de auditoria, chame 'antigravity_open_gemini_bridge'.
    - A pasta 'gemini' (/home/edu/Documentos/assistente/gemini/) é o canal direto onde o senhor pode mandar mensagens diretamente por arquivo (gemini/input.txt) sem precisar falar no microfone, e onde todas as interações e respostas do Antigravity ficam auditadas em 'audit.jsonl' e 'latest_response.md'.
+11. MEMÓRIA PERSISTENTE E PREFERÊNCIAS DO USUÁRIO (APLICATIVOS PADRÃO & CONFIGURAÇÕES):
+   - Você possui memória persistente para lembrar preferências e configurações do Senhor ('manage_user_preference', 'set_game_preference', 'open_default_app').
+   - REPRODUÇÃO DE MÚSICA & PLATAFORMA PADRÃO: Ao pedir para tocar música ('play_music'), se a ferramenta indicar que a plataforma padrão ainda não está configurada, pergunte ao Senhor com cortesia: "Senhor, qual plataforma prefere utilizar como padrão para reproduzir músicas: YouTube ou Spotify?". Quando o Senhor responder (ex: "Spotify" ou "YouTube"), salve imediatamente a escolha dele usando 'manage_user_preference(action='set', category='default_apps', key='music_platform', value=escolha)' e inicie a reprodução. Nas próximas vezes em que o senhor pedir qualquer música, toque diretamente na plataforma favorita dele sem perguntar novamente.
+   - PREFERÊNCIAS DE JOGOS & LAUNCHERS: Se o Senhor indicar um launcher preferido para um jogo (ex: "Sempre abra GTA pela Epic Games" ou "Abra Red Dead pela Steam"), registre imediatamente chamando 'set_game_preference'.
+   - APLICATIVOS PADRÃO (ESTILO WINDOWS): Se o Senhor pedir para definir navegadores, clientes de e-mail ou editores de texto padrão, ou abrir arquivos por tipo, utilize 'manage_user_preference' e 'open_default_app'.
 """
 
 def build_gemini_tools():
@@ -465,14 +520,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             "args": args
                                         })
 
-                                        executor = system_tools.TOOL_REGISTRY.get(func_name)
-                                        if executor:
-                                            try:
-                                                res = executor(**args)
-                                            except Exception as exc:
-                                                res = {"sucesso": False, "erro": str(exc)}
+                                        # Avaliação de autorização pelo Policy Engine
+                                        decision = policy_engine.evaluate(func_name, args)
+                                        if not decision.allowed:
+                                            res = {"sucesso": False, "erro": f"Execução bloqueada pelo Policy Engine: {decision.reason}"}
+                                            record_event("policy_blocked", {"name": func_name, "decision": decision.reason, "risk": decision.risk_level.value})
                                         else:
-                                            res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
+                                            executor = system_tools.TOOL_REGISTRY.get(func_name)
+                                            if executor:
+                                                try:
+                                                    res = executor(**args)
+                                                except Exception as exc:
+                                                    res = {"sucesso": False, "erro": str(exc)}
+                                            else:
+                                                res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
 
                                         record_event("tool_result", {"name": func_name, "result": res})
                                         gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
@@ -537,9 +598,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
+    host = os.environ.get("JARVIS_HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8000))
     print(f"\n=======================================================")
-    print(f"⚡ J.A.R.V.I.S. Online - Interface em: http://localhost:{port}")
-    print(f"⚡ Central de Depuração & Logs em: http://localhost:{port}/debug")
+    print(f"⚡ J.A.R.V.I.S. Online - Interface em: http://{host}:{port}")
+    print(f"⚡ Central de Depuração & Logs em: http://{host}:{port}/debug")
+    print(f"🔒 Rede: Vinculado a {host} (Proteção contra acesso externo)")
     print(f"=======================================================\n")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=host, port=port)

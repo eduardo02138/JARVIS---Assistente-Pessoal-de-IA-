@@ -1,3 +1,17 @@
+let jarvisSessionToken = "";
+async function initSessionToken() {
+    try {
+        const res = await fetch("/api/auth/token");
+        if (res.ok) {
+            const data = await res.json();
+            jarvisSessionToken = data.token;
+        }
+    } catch (e) {
+        console.warn("Falha ao inicializar token local:", e);
+    }
+}
+initSessionToken();
+
 /**
  * J.A.R.V.I.S. Client Controller
  * Gerencia Web Audio API (gravação PCM 16kHz e reprodução PCM 24kHz),
@@ -10,7 +24,6 @@ const state = {
     listening: false,
     speaking: false,
     ws: null,
-    apiKey: localStorage.getItem('jarvis_api_key') || '',
     voice: localStorage.getItem('jarvis_voice') || 'Charon',
     model: localStorage.getItem('jarvis_model') || 'gemini-2.5-flash-native-audio-latest',
     isPushToTalkActive: false,
@@ -464,8 +477,7 @@ function connectWebSocket() {
         state.ws.send(JSON.stringify({
             type: 'init',
             voice: state.voice,
-            model: state.model,
-            apiKey: state.apiKey
+            model: state.model
         }));
     };
 
@@ -729,7 +741,6 @@ document.querySelectorAll('.chip-btn').forEach(btn => {
 
 // Modal de Configurações
 dom.btnSettings.addEventListener('click', () => {
-    dom.inputApiKey.value = state.apiKey;
     dom.selectVoice.value = state.voice;
     if (dom.selectModel) dom.selectModel.value = state.model;
     dom.settingsModal.classList.remove('hidden');
@@ -740,11 +751,9 @@ dom.btnCloseSettings.addEventListener('click', () => {
 });
 
 dom.btnSaveSettings.addEventListener('click', () => {
-    state.apiKey = dom.inputApiKey.value.trim();
     state.voice = dom.selectVoice.value;
     if (dom.selectModel) state.model = dom.selectModel.value;
     
-    localStorage.setItem('jarvis_api_key', state.apiKey);
     localStorage.setItem('jarvis_voice', state.voice);
     localStorage.setItem('jarvis_model', state.model);
     

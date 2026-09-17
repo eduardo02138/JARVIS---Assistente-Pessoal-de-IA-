@@ -88,7 +88,7 @@ class SmartHomePlugin(JarvisPlugin):
         status_str = "ligada(s)" if state else "desligada(s)"
         detalhe = f", tom {self.lights[key]['cor']} e brilho em {self.lights[key]['brilho']}%" if state else ""
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "comodo": room,
             "estado": self.lights[key],
             "mensagem": f"Iluminação do {room} agora {status_str}{detalhe}, senhor."
@@ -111,14 +111,14 @@ class SmartHomePlugin(JarvisPlugin):
             msg = f"Cena '{scene_name}' aplicada com sucesso aos atuadores residenciais, senhor."
 
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "cena": scene_name,
             "mensagem": msg
         }
 
     def get_climate(self) -> dict:
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "clima": self.clima,
             "mensagem": f"Ambiente em {self.clima['temperatura']} com {self.clima['umidade']} de umidade relativa. Climatização em {self.clima['modo']}."
         }

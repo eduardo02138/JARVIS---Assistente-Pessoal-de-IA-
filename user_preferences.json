@@ -1,0 +1,13 @@
+{
+  "default_apps": {
+    "music_platform": "spotify",
+    "browser": "default",
+    "email_client": "default",
+    "text_editor": "antigravity",
+    "image_viewer": "default",
+    "video_player": "default"
+  },
+  "game_preferences": {},
+  "file_associations": {},
+  "custom_memories": {}
+}

@@ -83,13 +83,13 @@ class LiveStreamPlugin(JarvisPlugin):
             msg = f"Transmissão ao vivo iniciada{t}. Telemetria de chat e contagem de espectadores online no HUD, senhor."
         else:
             msg = "Transmissão ao vivo encerrada com sucesso, senhor. Estatísticas finais arquivadas."
-        return {"sucesso": True, "no_ar": self.streaming, "mensagem": msg}
+        return {"sucesso": True, "mock": True, "executado_externamente": False, "no_ar": self.streaming, "mensagem": msg}
 
     def read_chat_summary(self) -> dict:
         qtd = len(self.recent_chat)
         destaque = ", ".join([f"{m['user']}: \"{m['text']}\"" for m in self.recent_chat[-2:]])
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "espectadores_ativos": self.viewers,
             "mensagens_recentes": self.recent_chat,
             "mensagem": f"Senhor, a live conta com {self.viewers} espectadores simultâneos. As mensagens em destaque no chat são: {destaque}."
@@ -98,7 +98,7 @@ class LiveStreamPlugin(JarvisPlugin):
     def send_alert(self, event_type: str, username: str, amount_or_details: str = "") -> dict:
         det = f" ({amount_or_details})" if amount_or_details else ""
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "alerta": f"{event_type.upper()}: {username}{det}",
             "mensagem": f"Novo alerta de transmissão: {username} realizou uma ação de {event_type}{det}! Transmitindo agradecimento."
         }

@@ -10,7 +10,6 @@ import sys
 # Garante permissão irrestrita de autoplay de áudio no Chromium / QWebEngine
 sys.argv.extend([
     "--autoplay-policy=no-user-gesture-required",
-    "--disable-web-security",
     "--enable-features=WebRTCPipeWireCapturer",
 ])
 

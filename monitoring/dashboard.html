@@ -686,7 +686,7 @@
         try {
             const res = await fetch('/api/debug/inject-prompt', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Jarvis-Token': dashboardToken },
                 body: JSON.stringify({ prompt: text })
             });
             const data = await res.json();
@@ -759,7 +759,7 @@
 
     async function clearSystemLogs() {
         if (confirm("Deseja limpar todos os logs da memória e dos arquivos?")) {
-            await fetch('/api/debug/clear-logs', { method: 'POST' });
+            await fetch('/api/debug/clear-logs', { method: 'POST', headers: { 'X-Jarvis-Token': dashboardToken } });
             cachedEvents = [];
             renderLogs();
             fetchTelemetry();

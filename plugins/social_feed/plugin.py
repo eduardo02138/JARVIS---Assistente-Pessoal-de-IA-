@@ -62,7 +62,7 @@ class SocialFeedPlugin(JarvisPlugin):
         total = len(itens)
         resumo = "; ".join([f"[{n['canal']}] {n['autor']}: {n['conteudo']}" for n in itens[:2]])
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "total_notificacoes": total,
             "notificacoes": itens,
             "mensagem": f"Senhor, você possui {total} notificações pendentes. Em destaque: {resumo}."
@@ -70,7 +70,7 @@ class SocialFeedPlugin(JarvisPlugin):
 
     def post_update(self, platform: str, text_content: str) -> dict:
         return {
-            "sucesso": True,
+            "sucesso": True, "mock": True, "executado_externamente": False,
             "plataforma": platform,
             "conteudo": text_content,
             "mensagem": f"Atualização enviada para o canal {platform}: \"{text_content}\", senhor."
