@@ -211,8 +211,24 @@ class PluginManager:
         """
         try:
             import system_tools
+            from policy_engine import policy_engine, RiskLevel
             active_tools = self.get_active_tools()
             system_tools.rebuild_registry(active_tools)
+
+            # Registra a política declarada pelo plug-in; sem política o Policy Engine bloqueia
+            for tool in active_tools:
+                declarado = getattr(tool, "risk_level", None)
+                if declarado:
+                    try:
+                        policy_engine.register_tool_policy(tool.name, RiskLevel(declarado))
+                    except ValueError:
+                        logger.error(f"Nível de risco inválido em '{tool.name}': {declarado}")
+                elif policy_engine.get_risk_level(tool.name) is None:
+                    logger.warning(
+                        f"Ferramenta de plug-in sem política de risco: '{tool.name}'. "
+                        "Ela será bloqueada pelo Policy Engine até declarar risk_level."
+                    )
+
             logger.info(f"Reconstrução de plug-ins concluída: {len(active_tools)} ferramentas ativas no sistema.")
         except Exception as e:
             logger.error(f"Erro ao reconstruir ferramentas de plug-ins: {e}")

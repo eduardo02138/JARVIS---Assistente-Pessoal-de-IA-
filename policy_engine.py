@@ -4,6 +4,9 @@ Classifica cada ferramenta em níveis de risco e gerencia autorização prévia 
 """
 
 import logging
+import os
+import re
+import time
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
@@ -48,7 +51,10 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "play_music": RiskLevel.LOW_WRITE,
     "take_quick_note": RiskLevel.LOW_WRITE,
     "set_ide_mode": RiskLevel.LOW_WRITE,
-    "set_control_mode": RiskLevel.LOW_WRITE,
+    "open_default_app": RiskLevel.LOW_WRITE,
+    "manage_user_preference": RiskLevel.LOW_WRITE,
+    "set_game_preference": RiskLevel.LOW_WRITE,
+    # Controle físico de mouse e teclado: liberado apenas sob uma lease ativa (ver CONTROL_TOOLS)
     "mouse_move": RiskLevel.LOW_WRITE,
     "mouse_click": RiskLevel.LOW_WRITE,
     "mouse_scroll": RiskLevel.LOW_WRITE,
@@ -70,23 +76,135 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
 
     # PRIVILEGED: Agente autônomo e controle de sistema
     "antigravity_run_prompt": RiskLevel.PRIVILEGED,
+    "set_control_mode": RiskLevel.PRIVILEGED,
 }
+
+# Ferramentas de controle físico da máquina (mouse e teclado via uinput).
+# Só executam enquanto houver uma lease de controle válida, concedida após o usuário
+# confirmar set_control_mode.
+CONTROL_TOOLS = {
+    "mouse_move",
+    "mouse_click",
+    "mouse_scroll",
+    "keyboard_type",
+    "keyboard_hotkey",
+}
+
+# Duração padrão da lease de controle, em segundos
+CONTROL_LEASE_TTL_S = int(os.environ.get("JARVIS_CONTROL_LEASE_TTL", "300"))
+
+# Combinações de teclas que continuam exigindo confirmação mesmo com lease ativa
+HOTKEYS_PERIGOSAS = {
+    ("alt", "f4"),
+    ("ctrl", "alt", "delete"),
+    ("ctrl", "alt", "backspace"),
+    ("ctrl", "alt", "f1"),
+    ("ctrl", "alt", "f2"),
+    ("ctrl", "alt", "t"),
+    ("super",),
+    ("super", "l"),
+}
+
+# Padrões de texto que indicam comandos destrutivos digitados em terminal
+PADROES_TEXTO_PERIGOSO = re.compile(
+    r"\b(sudo|rm\s+-[rf]|mkfs|dd\s+if=|shutdown|reboot|poweroff|chmod\s+777|"
+    r"curl[^\n|]*\|\s*(ba)?sh|wget[^\n|]*\|\s*(ba)?sh|:\(\)\{)",
+    re.IGNORECASE,
+)
 
 class PolicyEngine:
     """Gerencia regras de governança e autorização de ferramentas."""
 
     def __init__(self):
         self._custom_policies: Dict[str, RiskLevel] = {}
+        self._control_lease_expira_em: float = 0.0
+        self._control_lease_owner: Optional[str] = None
 
     def register_tool_policy(self, tool_name: str, risk_level: RiskLevel):
         """Registra ou atualiza o nível de risco de uma ferramenta (ex: via plug-in)."""
         self._custom_policies[tool_name] = risk_level
 
-    def get_risk_level(self, tool_name: str) -> RiskLevel:
-        """Retorna o nível de risco associado à ferramenta."""
+    def get_risk_level(self, tool_name: str) -> Optional[RiskLevel]:
+        """Retorna o nível de risco da ferramenta, ou None se ela não tiver política."""
         if tool_name in self._custom_policies:
             return self._custom_policies[tool_name]
-        return TOOL_RISK_MAP.get(tool_name, RiskLevel.LOW_WRITE)
+        return TOOL_RISK_MAP.get(tool_name)
+
+    # ---------------- Lease de Controle Físico (mouse e teclado) ----------------
+
+    def grant_control_lease(self, owner: str = "hud", ttl_s: int = CONTROL_LEASE_TTL_S) -> Dict[str, Any]:
+        """Concede autoridade temporária de controle físico após confirmação do usuário."""
+        self._control_lease_expira_em = time.time() + ttl_s
+        self._control_lease_owner = owner
+        logger.info(f"Lease de controle concedida a '{owner}' por {ttl_s}s.")
+        return self.control_lease_status()
+
+    def revoke_control_lease(self) -> Dict[str, Any]:
+        """Revoga imediatamente a autoridade de controle físico."""
+        self._control_lease_expira_em = 0.0
+        self._control_lease_owner = None
+        logger.info("Lease de controle revogada.")
+        return self.control_lease_status()
+
+    def is_control_lease_active(self) -> bool:
+        return time.time() < self._control_lease_expira_em
+
+    def control_lease_status(self) -> Dict[str, Any]:
+        restante = max(0.0, self._control_lease_expira_em - time.time())
+        return {
+            "ativa": restante > 0,
+            "segundos_restantes": int(restante),
+            "owner": self._control_lease_owner if restante > 0 else None
+        }
+
+    def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any]) -> PolicyDecision:
+        """Aplica a lease de controle e escala ações perigosas de teclado."""
+        risk = RiskLevel.LOW_WRITE
+        if not self.is_control_lease_active():
+            return PolicyDecision(
+                tool_name=tool_name,
+                risk_level=risk,
+                allowed=False,
+                requires_confirmation=False,
+                reason="Sem autoridade de controle físico: ative o Modo Controle e confirme para liberar mouse e teclado.",
+                metadata=self.control_lease_status()
+            )
+
+        if tool_name == "keyboard_hotkey":
+            teclas = tuple(sorted(
+                p.strip().lower() for p in str(args.get("keys", "")).split("+") if p.strip()
+            ))
+            perigosa = any(teclas == tuple(sorted(combo)) for combo in HOTKEYS_PERIGOSAS)
+            if perigosa:
+                return PolicyDecision(
+                    tool_name=tool_name,
+                    risk_level=RiskLevel.PRIVILEGED,
+                    allowed=True,
+                    requires_confirmation=True,
+                    reason=f"Atalho sensível ({'+'.join(teclas)}) exige confirmação mesmo com o Modo Controle ativo.",
+                    metadata={"keys": args.get("keys")}
+                )
+
+        if tool_name == "keyboard_type":
+            texto = str(args.get("text", ""))
+            if PADROES_TEXTO_PERIGOSO.search(texto):
+                return PolicyDecision(
+                    tool_name=tool_name,
+                    risk_level=RiskLevel.PRIVILEGED,
+                    allowed=True,
+                    requires_confirmation=True,
+                    reason="Texto com comando potencialmente destrutivo: confirmação obrigatória.",
+                    metadata={"texto_preview": texto[:120]}
+                )
+
+        return PolicyDecision(
+            tool_name=tool_name,
+            risk_level=risk,
+            allowed=True,
+            requires_confirmation=False,
+            reason="Ação de controle física autorizada pela lease vigente.",
+            metadata=self.control_lease_status()
+        )
 
     def evaluate(self, tool_name: str, args: Optional[Dict[str, Any]] = None) -> PolicyDecision:
         """
@@ -94,6 +212,22 @@ class PolicyEngine:
         """
         risk = self.get_risk_level(tool_name)
         args = args or {}
+
+        # Fail-closed: ferramenta sem política registrada nunca executa sozinha
+        if risk is None:
+            logger.warning(f"Ferramenta sem política registrada no Policy Engine: {tool_name}")
+            return PolicyDecision(
+                tool_name=tool_name,
+                risk_level=RiskLevel.PRIVILEGED,
+                allowed=False,
+                requires_confirmation=True,
+                reason="Ferramenta sem política de segurança registrada (fail-closed).",
+                metadata={"args": args}
+            )
+
+        # Controle físico de mouse e teclado depende da lease concedida pelo usuário
+        if tool_name in CONTROL_TOOLS:
+            return self._avaliar_controle_fisico(tool_name, args)
 
         # READ e LOW_WRITE: Execução automática transparente
         if risk in (RiskLevel.READ, RiskLevel.LOW_WRITE):
@@ -119,8 +253,8 @@ class PolicyEngine:
         # PRIVILEGED: Ações delegadas ao Antigravity (com verificação de prompt)
         if risk == RiskLevel.PRIVILEGED:
             prompt = args.get("prompt", "")
-            # Verificação básica de sanidade no prompt
-            if not prompt or len(prompt.strip()) < 3:
+            # Verificação básica de sanidade no prompt (apenas para o agente do Antigravity)
+            if tool_name == "antigravity_run_prompt" and (not prompt or len(prompt.strip()) < 3):
                 return PolicyDecision(
                     tool_name=tool_name,
                     risk_level=risk,

@@ -622,9 +622,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             })
 
                                         if func_name == "set_control_mode":
+                                            # A lease dá autoridade temporária ao mouse e ao teclado virtuais
+                                            if res.get("sucesso") and res.get("control_mode"):
+                                                lease = policy_engine.grant_control_lease(owner="hud")
+                                                record_event("control_lease_granted", lease)
+                                            else:
+                                                lease = policy_engine.revoke_control_lease()
+                                                record_event("control_lease_revoked", lease)
                                             await websocket.send_json({
                                                 "type": "control_mode",
                                                 "active": res.get("control_mode", False),
+                                                "lease": lease,
                                                 "data": res
                                             })
 

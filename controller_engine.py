@@ -10,9 +10,31 @@ import re
 import psutil
 import glob
 import logging
-from evdev import UInput, ecodes as e
-
 logger = logging.getLogger("JARVIS_CONTROLLER")
+
+try:
+    from evdev import UInput, ecodes as e
+    EVDEV_DISPONIVEL = True
+except ImportError:
+    # Ambientes sem evdev (CI headless, outro sistema operacional) continuam importando
+    # o módulo: apenas as funções de controle físico ficam indisponíveis.
+    UInput = None
+    EVDEV_DISPONIVEL = False
+
+    class _EcodesIndisponivel:
+        """Substituto neutro de evdev.ecodes quando a biblioteca não está instalada."""
+        def __getattr__(self, nome):
+            return 0
+
+    e = _EcodesIndisponivel()
+    logger.warning("evdev não encontrado: o controle físico de mouse e teclado está desativado.")
+
+
+def _erro_sem_evdev() -> dict:
+    return {
+        "sucesso": False,
+        "erro": "Controle físico indisponível: o módulo evdev não está instalado neste ambiente."
+    }
 
 # Capacidades do dispositivo virtual completo (Mouse + Teclado)
 CAPABILITIES = {
@@ -40,6 +62,8 @@ _uinput_device = None
 
 def get_uinput():
     global _uinput_device
+    if not EVDEV_DISPONIVEL:
+        return None
     if _uinput_device is None:
         try:
             _uinput_device = UInput(CAPABILITIES, name="JARVIS-Virtual-Control")

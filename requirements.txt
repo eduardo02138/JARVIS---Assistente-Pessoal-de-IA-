@@ -8,6 +8,7 @@ charset-normalizer==3.5.1
 click==8.5.0
 cryptography==50.0.1
 distro==1.9.0
+evdev>=1.7.0  # controle fisico de mouse/teclado via uinput (Linux); ausente, o controller degrada sem quebrar
 fastapi==0.141.1
 google-auth==2.58.0
 google-genai==2.24.0

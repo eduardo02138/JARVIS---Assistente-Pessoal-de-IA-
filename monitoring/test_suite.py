@@ -9,7 +9,11 @@ import time
 import asyncio
 from dotenv import load_dotenv
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if RAIZ_PROJETO not in sys.path:
+    sys.path.insert(0, RAIZ_PROJETO)
+
+ENV_PATH = os.path.join(RAIZ_PROJETO, ".env")
 load_dotenv(ENV_PATH, override=True)
 
 # Cores do terminal
@@ -120,8 +124,8 @@ async def main():
 
     print(f"\n{CYAN}Diagnóstico finalizado.{RESET}\n")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# O despacho de linha de comando fica no final do arquivo: com --p0 apenas a suíte
+# de segurança roda, sem depender de ambiente gráfico nem de chaves válidas da API.
 
 # ==============================================================================
 # TESTES DE SEGURANÇA, POLICY ENGINE E CICLO DE VIDA DE PLUG-INS (FASE P0)
@@ -402,6 +406,123 @@ def test_frontend_sends_token():
     return success
 
 
+def test_policy_fail_closed():
+    """Ferramenta sem política registrada nunca pode executar automaticamente."""
+    from policy_engine import policy_engine, RiskLevel
+
+    dec = policy_engine.evaluate("ferramenta_inexistente_p012", {"alvo": "/"})
+    success = (
+        not dec.allowed and
+        dec.requires_confirmation and
+        dec.risk_level == RiskLevel.PRIVILEGED
+    )
+    log_test("Policy Engine Fail-Closed (Ferramenta sem política)", success,
+             f"allowed={dec.allowed} | confirmação={dec.requires_confirmation} | {dec.reason}")
+    assert success
+    return success
+
+
+def test_registered_tools_have_policy():
+    """Toda ferramenta ativa no TOOL_REGISTRY precisa ter política declarada."""
+    import system_tools
+    from policy_engine import policy_engine
+
+    sem_politica = [t for t in system_tools.TOOL_REGISTRY if policy_engine.get_risk_level(t) is None]
+    success = not sem_politica
+    log_test("Cobertura de Políticas (TOOL_REGISTRY)", success,
+             "Todas as ferramentas classificadas" if success else f"Sem política: {sem_politica}")
+    assert success
+    return success
+
+
+def test_control_lease():
+    """Mouse e teclado só operam sob lease concedida após confirmar o Modo Controle."""
+    from policy_engine import policy_engine, RiskLevel
+
+    policy_engine.revoke_control_lease()
+
+    # 1. set_control_mode é privilegiado e exige confirmação
+    dec_modo = policy_engine.evaluate("set_control_mode", {"enabled": True})
+    modo_confirmado = dec_modo.risk_level == RiskLevel.PRIVILEGED and dec_modo.requires_confirmation
+
+    # 2. Sem lease, o controle físico é bloqueado
+    dec_sem_lease = policy_engine.evaluate("mouse_click", {"button": "left"})
+    bloqueado_sem_lease = not dec_sem_lease.allowed
+
+    # 3. Com lease ativa, as ações comuns passam direto
+    policy_engine.grant_control_lease(owner="teste", ttl_s=60)
+    dec_com_lease = policy_engine.evaluate("mouse_move", {"delta_x": 10, "delta_y": 5})
+    liberado_com_lease = dec_com_lease.allowed and not dec_com_lease.requires_confirmation
+
+    # 4. Ações perigosas continuam exigindo confirmação mesmo com lease
+    dec_hotkey = policy_engine.evaluate("keyboard_hotkey", {"keys": "alt+f4"})
+    dec_texto = policy_engine.evaluate("keyboard_type", {"text": "sudo rm -rf /tmp/teste"})
+    perigosas_confirmam = dec_hotkey.requires_confirmation and dec_texto.requires_confirmation
+
+    # 5. Lease expirada volta a bloquear
+    policy_engine.grant_control_lease(owner="teste", ttl_s=0)
+    dec_expirada = policy_engine.evaluate("mouse_click", {"button": "left"})
+    expira = not dec_expirada.allowed
+    policy_engine.revoke_control_lease()
+
+    success = modo_confirmado and bloqueado_sem_lease and liberado_com_lease and perigosas_confirmam and expira
+    detail = (
+        f"set_control_mode confirma: {modo_confirmado} | sem lease bloqueia: {bloqueado_sem_lease} | "
+        f"com lease libera: {liberado_com_lease} | perigosas confirmam: {perigosas_confirmam} | "
+        f"lease expirada bloqueia: {expira}"
+    )
+    log_test("Control Lease (Autoridade Temporária de Mouse e Teclado)", success, detail)
+    assert success
+    return success
+
+
+def test_controller_sem_evdev():
+    """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
+    import importlib
+    import sys as _sys
+    import controller_engine
+
+    # Import do system_tools não pode depender de evdev
+    import system_tools  # noqa: F401
+
+    original = _sys.modules.pop("evdev", None)
+    _sys.modules["evdev"] = None  # força ImportError no reload
+    try:
+        recarregado = importlib.reload(controller_engine)
+        importa_sem_evdev = recarregado.EVDEV_DISPONIVEL is False
+        sem_dispositivo = recarregado.get_uinput() is None
+        resposta = recarregado.move_mouse(5, 5)
+        degrada_com_erro = resposta.get("sucesso") is False
+    finally:
+        if original is not None:
+            _sys.modules["evdev"] = original
+        else:
+            _sys.modules.pop("evdev", None)
+        importlib.reload(controller_engine)
+
+    success = importa_sem_evdev and sem_dispositivo and degrada_com_erro
+    detail = f"import sem evdev: {importa_sem_evdev} | uinput None: {sem_dispositivo} | erro tratado: {degrada_com_erro}"
+    log_test("Controller Resiliente (sem evdev / sem /dev/uinput)", success, detail)
+    assert success
+    return success
+
+
+def test_suite_cli_dispatch():
+    """Garante que --p0 executa apenas a suíte P0, sem o diagnóstico interativo."""
+    caminho = os.path.abspath(__file__)
+    with open(caminho, encoding="utf-8") as f:
+        fonte = f.read()
+
+    # Conta apenas blocos reais (início de linha), ignorando as ocorrências dentro deste teste
+    blocos = sum(1 for linha in fonte.splitlines() if linha.startswith('if __name__ == "__main__":'))
+    dispatch_correto = '"--p0" in sys.argv' in fonte and "asyncio.run(main())" in fonte
+    success = blocos == 1 and dispatch_correto
+    log_test("CLI da Suíte (--p0 isolado do diagnóstico)", success,
+             f"blocos __main__: {blocos} | dispatch: {dispatch_correto}")
+    assert success
+    return success
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
@@ -409,7 +530,12 @@ async def run_p0_suite():
     test_permission_bypass_removed()
     test_policy_engine_classification()
     test_policy_confirmation_required()
+    test_policy_fail_closed()
+    test_registered_tools_have_policy()
+    test_control_lease()
     test_confirmation_flow_wired()
+    test_controller_sem_evdev()
+    test_suite_cli_dispatch()
     test_plugin_lifecycle_purge()
     test_mock_plugin_transparency()
     test_game_timer_expiration()
@@ -421,5 +547,7 @@ async def run_p0_suite():
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--p0":
+    if "--p0" in sys.argv:
         asyncio.run(run_p0_suite())
+    else:
+        asyncio.run(main())

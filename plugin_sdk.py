@@ -15,6 +15,9 @@ class ToolSpec:
     description: str
     parameters: dict
     handler: Callable[..., Any]
+    # Nível de risco para o Policy Engine: READ, LOW_WRITE, EXTERNAL_WRITE ou PRIVILEGED.
+    # Sem esse campo a ferramenta é bloqueada pelo Policy Engine (fail-closed).
+    risk_level: Optional[str] = None
 
 @dataclass
 class PluginMeta:
@@ -38,7 +41,8 @@ class JarvisPlugin:
         self.meta = meta
         self._tools: list[ToolSpec] = []
 
-    def register_tool(self, name: str, description: str, parameters: dict, handler: Callable[..., Any]):
+    def register_tool(self, name: str, description: str, parameters: dict, handler: Callable[..., Any],
+                      risk_level: Optional[str] = None):
         """Registra uma função como ferramenta exposta à IA (evita duplicações)."""
         for idx, existing in enumerate(self._tools):
             if existing.name == name:
@@ -46,14 +50,16 @@ class JarvisPlugin:
                     name=name,
                     description=description,
                     parameters=parameters,
-                    handler=handler
+                    handler=handler,
+                    risk_level=risk_level
                 )
                 return
         self._tools.append(ToolSpec(
             name=name,
             description=description,
             parameters=parameters,
-            handler=handler
+            handler=handler,
+            risk_level=risk_level
         ))
 
     def on_load(self):

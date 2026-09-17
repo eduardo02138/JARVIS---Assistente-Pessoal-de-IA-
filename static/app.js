@@ -554,7 +554,8 @@ async function connectWebSocket() {
                 if (dom.controlModeIndicator) {
                     if (msg.active) {
                         dom.controlModeIndicator.classList.remove('hidden');
-                        appendToolLog('MODO CONTROLE', 'executing', 'Controle físico de mouse, teclado e janelas ativado.');
+                        const ttl = msg.lease && msg.lease.segundos_restantes ? ` Autoridade válida por ${Math.round(msg.lease.segundos_restantes / 60)} min.` : '';
+                        appendToolLog('MODO CONTROLE', 'executing', `Controle físico de mouse, teclado e janelas ativado.${ttl}`);
                     } else {
                         dom.controlModeIndicator.classList.add('hidden');
                         appendToolLog('MODO CONTROLE', 'idle', 'Modo Controle desativado.');
