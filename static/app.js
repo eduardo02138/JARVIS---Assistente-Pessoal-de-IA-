@@ -82,6 +82,7 @@ const dom = {
     voiceBadge: document.getElementById('voiceBadge'),
     modelBadge: document.getElementById('modelBadge'),
     ideModeIndicator: document.getElementById('ideModeIndicator'),
+    controlModeIndicator: document.getElementById('controlModeIndicator'),
     
     // Modal
     settingsModal: document.getElementById('settingsModal'),
@@ -533,6 +534,18 @@ async function connectWebSocket() {
                     } else {
                         dom.ideModeIndicator.classList.add('hidden');
                         appendToolLog('MODO IDE', 'idle', 'Canal com Antigravity IDE desativado.');
+                    }
+                }
+                break;
+
+            case 'control_mode':
+                if (dom.controlModeIndicator) {
+                    if (msg.active) {
+                        dom.controlModeIndicator.classList.remove('hidden');
+                        appendToolLog('MODO CONTROLE', 'executing', 'Controle físico de mouse, teclado e janelas ativado.');
+                    } else {
+                        dom.controlModeIndicator.classList.add('hidden');
+                        appendToolLog('MODO CONTROLE', 'idle', 'Modo Controle desativado.');
                     }
                 }
                 break;

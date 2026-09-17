@@ -5,10 +5,9 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
-if [ -z "$GEMINI_API_KEY" ]; then
-    echo "⚠️  [AVISO]: A variável GEMINI_API_KEY não foi detectada no ambiente."
-    echo "   Você pode passá-la agora ou digitá-la diretamente no painel de configurações do HUD."
-    echo "   Exemplo: export GEMINI_API_KEY='sua_chave'"
+if [ -z "$GEMINI_API_KEY" ] && [ -z "$GEMINI_API_KEYS" ]; then
+    echo "⚠️  [AVISO]: As chaves Gemini não foram detectadas no ambiente."
+    echo "   Configure GEMINI_API_KEY ou GEMINI_API_KEYS no arquivo .env."
     echo ""
 fi
 
