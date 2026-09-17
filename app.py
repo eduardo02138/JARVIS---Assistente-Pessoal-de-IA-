@@ -124,6 +124,7 @@ class GeminiLiveDesktopApp(QMainWindow):
 
         # Atalhos
         QShortcut(QKeySequence("Escape"), self, self.hide)
+        QShortcut(QKeySequence("Alt+Space"), self, self.toggle_visibility)
         QShortcut(QKeySequence("F5"), self, self.web_view.reload)
 
         # Bandeja do Sistema

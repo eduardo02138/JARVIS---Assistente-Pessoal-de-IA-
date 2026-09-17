@@ -1,7 +1,6 @@
 """
-Gerenciador de Plug-ins e Loja de Extensões do J.A.R.V.I.S.
-Controla o ciclo de vida dos plug-ins, ativação/desativação dinâmica
-e exportação de ferramentas para o Gemini Live e Antigravity.
+Gerenciador Central de Plug-ins do J.A.R.V.I.S.
+Carrega, ativa, desativa e monitora extensões modulares dinamicamente.
 """
 
 import os
@@ -9,24 +8,67 @@ import sys
 import importlib
 import logging
 from typing import Optional
+from plugin_sdk import JarvisPlugin, ToolSpec, PluginMeta
 
-from plugin_sdk import JarvisPlugin, PluginMeta, ToolSpec
-
-logger = logging.getLogger("JARVIS_PLUGIN_MANAGER")
+logger = logging.getLogger("jarvis.plugins")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
 
-# Catálogo oficial da Loja de Plug-ins do Ecossistema JARVIS / N.E.K.O.
+# Catálogo oficial da Loja de Habilidades do JARVIS
 STORE_CATALOG = [
     {
         "id": "game_companion",
         "name": "Companhia em Jogos Online",
-        "version": "1.0.0",
+        "version": "1.2.0",
         "category": "gaming",
         "icon": "🎮",
-        "description": "Assistência tática em tempo real para jogos (Marvel Rivals, GTA, RPGs), timers e estratégias.",
-        "author": "Stark Gaming Division",
+        "description": "Assistência tática em tempo real para jogos (Marvel Rivals, GTA, RPGs), timers táticos e inicializador de jogos instalados.",
+        "author": "Stark Gaming Hub",
+        "installed": True,
+        "enabled": True
+    },
+    {
+        "id": "google_workspace",
+        "name": "Google Workspace (Gmail, Docs & Keep)",
+        "version": "1.0.0",
+        "category": "general",
+        "icon": "📑",
+        "description": "Comandos de voz para redigir documentos no Docs, consultar caixa de entrada no Gmail e capturar ideias no Keep.",
+        "author": "Google Cloud & Stark Industries",
+        "installed": True,
+        "enabled": True
+    },
+    {
+        "id": "deep_research",
+        "name": "Pesquisa Profunda & Dossiês Assíncronos",
+        "version": "1.0.0",
+        "category": "general",
+        "icon": "🔬",
+        "description": "Executa investigações aprofundadas em segundo plano sem travar o chat, emitindo notificações de voz/HUD ao concluir.",
+        "author": "Gemini Live Research Lab",
+        "installed": True,
+        "enabled": True
+    },
+    {
+        "id": "google_finance",
+        "name": "Google Finance & Portfólio de Investimentos",
+        "version": "1.0.0",
+        "category": "general",
+        "icon": "📈",
+        "description": "Cotações em tempo real (B3, S&P 500, Cripto), consolidação de portfólio, alocação de ativos e insights táticos.",
+        "author": "Google Finance & Stark Holdings",
+        "installed": True,
+        "enabled": True
+    },
+    {
+        "id": "ginjutsu_studio",
+        "name": "Ginjutsu Motion & Video AI Studio",
+        "version": "1.0.0",
+        "category": "general",
+        "icon": "🎬",
+        "description": "Transferência de atuação, coreografia e enquadramento de vídeos existentes para novos personagens via Higgsfield Ginjutsu.",
+        "author": "Higgsfield & Stark Visuals",
         "installed": True,
         "enabled": True
     },
@@ -36,7 +78,7 @@ STORE_CATALOG = [
         "version": "1.0.0",
         "category": "smart_home",
         "icon": "🏠",
-        "description": "Controle de iluminação inteligente, climatização residencial e cenas de ambiente ('Foco', 'Cinema').",
+        "description": "Controle de iluminação inteligente, climatização e cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso').",
         "author": "Stark Home Automation",
         "installed": True,
         "enabled": True
@@ -73,17 +115,6 @@ STORE_CATALOG = [
         "author": "Comunidade Open Source",
         "installed": False,
         "enabled": False
-    },
-    {
-        "id": "crypto_ticker",
-        "name": "Monitor de Criptoativos & Mercado",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "📈",
-        "description": "Telemetria de cotações em tempo real de Bitcoin, Ethereum, Solana e índices globais.",
-        "author": "Stark Finance",
-        "installed": False,
-        "enabled": False
     }
 ]
 
@@ -103,6 +134,10 @@ class PluginManager:
         # Plugins oficiais mapeados
         known_modules = {
             "game_companion": "plugins.game_companion.plugin",
+            "google_workspace": "plugins.google_workspace.plugin",
+            "deep_research": "plugins.deep_research.plugin",
+            "google_finance": "plugins.google_finance.plugin",
+            "ginjutsu_studio": "plugins.ginjutsu_studio.plugin",
             "smart_home": "plugins.smart_home.plugin",
             "live_stream": "plugins.live_stream.plugin",
             "social_feed": "plugins.social_feed.plugin",
@@ -111,7 +146,6 @@ class PluginManager:
         for plugin_id, mod_path in known_modules.items():
             try:
                 mod = importlib.import_module(mod_path)
-                # Encontra a subclasse JarvisPlugin
                 for attr_name in dir(mod):
                     attr = getattr(mod, attr_name)
                     if isinstance(attr, type) and issubclass(attr, JarvisPlugin) and attr is not JarvisPlugin:
@@ -150,13 +184,11 @@ class PluginManager:
             plugin.on_unload()
             msg = f"Plug-in '{plugin.meta.name}' desativado temporariamente, senhor."
 
-        # Atualiza o catálogo da loja
         for item in STORE_CATALOG:
             if item["id"] == plugin_id:
                 item["enabled"] = new_state
                 break
 
-        # Sincroniza dinamicamente com o system_tools
         self.sync_with_system_tools()
 
         return {
@@ -167,12 +199,11 @@ class PluginManager:
         }
 
     def install_plugin(self, plugin_id: str) -> dict:
-        """Simula a instalação de um plug-in da loja."""
+        """Instala ou ativa um plug-in da loja."""
         for item in STORE_CATALOG:
             if item["id"] == plugin_id:
                 item["installed"] = True
                 item["enabled"] = True
-                # Se já estiver instanciado na memória, ativa
                 if plugin_id in self._plugins:
                     self._plugins[plugin_id].meta.enabled = True
                     self._plugins[plugin_id].on_load()
@@ -215,7 +246,6 @@ class PluginManager:
             active_tools = self.get_active_tools()
             system_tools.rebuild_registry(active_tools)
 
-            # Registra a política declarada pelo plug-in; sem política o Policy Engine bloqueia
             for tool in active_tools:
                 declarado = getattr(tool, "risk_level", None)
                 if declarado:

@@ -1,6 +1,7 @@
 """
 Plug-in: Companhia em Jogos Online (Game Companion)
-Fornece análise tática, timers de cooldown/objetivos e assistência estratégica para jogos online.
+Fornece análise tática, timers de cooldown/objetivos, assistência estratégica,
+localização e inicialização de jogos instalados (Steam, Lutris, Heroic, etc.).
 Inclui worker assíncrono para monitoramento e notificação de timers expirados.
 """
 
@@ -17,10 +18,10 @@ class GameCompanionPlugin(JarvisPlugin):
         super().__init__(PluginMeta(
             id="game_companion",
             name="Companhia em Jogos Online",
-            version="1.1.0",
+            version="1.2.0",
             category="gaming",
             icon="🎮",
-            description="Assistência tática em tempo real para jogos (Marvel Rivals, GTA, RPGs, shooters), timers de objetivos e dicas estratégicas com notificações ativas."
+            description="Assistência tática em tempo real para jogos, timers de objetivos, localização e inicialização direta de jogos instalados em qualquer distribuidora."
         ))
         self.active_game = "Nenhum"
         self.timers: Dict[str, float] = {}
@@ -43,7 +44,8 @@ class GameCompanionPlugin(JarvisPlugin):
                 },
                 "required": ["game_name"]
             },
-            handler=self.set_active_game
+            handler=self.set_active_game,
+            risk_level="LOW_WRITE"
         )
 
         self.register_tool(
@@ -63,7 +65,8 @@ class GameCompanionPlugin(JarvisPlugin):
                 },
                 "required": ["label", "seconds"]
             },
-            handler=self.start_tactical_timer
+            handler=self.start_tactical_timer,
+            risk_level="LOW_WRITE"
         )
 
         self.register_tool(
@@ -79,7 +82,41 @@ class GameCompanionPlugin(JarvisPlugin):
                 },
                 "required": ["target_character_or_boss"]
             },
-            handler=self.get_strategy
+            handler=self.get_strategy,
+            risk_level="READ"
+        )
+
+        self.register_tool(
+            name="game_companion_list_installed_games",
+            description="Lista e localiza todos os jogos instalados no computador e drivers (Steam, Lutris, Heroic Games, nativos) com informações da distribuidora e comando de inicialização.",
+            parameters={
+                "type": "OBJECT",
+                "properties": {
+                    "filter_name": {
+                        "type": "STRING",
+                        "description": "Filtro opcional por nome do jogo ou distribuidora."
+                    }
+                }
+            },
+            handler=self.list_installed_games,
+            risk_level="READ"
+        )
+
+        self.register_tool(
+            name="game_companion_launch_game",
+            description="Inicia imediatamente um jogo instalado pelo nome ou AppID em sua respectiva distribuidora (Steam, Lutris, etc.).",
+            parameters={
+                "type": "OBJECT",
+                "properties": {
+                    "game_name": {
+                        "type": "STRING",
+                        "description": "Nome do jogo a ser iniciado (ex: 'Marvel Rivals', 'GTA V', 'Red Dead Redemption 2')."
+                    }
+                },
+                "required": ["game_name"]
+            },
+            handler=self.launch_game,
+            risk_level="LOW_WRITE"
         )
 
         # Inicia o worker em background se houver loop assíncrono ativo
@@ -103,7 +140,6 @@ class GameCompanionPlugin(JarvisPlugin):
                 expired = self.check_expired_timers()
                 for label in expired:
                     logger.info(f"⏰ [GAME COMPANION]: Timer tático '{label}' expirou!")
-                    # Injeta evento no monitor se disponível
                     try:
                         from monitoring.logger import record_event
                         record_event("game_timer_expired", {"label": label, "game": self.active_game})
@@ -140,7 +176,6 @@ class GameCompanionPlugin(JarvisPlugin):
         mins, secs = divmod(seconds, 60)
         tempo_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
 
-        # Garante que o worker está rodando
         if self._running and (not self._worker_task or self._worker_task.done()):
             try:
                 loop = asyncio.get_running_loop()
@@ -168,3 +203,36 @@ class GameCompanionPlugin(JarvisPlugin):
             "conselho_tatico": dicas[0],
             "mensagem": f"Análise tática para {target_character_or_boss}: {dicas[0]}"
         }
+
+    def list_installed_games(self, filter_name: str = "") -> dict:
+        try:
+            import system_tools
+            return system_tools.list_installed_games(filter_name=filter_name)
+        except Exception as e:
+            return {"sucesso": False, "erro": str(e), "mensagem": f"Falha ao consultar catálogo de jogos: {e}"}
+
+    def launch_game(self, game_name: str) -> dict:
+        try:
+            import system_tools
+            lista = system_tools.list_installed_games(filter_name=game_name)
+            jogos = lista.get("jogos", [])
+            if not jogos:
+                return {"sucesso": False, "mensagem": f"Jogo '{game_name}' não foi localizado na biblioteca, senhor."}
+
+            jogo = jogos[0]
+            cmd = jogo.get("comando")
+            if not cmd:
+                return {"sucesso": False, "mensagem": f"Comando de inicialização não disponível para {jogo.get('nome')}."}
+
+            import subprocess
+            subprocess.Popen(cmd, shell=True)
+            self.active_game = jogo.get("nome")
+            return {
+                "sucesso": True,
+                "jogo": jogo.get("nome"),
+                "distribuidora": jogo.get("distribuidora"),
+                "comando": cmd,
+                "mensagem": f"Inicializando '{jogo.get('nome')}' via {jogo.get('distribuidora')}, senhor. Telemetria e timers prontos."
+            }
+        except Exception as e:
+            return {"sucesso": False, "erro": str(e), "mensagem": f"Erro ao iniciar o jogo: {e}"}
