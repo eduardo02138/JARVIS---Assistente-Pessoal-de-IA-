@@ -421,6 +421,70 @@ def read_notes() -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Erro ao acessar notas: {str(e)}"}
 
+def open_website(url: str) -> dict:
+    """Abre qualquer site ou endereço web diretamente no navegador padrão."""
+    clean_url = url.strip()
+    if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+        clean_url = "https://" + clean_url
+    try:
+        subprocess.Popen(["xdg-open", clean_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return {
+            "sucesso": True,
+            "url": clean_url,
+            "mensagem": f"Acessando o site '{clean_url}' no seu navegador, senhor."
+        }
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Falha ao abrir o site: {str(e)}"}
+
+def play_music(query: str) -> dict:
+    """Busca e toca qualquer música, álbum ou artista no YouTube no navegador."""
+    import urllib.parse
+    encoded = urllib.parse.quote(query)
+    music_url = f"https://www.youtube.com/results?search_query={encoded}"
+    try:
+        subprocess.Popen(["xdg-open", music_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return {
+            "sucesso": True,
+            "busca": query,
+            "mensagem": f"Reproduzindo '{query}' no YouTube, senhor. Boa sessão."
+        }
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Falha ao iniciar reprodução de música: {str(e)}"}
+
+def take_screenshot(filename: str = None) -> dict:
+    """Tira uma captura de tela completa e salva com nome de arquivo personalizado."""
+    shots_dir = os.path.expanduser("~/Imagens/Capturas de tela")
+    if not os.path.exists(shots_dir):
+        os.makedirs(shots_dir, exist_ok=True)
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if filename:
+        clean_name = filename.strip()
+        if not clean_name.endswith(".png") and not clean_name.endswith(".jpg"):
+            clean_name += ".png"
+        out_path = os.path.join(shots_dir, clean_name)
+    else:
+        out_path = os.path.join(shots_dir, f"captura_{now_str}.png")
+
+    display = os.environ.get("DISPLAY", ":0")
+    cmd = [
+        "ffmpeg", "-f", "x11grab", "-video_size", "1920x1080",
+        "-i", display, "-update", "1", "-frames:v", "1", out_path, "-y"
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return {
+                "sucesso": True,
+                "arquivo": out_path,
+                "nome": os.path.basename(out_path),
+                "mensagem": f"Captura de tela salva com sucesso em '{os.path.basename(out_path)}', senhor."
+            }
+        else:
+            return {"sucesso": False, "mensagem": f"Falha ao gravar captura de tela: {res.stderr[:120]}"}
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Erro ao capturar tela: {str(e)}"}
+
 # ----------------- INTEGRAÇÃO COM ANTIGRAVITY IDE & MCP -----------------
 def antigravity_open_workspace(path: str = "/home/edu/Documentos/assistente") -> dict:
     """Abre um diretório ou projeto na IDE Antigravity."""
@@ -691,6 +755,47 @@ GEMINI_FUNCTION_DECLARATIONS = [
         "name": "antigravity_open_gemini_bridge",
         "description": "Abre a pasta 'gemini' de auditoria e canal direto de mensagens na IDE Antigravity.",
         "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "open_website",
+        "description": "Abre qualquer site ou endereço web diretamente no navegador padrão do senhor.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "url": {
+                    "type": "STRING",
+                    "description": "Endereço do site a ser aberto (ex: 'github.com', 'youtube.com', 'https://globo.com')."
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "play_music",
+        "description": "Busca e reproduz qualquer música, cantor, banda ou gênero no YouTube no navegador.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Nome da música, artista ou playlist desejada (ex: 'Queen Bohemian Rhapsody', 'AC/DC', 'synthwave lo-fi')."
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "take_screenshot",
+        "description": "Tira uma captura de tela completa do computador e salva com nome personalizado na pasta de capturas de tela do usuário.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "filename": {
+                    "type": "STRING",
+                    "description": "Nome opcional do arquivo para salvar a captura (ex: 'erro_antigravity.png' ou 'grafico.png')."
+                }
+            }
+        }
     }
 ]
 
@@ -710,7 +815,11 @@ TOOL_REGISTRY = {
     "antigravity_run_prompt": antigravity_run_prompt,
     "set_ide_mode": set_ide_mode,
     "antigravity_open_gemini_bridge": antigravity_open_gemini_bridge,
+    "open_website": open_website,
+    "play_music": play_music,
+    "take_screenshot": take_screenshot,
 }
+
 
 
 
