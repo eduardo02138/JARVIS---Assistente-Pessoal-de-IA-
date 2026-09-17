@@ -302,18 +302,122 @@ def test_websocket_auth():
     assert success
     return success
 
+def test_policy_confirmation_required():
+    """Garante que EXTERNAL_WRITE e PRIVILEGED exigem confirmação explícita do usuário."""
+    from policy_engine import policy_engine, RiskLevel
+
+    dec_read = policy_engine.evaluate("get_system_status")
+    dec_write = policy_engine.evaluate("open_application", {"app_name": "gedit"})
+    dec_ext = policy_engine.evaluate("social_feed_post_update", {"channel": "discord", "text": "oi"})
+    dec_priv = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "verifique os testes"})
+
+    success = (
+        not dec_read.requires_confirmation and
+        not dec_write.requires_confirmation and
+        dec_ext.requires_confirmation and
+        dec_priv.requires_confirmation
+    )
+    detail = (
+        f"READ: {dec_read.requires_confirmation} | LOW_WRITE: {dec_write.requires_confirmation} | "
+        f"EXTERNAL: {dec_ext.requires_confirmation} | PRIVILEGED: {dec_priv.requires_confirmation}"
+    )
+    log_test("Policy Engine (Confirmação Obrigatória em Ações de Risco)", success, detail)
+    assert success
+    return success
+
+
+def test_confirmation_flow_wired():
+    """Garante que o backend bloqueia a ferramenta quando o usuário não confirma."""
+    import inspect
+    import server
+
+    source = inspect.getsource(server.websocket_live_endpoint)
+    tem_pedido = "tool_confirmation_request" in source
+    tem_resposta = 'msg_type == "tool_confirmation"' in source
+    tem_bloqueio = "policy_denied_by_user" in source
+    tem_timeout = "asyncio.TimeoutError" in source
+
+    success = tem_pedido and tem_resposta and tem_bloqueio and tem_timeout
+    detail = f"pedido: {tem_pedido} | resposta: {tem_resposta} | bloqueio: {tem_bloqueio} | timeout: {tem_timeout}"
+    log_test("Fluxo de Confirmação de Ferramentas no WebSocket", success, detail)
+    assert success
+    return success
+
+
+def test_preferences_requires_token():
+    """Garante que POST /api/preferences exige token de autenticação."""
+    from fastapi.testclient import TestClient
+    from server import app, JARVIS_SECRET_TOKEN
+
+    import preferences_manager
+
+    client = TestClient(app)
+    payload = {"category": "default_apps", "key": "_teste_suite_p0", "value": "valor_de_teste"}
+    arquivo = preferences_manager.PREFERENCES_FILE
+    conteudo_original = None
+    if os.path.exists(arquivo):
+        with open(arquivo, "r", encoding="utf-8") as f:
+            conteudo_original = f.read()
+
+    try:
+        r_unauth = client.post("/api/preferences", json=payload)
+        unauth_blocked = r_unauth.status_code == 401
+
+        r_auth = client.post("/api/preferences", json=payload, headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN})
+        auth_allowed = r_auth.status_code == 200
+    finally:
+        # Não deixa resíduo do teste nas preferências reais do usuário
+        if conteudo_original is not None:
+            with open(arquivo, "w", encoding="utf-8") as f:
+                f.write(conteudo_original)
+
+    success = unauth_blocked and auth_allowed
+    detail = f"Sem token: {r_unauth.status_code} (esperado 401) | Com token: {r_auth.status_code} (esperado 200)"
+    log_test("Autenticação de Preferências (POST /api/preferences)", success, detail)
+    assert success
+    return success
+
+
+def test_frontend_sends_token():
+    """Garante que o HUD envia o token nas rotas protegidas e no WebSocket."""
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base, "static", "app.js"), encoding="utf-8") as f:
+        source = f.read()
+
+    usa_helper = "X-Jarvis-Token" in source
+    plugins_autenticados = (
+        "apiFetch('/api/plugins/toggle'" in source and
+        "apiFetch('/api/plugins/install'" in source
+    )
+    ws_autenticado = "token: jarvisSessionToken" in source
+    trata_confirmacao = "tool_confirmation_request" in source
+
+    success = usa_helper and plugins_autenticados and ws_autenticado and trata_confirmacao
+    detail = (
+        f"header: {usa_helper} | plugins: {plugins_autenticados} | "
+        f"ws: {ws_autenticado} | confirmação: {trata_confirmacao}"
+    )
+    log_test("Frontend Autenticado (HUD com token de sessão)", success, detail)
+    assert success
+    return success
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
     test_localhost_binding()
     test_permission_bypass_removed()
     test_policy_engine_classification()
+    test_policy_confirmation_required()
+    test_confirmation_flow_wired()
     test_plugin_lifecycle_purge()
     test_mock_plugin_transparency()
     test_game_timer_expiration()
     test_session_endpoint()
     test_unauthenticated_injection_blocked()
+    test_preferences_requires_token()
     test_websocket_auth()
+    test_frontend_sends_token()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 
 if __name__ == "__main__":

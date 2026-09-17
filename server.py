@@ -12,7 +12,7 @@ import base64
 import time
 import asyncio
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 import secrets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException, Request, Query
@@ -35,6 +35,9 @@ app = FastAPI(title="JARVIS AI Assistant - Gemini Live")
 JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
 if not JARVIS_SECRET_TOKEN:
     JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
+
+# Tempo máximo de espera pela confirmação do usuário em ferramentas de risco
+CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "60"))
 
 async def verify_jarvis_token(
     request: Request,
@@ -176,7 +179,8 @@ async def test_all_accounts():
                 cl._api_client._websocket_ssl_ctx["ping_timeout"] = None
 
             test_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
-            async with cl.aio.live.connect(model=test_model, config=config) as s:
+            test_config = types.LiveConnectConfig(response_modalities=[types.Modality.TEXT])
+            async with cl.aio.live.connect(model=test_model, config=test_config) as s:
                 await s.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text="ping")]),
                     turn_complete=True
@@ -227,7 +231,7 @@ async def get_preferences_endpoint():
     return preferences_manager.get_all_preferences()
 
 @app.post("/api/preferences")
-async def update_preferences_endpoint(payload: dict):
+async def update_preferences_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     import preferences_manager
     cat = payload.get("category", "default_apps")
     key = payload.get("key")
@@ -413,6 +417,33 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
                 assistant_state = {"busy": False}
+                # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
+                pending_confirmations: Dict[str, asyncio.Future] = {}
+
+                async def request_user_confirmation(call_id: str, func_name: str, args: dict, decision) -> bool:
+                    """Pede autorização ao usuário no HUD e espera a resposta."""
+                    future: asyncio.Future = asyncio.get_running_loop().create_future()
+                    pending_confirmations[call_id] = future
+                    await websocket.send_json({
+                        "type": "tool_confirmation_request",
+                        "id": call_id,
+                        "name": func_name,
+                        "args": args,
+                        "risk_level": decision.risk_level.value,
+                        "reason": decision.reason,
+                        "timeout_s": CONFIRMATION_TIMEOUT_S
+                    })
+                    record_event("policy_confirmation_request", {
+                        "name": func_name,
+                        "risk": decision.risk_level.value,
+                        "args": args
+                    })
+                    try:
+                        return await asyncio.wait_for(future, timeout=CONFIRMATION_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        return False
+                    finally:
+                        pending_confirmations.pop(call_id, None)
 
                 # Worker 1: Lê comandos e áudio do WebSocket sem interrupções
                 async def ws_client_worker():
@@ -454,6 +485,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         elif msg_type == "get_status":
                             status = system_tools.get_system_status()
                             await websocket.send_json({"type": "system_status", "data": status})
+
+                        elif msg_type == "tool_confirmation":
+                            # Resposta do usuário a uma ferramenta que exige autorização explícita
+                            pending = pending_confirmations.pop(msg.get("id"), None)
+                            if pending is not None and not pending.done():
+                                pending.set_result(bool(msg.get("approved")))
 
                 # Worker 2: Lê injeções de prompt via painel web de depuração
                 async def injection_worker():
@@ -550,9 +587,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                         # Avaliação de autorização pelo Policy Engine
                                         decision = policy_engine.evaluate(func_name, args)
+                                        approved = True
+                                        if decision.allowed and decision.requires_confirmation:
+                                            approved = await request_user_confirmation(call_id, func_name, args, decision)
+
                                         if not decision.allowed:
                                             res = {"sucesso": False, "erro": f"Execução bloqueada pelo Policy Engine: {decision.reason}"}
                                             record_event("policy_blocked", {"name": func_name, "decision": decision.reason, "risk": decision.risk_level.value})
+                                        elif not approved:
+                                            res = {"sucesso": False, "erro": "Execução negada: o usuário não confirmou esta ação."}
+                                            record_event("policy_denied_by_user", {"name": func_name, "risk": decision.risk_level.value, "args": args})
                                         else:
                                             executor = system_tools.TOOL_REGISTRY.get(func_name)
                                             if executor:

@@ -12,7 +12,19 @@ async function initSessionToken() {
     }
     return "";
 }
-initSessionToken();
+const sessionTokenReady = initSessionToken();
+
+/** Envia requisições autenticadas ao backend local (token de sessão do JARVIS). */
+async function apiFetch(url, options = {}) {
+    if (!jarvisSessionToken) {
+        await sessionTokenReady;
+    }
+    const headers = Object.assign({}, options.headers || {});
+    if (jarvisSessionToken) {
+        headers['X-Jarvis-Token'] = jarvisSessionToken;
+    }
+    return fetch(url, Object.assign({}, options, { headers }));
+}
 
 /**
  * J.A.R.V.I.S. Client Controller
@@ -598,6 +610,10 @@ async function connectWebSocket() {
                 appendToolLog(msg.name, 'executing', msg.args);
                 break;
 
+            case 'tool_confirmation_request':
+                handleToolConfirmationRequest(msg);
+                break;
+
             case 'tool_result':
                 appendToolLog(msg.name, 'success', msg.result);
                 // Se a tool alterou status, atualiza telemetria imediatamente
@@ -621,6 +637,45 @@ async function connectWebSocket() {
         console.error('Erro no WebSocket:', err);
         disconnectWebSocket();
     };
+}
+
+/**
+ * Mostra um painel de autorização para ferramentas de risco (EXTERNAL_WRITE / PRIVILEGED)
+ * e devolve a decisão do usuário ao backend. Sem resposta, o backend nega por tempo esgotado.
+ */
+function handleToolConfirmationRequest(msg) {
+    appendToolLog(msg.name, 'executing', `Aguardando autorização (${msg.risk_level}): ${JSON.stringify(msg.args)}`);
+
+    const painel = document.createElement('div');
+    painel.className = 'jarvis-confirm-panel';
+    painel.innerHTML = `
+        <h3>Autorização necessária</h3>
+        <p class="risco">${msg.risk_level}</p>
+        <p class="ferramenta">${msg.name}</p>
+        <pre>${JSON.stringify(msg.args, null, 2)}</pre>
+        <p class="motivo">${msg.reason || ''}</p>
+        <div class="acoes">
+            <button class="aprovar">Autorizar</button>
+            <button class="negar">Negar</button>
+        </div>
+    `;
+    document.body.appendChild(painel);
+
+    let respondido = false;
+    const responder = (aprovado) => {
+        if (respondido) return;
+        respondido = true;
+        clearTimeout(temporizador);
+        painel.remove();
+        if (state.ws && state.connected) {
+            state.ws.send(JSON.stringify({ type: 'tool_confirmation', id: msg.id, approved: aprovado }));
+        }
+        appendToolLog(msg.name, aprovado ? 'success' : 'error', aprovado ? 'Autorizado pelo usuário.' : 'Negado pelo usuário.');
+    };
+
+    painel.querySelector('.aprovar').addEventListener('click', () => responder(true));
+    painel.querySelector('.negar').addEventListener('click', () => responder(false));
+    const temporizador = setTimeout(() => responder(false), (msg.timeout_s || 60) * 1000);
 }
 
 function disconnectWebSocket() {
@@ -861,7 +916,7 @@ async function renderPluginsUI() {
 
 window.togglePlugin = async function(pluginId, targetState) {
     try {
-        const res = await fetch('/api/plugins/toggle', {
+        const res = await apiFetch('/api/plugins/toggle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ plugin_id: pluginId, enabled: targetState })
@@ -878,7 +933,7 @@ window.togglePlugin = async function(pluginId, targetState) {
 
 window.installPlugin = async function(pluginId) {
     try {
-        const res = await fetch('/api/plugins/install', {
+        const res = await apiFetch('/api/plugins/install', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ plugin_id: pluginId })

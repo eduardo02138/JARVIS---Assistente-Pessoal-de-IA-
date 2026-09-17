@@ -1112,3 +1112,74 @@ body {
     color: #000000;
 }
 
+
+/* ---------- Painel de autorização de ferramentas (Policy Engine) ---------- */
+.jarvis-confirm-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9999;
+    min-width: 320px;
+    max-width: 520px;
+    padding: 20px 24px;
+    background: rgba(4, 12, 20, 0.97);
+    border: 1px solid var(--hud-cyan);
+    box-shadow: 0 0 24px rgba(0, 240, 255, 0.35);
+    color: var(--hud-cyan);
+    font-family: inherit;
+}
+
+.jarvis-confirm-panel h3 {
+    margin: 0 0 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.jarvis-confirm-panel .risco {
+    margin: 0 0 4px;
+    color: #ff9f43;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+
+.jarvis-confirm-panel .ferramenta {
+    margin: 0 0 8px;
+    color: #ffffff;
+    font-size: 1.05em;
+}
+
+.jarvis-confirm-panel pre {
+    max-height: 180px;
+    overflow: auto;
+    padding: 8px;
+    background: rgba(0, 240, 255, 0.07);
+    color: #cfe9f1;
+    font-size: 0.85em;
+}
+
+.jarvis-confirm-panel .motivo {
+    color: #7aa5ba;
+    font-size: 0.85em;
+}
+
+.jarvis-confirm-panel .acoes {
+    display: flex;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.jarvis-confirm-panel button {
+    flex: 1;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid currentColor;
+    cursor: pointer;
+    font: inherit;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.jarvis-confirm-panel .aprovar { color: #00ff88; }
+.jarvis-confirm-panel .negar { color: #ff4d6d; }
+.jarvis-confirm-panel button:hover { background: rgba(255, 255, 255, 0.08); }

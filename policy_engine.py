@@ -105,14 +105,14 @@ class PolicyEngine:
                 reason=f"Ferramenta de baixo impacto ({risk.value}) autorizada automaticamente."
             )
 
-        # EXTERNAL_WRITE: Autorizado com aviso de auditoria
+        # EXTERNAL_WRITE: Exige confirmação explícita do usuário antes de sair da máquina
         if risk == RiskLevel.EXTERNAL_WRITE:
             return PolicyDecision(
                 tool_name=tool_name,
                 risk_level=risk,
                 allowed=True,
-                requires_confirmation=False,
-                reason=f"Operação externa ({risk.value}) auditada.",
+                requires_confirmation=True,
+                reason=f"Operação externa ({risk.value}) exige confirmação do usuário.",
                 metadata={"args": args}
             )
 
@@ -133,8 +133,8 @@ class PolicyEngine:
                 tool_name=tool_name,
                 risk_level=risk,
                 allowed=True,
-                requires_confirmation=False,
-                reason="Chamada de agente privilegiado autorizada com salvaguardas nativas ativas.",
+                requires_confirmation=True,
+                reason="Agente privilegiado exige confirmação explícita do usuário.",
                 metadata={"prompt_preview": prompt[:120]}
             )
 
