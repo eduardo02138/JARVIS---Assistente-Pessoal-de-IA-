@@ -353,31 +353,47 @@ def test_preferences_requires_token():
     from fastapi.testclient import TestClient
     from server import app, JARVIS_SECRET_TOKEN
 
+    import importlib
+    import json as _json
+    import tempfile
+
     import preferences_manager
 
     client = TestClient(app)
     payload = {"category": "default_apps", "key": "_teste_suite_p0", "value": "valor_de_teste"}
-    arquivo = preferences_manager.PREFERENCES_FILE
-    conteudo_original = None
-    if os.path.exists(arquivo):
-        with open(arquivo, "r", encoding="utf-8") as f:
-            conteudo_original = f.read()
+
+    # Preferências vão para um arquivo temporário: o teste não toca no arquivo real
+    original_env = os.environ.get("JARVIS_PREFERENCES_FILE")
+    temporario = os.path.join(tempfile.mkdtemp(prefix="jarvis_prefs_"), "user_preferences.json")
+    os.environ["JARVIS_PREFERENCES_FILE"] = temporario
+    importlib.reload(preferences_manager)
 
     try:
         r_unauth = client.post("/api/preferences", json=payload)
         unauth_blocked = r_unauth.status_code == 401
 
         r_auth = client.post("/api/preferences", json=payload, headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN})
-        auth_allowed = r_auth.status_code == 200
-    finally:
-        # Não deixa resíduo do teste nas preferências reais do usuário
-        if conteudo_original is not None:
-            with open(arquivo, "w", encoding="utf-8") as f:
-                f.write(conteudo_original)
+        corpo = r_auth.json() if r_auth.status_code == 200 else {}
+        auth_allowed = r_auth.status_code == 200 and corpo.get("status") == "ok"
 
-    success = unauth_blocked and auth_allowed
-    detail = f"Sem token: {r_unauth.status_code} (esperado 401) | Com token: {r_auth.status_code} (esperado 200)"
-    log_test("Autenticação de Preferências (POST /api/preferences)", success, detail)
+        # Persistência real: o valor precisa estar gravado no disco
+        persistiu = False
+        if os.path.exists(temporario):
+            with open(temporario, encoding="utf-8") as f:
+                persistiu = _json.load(f).get("default_apps", {}).get("_teste_suite_p0") == "valor_de_teste"
+    finally:
+        if original_env is None:
+            os.environ.pop("JARVIS_PREFERENCES_FILE", None)
+        else:
+            os.environ["JARVIS_PREFERENCES_FILE"] = original_env
+        importlib.reload(preferences_manager)
+
+    success = unauth_blocked and auth_allowed and persistiu
+    detail = (
+        f"Sem token: {r_unauth.status_code} (esperado 401) | Com token: {r_auth.status_code} "
+        f"status={corpo.get('status')} | persistiu no disco: {persistiu}"
+    )
+    log_test("Preferências: autenticação e persistência real", success, detail)
     assert success
     return success
 
@@ -476,6 +492,59 @@ def test_control_lease():
     return success
 
 
+def test_control_revogacao_imediata():
+    """Desligar o Modo Controle nunca pode depender de confirmação."""
+    from policy_engine import policy_engine, RiskLevel
+
+    dec_off = policy_engine.evaluate("set_control_mode", {"enabled": False})
+    dec_on = policy_engine.evaluate("set_control_mode", {"enabled": True})
+
+    success = (
+        dec_off.allowed and not dec_off.requires_confirmation and dec_off.risk_level == RiskLevel.LOW_WRITE
+        and dec_on.requires_confirmation and dec_on.risk_level == RiskLevel.PRIVILEGED
+    )
+    detail = (
+        f"enabled=False: allowed={dec_off.allowed} confirmação={dec_off.requires_confirmation} | "
+        f"enabled=True: confirmação={dec_on.requires_confirmation}"
+    )
+    log_test("Revogação Imediata do Modo Controle", success, detail)
+    assert success
+    return success
+
+
+def test_lease_vinculada_a_sessao():
+    """A lease pertence à sessão que a recebeu: outra sessão não herda a autoridade."""
+    from policy_engine import policy_engine
+
+    policy_engine.grant_control_lease(owner="sessao-A", ttl_s=60)
+    dec_dono = policy_engine.evaluate("mouse_click", {"button": "left"}, session_id="sessao-A")
+    dec_outra = policy_engine.evaluate("mouse_click", {"button": "left"}, session_id="sessao-B")
+    policy_engine.revoke_control_lease()
+
+    success = dec_dono.allowed and not dec_outra.allowed
+    detail = f"dona da lease: {dec_dono.allowed} | outra sessão: {dec_outra.allowed}"
+    log_test("Lease Vinculada à Sessão (capability por WebSocket)", success, detail)
+    assert success
+    return success
+
+
+def test_lease_expirada_desativa_modo():
+    """O servidor sincroniza o Modo Controle quando a lease expira."""
+    import inspect
+    import server
+
+    fonte = inspect.getsource(server.websocket_live_endpoint)
+    tem_worker = "control_lease_worker" in fonte
+    desativa = "system_tools.set_control_mode(False)" in fonte
+    avisa_hud = "control_lease_expired" in fonte
+
+    success = tem_worker and desativa and avisa_hud
+    detail = f"worker: {tem_worker} | desativa modo: {desativa} | avisa HUD: {avisa_hud}"
+    log_test("Sincronização do Modo Controle na Expiração da Lease", success, detail)
+    assert success
+    return success
+
+
 def test_controller_sem_evdev():
     """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
     import importlib
@@ -533,6 +602,9 @@ async def run_p0_suite():
     test_policy_fail_closed()
     test_registered_tools_have_policy()
     test_control_lease()
+    test_control_revogacao_imediata()
+    test_lease_vinculada_a_sessao()
+    test_lease_expirada_desativa_modo()
     test_confirmation_flow_wired()
     test_controller_sem_evdev()
     test_suite_cli_dispatch()

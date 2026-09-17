@@ -146,8 +146,13 @@ class PolicyEngine:
         logger.info("Lease de controle revogada.")
         return self.control_lease_status()
 
-    def is_control_lease_active(self) -> bool:
-        return time.time() < self._control_lease_expira_em
+    def is_control_lease_active(self, session_id: Optional[str] = None) -> bool:
+        """A lease pertence à sessão que a recebeu: outra sessão não herda a autoridade."""
+        if time.time() >= self._control_lease_expira_em:
+            return False
+        if session_id is not None and self._control_lease_owner != session_id:
+            return False
+        return True
 
     def control_lease_status(self) -> Dict[str, Any]:
         restante = max(0.0, self._control_lease_expira_em - time.time())
@@ -157,16 +162,23 @@ class PolicyEngine:
             "owner": self._control_lease_owner if restante > 0 else None
         }
 
-    def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any]) -> PolicyDecision:
+    def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any],
+                                 session_id: Optional[str] = None) -> PolicyDecision:
         """Aplica a lease de controle e escala ações perigosas de teclado."""
         risk = RiskLevel.LOW_WRITE
-        if not self.is_control_lease_active():
+        if not self.is_control_lease_active(session_id):
+            expirada = self._control_lease_expira_em > 0 and time.time() >= self._control_lease_expira_em
+            motivo = (
+                "Autoridade de controle físico expirada: ative o Modo Controle novamente."
+                if expirada else
+                "Sem autoridade de controle físico: ative o Modo Controle e confirme para liberar mouse e teclado."
+            )
             return PolicyDecision(
                 tool_name=tool_name,
                 risk_level=risk,
                 allowed=False,
                 requires_confirmation=False,
-                reason="Sem autoridade de controle físico: ative o Modo Controle e confirme para liberar mouse e teclado.",
+                reason=motivo,
                 metadata=self.control_lease_status()
             )
 
@@ -206,7 +218,8 @@ class PolicyEngine:
             metadata=self.control_lease_status()
         )
 
-    def evaluate(self, tool_name: str, args: Optional[Dict[str, Any]] = None) -> PolicyDecision:
+    def evaluate(self, tool_name: str, args: Optional[Dict[str, Any]] = None,
+                 session_id: Optional[str] = None) -> PolicyDecision:
         """
         Avalia se a execução da ferramenta está autorizada e sob quais condições.
         """
@@ -225,9 +238,19 @@ class PolicyEngine:
                 metadata={"args": args}
             )
 
+        # Desligar o Modo Controle é sempre permitido: revogar autoridade nunca pode travar
+        if tool_name == "set_control_mode" and args.get("enabled") is False:
+            return PolicyDecision(
+                tool_name=tool_name,
+                risk_level=RiskLevel.LOW_WRITE,
+                allowed=True,
+                requires_confirmation=False,
+                reason="Revogação de controle físico autorizada imediatamente."
+            )
+
         # Controle físico de mouse e teclado depende da lease concedida pelo usuário
         if tool_name in CONTROL_TOOLS:
-            return self._avaliar_controle_fisico(tool_name, args)
+            return self._avaliar_controle_fisico(tool_name, args, session_id)
 
         # READ e LOW_WRITE: Execução automática transparente
         if risk in (RiskLevel.READ, RiskLevel.LOW_WRITE):

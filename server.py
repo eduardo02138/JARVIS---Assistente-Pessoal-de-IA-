@@ -417,6 +417,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
                 assistant_state = {"busy": False}
+                # Identidade desta sessão: a lease de controle físico pertence a ela
+                sessao_id = secrets.token_urlsafe(12)
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
 
@@ -586,7 +588,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         })
 
                                         # Avaliação de autorização pelo Policy Engine
-                                        decision = policy_engine.evaluate(func_name, args)
+                                        decision = policy_engine.evaluate(func_name, args, session_id=sessao_id)
                                         approved = True
                                         if decision.allowed and decision.requires_confirmation:
                                             approved = await request_user_confirmation(call_id, func_name, args, decision)
@@ -624,7 +626,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         if func_name == "set_control_mode":
                                             # A lease dá autoridade temporária ao mouse e ao teclado virtuais
                                             if res.get("sucesso") and res.get("control_mode"):
-                                                lease = policy_engine.grant_control_lease(owner="hud")
+                                                lease = policy_engine.grant_control_lease(owner=sessao_id)
                                                 record_event("control_lease_granted", lease)
                                             else:
                                                 lease = policy_engine.revoke_control_lease()
@@ -652,7 +654,23 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             break
 
                 # Executa todos os workers sem cancelamentos indesejados
-                await asyncio.gather(ws_client_worker(), injection_worker(), from_gemini_worker())
+                # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
+                async def control_lease_worker():
+                    while True:
+                        await asyncio.sleep(5)
+                        if system_tools.get_control_mode() and not policy_engine.is_control_lease_active(sessao_id):
+                            system_tools.set_control_mode(False)
+                            lease = policy_engine.revoke_control_lease()
+                            record_event("control_lease_expired", lease)
+                            logger.info("Lease de controle expirada: Modo Controle desativado automaticamente.")
+                            await websocket.send_json({
+                                "type": "control_mode",
+                                "active": False,
+                                "lease": lease,
+                                "data": {"sucesso": True, "mensagem": "Autoridade de controle expirada, senhor. Modo Controle desativado."}
+                            })
+
+                await asyncio.gather(ws_client_worker(), injection_worker(), from_gemini_worker(), control_lease_worker())
                 record_event("client_disconnected")
                 return
 

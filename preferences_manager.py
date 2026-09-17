@@ -10,7 +10,12 @@ import logging
 
 logger = logging.getLogger("JARVIS_PREFERENCES")
 
-PREFERENCES_FILE = os.path.expanduser("/home/edu/Documentos/assistente/user_preferences.json")
+# Caminho do arquivo de preferências: variável de ambiente ou raiz do projeto.
+# Evita caminho absoluto fixo, que quebrava em outras máquinas e no CI.
+PREFERENCES_FILE = os.path.expanduser(
+    os.environ.get("JARVIS_PREFERENCES_FILE", "").strip()
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_preferences.json")
+)
 _lock = threading.Lock()
 
 DEFAULT_SCHEMA = {
