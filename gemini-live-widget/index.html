@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Live // Mini Panel & Floating Widget</title>
+    <!-- Google Fonts: Google Sans & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="desktop-preview">
+    <!-- Fundo de demonstração (oculto no modo App Desktop) -->
+    <div class="desktop-wallpaper">
+        <div class="wallpaper-header">
+            <div class="window-tab-mock">
+                <svg class="gemini-tab-icon" viewBox="0 0 24 24" width="16" height="16">
+                    <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" fill="url(#geminiGrad)" />
+                    <defs>
+                        <linearGradient id="geminiGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#4285F4" />
+                            <stop offset="50%" stop-color="#9B72CF" />
+                            <stop offset="100%" stop-color="#D96570" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <span>Google Chrome // Assistente Ativo</span>
+            </div>
+            <div class="preview-mode-switch">
+                <button id="btnToggleBackdrop" class="ghost-btn" title="Alternar fundo escuro / transparente">Alternar Cenário</button>
+                <button id="btnSwitchView" class="ghost-btn" title="Alternar entre Mini Widget e Janela Expandida">Modo Expandido</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- WIDGET FLUTUANTE GEMINI LIVE -->
+    <div id="geminiFloatingWidget" class="gemini-live-widget" draggable="false">
+        <div class="widget-inner" id="widgetDragHandle">
+            <!-- Lado Esquerdo: Marcação, Alça de Arraste e Chip -->
+            <div class="widget-left">
+                <div class="brand-row">
+                    <!-- Grip visual para arrastar a janela -->
+                    <div class="drag-grip" title="Clique e arraste para mover a janela na sua tela">
+                        <svg viewBox="0 0 10 16" width="8" height="14" fill="currentColor">
+                            <circle cx="2" cy="2" r="1.5"></circle>
+                            <circle cx="8" cy="2" r="1.5"></circle>
+                            <circle cx="2" cy="8" r="1.5"></circle>
+                            <circle cx="8" cy="8" r="1.5"></circle>
+                            <circle cx="2" cy="14" r="1.5"></circle>
+                            <circle cx="8" cy="14" r="1.5"></circle>
+                        </svg>
+                    </div>
+
+                    <!-- Ícone Estrela de 4 pontas Gemini com Animação Gradiente -->
+                    <div class="gemini-star-wrapper">
+                        <svg class="gemini-star-icon" viewBox="0 0 28 28">
+                            <defs>
+                                <linearGradient id="starGradLive" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#4e8cff" />
+                                    <stop offset="40%" stop-color="#9065ff" />
+                                    <stop offset="80%" stop-color="#ff5f7e" />
+                                    <stop offset="100%" stop-color="#ffb03a" />
+                                </linearGradient>
+                                <filter id="glowEffect" x="-20%" y="-20%" width="140%" height="140%">
+                                    <feGaussianBlur stdDeviation="3" result="blur" />
+                                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                                </filter>
+                            </defs>
+                            <path class="star-path" d="M14 1 C14 8, 20 14, 27 14 C20 14, 14 20, 14 27 C14 20, 8 14, 1 14 C8 14, 14 8, 14 1 Z" fill="url(#starGradLive)" filter="url(#glowEffect)" />
+                        </svg>
+                    </div>
+
+                    <div class="brand-meta">
+                        <span class="brand-title">Gemini Live</span>
+                        <span id="liveStatusText" class="status-micro">Pronto para conversar</span>
+                    </div>
+                </div>
+
+                <!-- Chip Badge inferior (ex: Compartilhamento / Microfone ativo) -->
+                <div id="statusBadgeChip" class="status-chip active">
+                    <span class="chip-icon-box">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                    </span>
+                    <span id="chipLabel" class="chip-label">Microfone Ativo</span>
+                </div>
+            </div>
+
+            <!-- Centro: Animação Fluida de Ondas Sonoras -->
+            <div class="widget-center">
+                <div class="wave-glow-container">
+                    <canvas id="liveWaveCanvas" width="220" height="56" class="wave-canvas"></canvas>
+                    <div id="auraPulse" class="aura-pulse"></div>
+                </div>
+            </div>
+
+            <!-- Lado Direito: Perfil e Ações Rápidas -->
+            <div class="widget-right">
+                <!-- Linha superior de controles -->
+                <div class="control-row-top">
+                    <!-- Avatar do Usuário com badge OmniRoute -->
+                    <div class="avatar-circle" id="userAvatarBtn" title="Configurações e Contas OmniRoute">
+                        <div class="avatar-img">E</div>
+                        <span class="online-indicator" title="7 contas OmniRoute ativas"></span>
+                    </div>
+
+                    <!-- Botão Legenda / Transcrição -->
+                    <button id="btnToggleCaptions" class="icon-action-btn" title="Mostrar Transcrição / Legenda" aria-label="Legendas">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="4" width="20" height="16" rx="3"></rect>
+                            <line x1="6" y1="15" x2="18" y2="15"></line>
+                            <line x1="6" y1="10" x2="10" y2="10"></line>
+                            <line x1="13" y1="10" x2="18" y2="10"></line>
+                        </svg>
+                    </button>
+
+                    <!-- Botão Configurações (Aba de Vozes e Microfone) -->
+                    <button id="btnSettingsModal" class="icon-action-btn" title="Aba de Configurações (Vozes & Microfone)" aria-label="Configurações">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </button>
+
+                    <!-- Fechar / Ocultar -->
+                    <button id="btnCloseWidget" class="icon-action-btn close-btn" title="Ocultar Widget" aria-label="Fechar">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Pílula inferior de controle: Pausar e Teclado -->
+                <div class="bottom-control-pill">
+                    <!-- Botão Pausar / Continuar -->
+                    <button id="btnPauseLive" class="pill-btn" title="Pausar escuta" aria-label="Pausar">
+                        <svg id="iconPause" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                            <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+                            <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+                        </svg>
+                        <svg id="iconPlay" class="hidden" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                    </button>
+
+                    <div class="pill-divider"></div>
+
+                    <!-- Botão Teclado -->
+                    <button id="btnToggleKeyboard" class="pill-btn" title="Digitar pergunta (Teclado)" aria-label="Digitar">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                            <line x1="6" y1="8" x2="6.01" y2="8"></line>
+                            <line x1="10" y1="8" x2="10.01" y2="8"></line>
+                            <line x1="14" y1="8" x2="14.01" y2="8"></line>
+                            <line x1="18" y1="8" x2="18.01" y2="8"></line>
+                            <line x1="6" y1="12" x2="6.01" y2="12"></line>
+                            <line x1="10" y1="12" x2="10.01" y2="12"></line>
+                            <line x1="14" y1="12" x2="14.01" y2="12"></line>
+                            <line x1="18" y1="12" x2="18.01" y2="12"></line>
+                            <line x1="7" y1="16" x2="17" y2="16"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Painel / Gaveta Expandida: Histórico de Conversa & Entrada de Texto (Modo de Escrita) -->
+        <div id="keyboardDrawer" class="keyboard-drawer hidden">
+            <!-- Cabeçalho do Histórico -->
+            <div class="drawer-chat-header">
+                <div class="chat-header-title">
+                    <span class="chat-header-dot"></span>
+                    <span>Histórico da Conversa</span>
+                    <span class="chat-header-badge">Contexto Ativo</span>
+                </div>
+                <div class="chat-header-actions">
+                    <button type="button" id="btnClearHistory" class="drawer-mini-btn" title="Limpar mensagens da visualização">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                    <button type="button" id="btnCloseDrawer" class="drawer-mini-btn close" title="Recolher modo de escrita">✕</button>
+                </div>
+            </div>
+
+            <!-- Fluxo do Histórico de Conversa (Voz, Texto e Respostas do JARVIS) -->
+            <div id="widgetChatHistory" class="widget-chat-history">
+                <div class="chat-msg ai">
+                    <div class="msg-avatar">✨</div>
+                    <div class="msg-content">
+                        <div class="msg-author">JARVIS</div>
+                        <div class="msg-text">Sistemas online, senhor. O histórico mantém o contexto completo de tudo o que você falar ou digitar.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Campo de Digitação e Envio -->
+            <form id="drawerTextForm" class="drawer-input-container">
+                <input type="text" id="drawerInput" class="drawer-text-input" placeholder="Digite sua mensagem ou comando para o JARVIS..." autocomplete="off">
+                <div class="drawer-actions">
+                    <button type="submit" class="drawer-send-btn" aria-label="Enviar comando" title="Enviar (Enter)">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Gaveta de Legenda / Transcrição em Tempo Real -->
+        <div id="captionsDrawer" class="captions-drawer hidden">
+            <div class="captions-header">
+                <span class="captions-title">Transcrição ao Vivo</span>
+                <span id="transcriptionState" class="transcription-indicator">Ouvindo você...</span>
+            </div>
+            <div id="captionsLog" class="captions-body">
+                <div class="caption-item gemini">
+                    <strong>Gemini:</strong> Olá! Sistemas online. Pode falar ou digitar comigo.
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA / MODAL DE CONFIGURAÇÃO COMPLETA (VOZES & MICROFONE) -->
+        <div id="settingsPanel" class="settings-panel hidden">
+            <div class="settings-header">
+                <div class="settings-nav-tabs">
+                    <button class="tab-btn active" data-tab="tab-voices">🎙️ Vozes</button>
+                    <button class="tab-btn" data-tab="tab-mic">🎤 Microfone</button>
+                    <button class="tab-btn" data-tab="tab-omni">⚡ OmniRoute</button>
+                </div>
+                <button id="btnCloseSettingsPanel" class="settings-close-btn" aria-label="Fechar Configurações">✕</button>
+            </div>
+
+            <!-- Aba 1: Modelos de Voz -->
+            <div id="tab-voices" class="tab-content active">
+                <div class="tab-desc">Escolha a voz que o Gemini Live utilizará para responder:</div>
+                <div class="voice-cards-grid">
+                    <div class="voice-card" data-voice="Puck">
+                        <div class="voice-icon-box">⚡</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Puck <span class="voice-badge-tag">Padrão</span></div>
+                            <div class="voice-style">Ágil, dinâmica, expressiva e moderna</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card" data-voice="Charon">
+                        <div class="voice-icon-box">🎩</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Charon <span class="voice-badge-tag">Jarvis</span></div>
+                            <div class="voice-style">Grave, sofisticada, serena e britânica</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card" data-voice="Fenrir">
+                        <div class="voice-icon-box">🐺</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Fenrir</div>
+                            <div class="voice-style">Imponente, profunda e marcante</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card" data-voice="Aoede">
+                        <div class="voice-icon-box">🎵</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Aoede</div>
+                            <div class="voice-style">Feminina refinada, clara e melódica</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card" data-voice="Kore">
+                        <div class="voice-icon-box">🌸</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Kore</div>
+                            <div class="voice-style">Feminina suave, tranquila e acolhedora</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aba 2: Configuração de Microfone -->
+            <div id="tab-mic" class="tab-content">
+                <div class="mic-setting-row">
+                    <label for="selectMicDevice" class="setting-label">Dispositivo de Microfone:</label>
+                    <select id="selectMicDevice" class="setting-select">
+                        <option value="default">Microfone Padrão do Sistema</option>
+                    </select>
+                </div>
+
+                <!-- Medidor de Sensibilidade em Tempo Real (VU Meter) -->
+                <div class="vu-meter-box">
+                    <div class="vu-label-row">
+                        <span>Nível de Entrada do Microfone:</span>
+                        <span id="vuLevelVal">0%</span>
+                    </div>
+                    <div class="vu-bar-track">
+                        <div id="vuBarFill" class="vu-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <div class="vu-hint">Fale ao microfone para testar a sensibilidade da captação.</div>
+                </div>
+
+                <!-- Modo de Ativação -->
+                <div class="mic-setting-row">
+                    <label class="setting-label">Modo de Conversação:</label>
+                    <div class="radio-pill-group">
+                        <label class="radio-pill">
+                            <input type="radio" name="micMode" value="always" checked>
+                            <span>Contínuo (Always-On)</span>
+                        </label>
+                        <label class="radio-pill">
+                            <input type="radio" name="micMode" value="ptt">
+                            <span>Push-to-Talk (Espaço)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Toggles de Tratamento de Áudio -->
+                <div class="audio-toggles-grid">
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggleEcho" checked>
+                        <span class="toggle-box"></span>
+                        <span class="toggle-text">Cancelamento de Eco</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggleNoise" checked>
+                        <span class="toggle-box"></span>
+                        <span class="toggle-text">Redução de Ruído</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggleGain" checked>
+                        <span class="toggle-box"></span>
+                        <span class="toggle-text">Ganho Automático</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Aba 3: OmniRoute & Inteligência -->
+            <div id="tab-omni" class="tab-content">
+                <div class="omni-status-card">
+                    <div class="omni-header-row">
+                        <span class="omni-badge-live">ONLINE</span>
+                        <span class="omni-combo-title">Combo: <strong>jarvis</strong></span>
+                    </div>
+                    <div class="omni-stat">7 Contas Gemini sincronizadas com failover automático</div>
+                    <div class="omni-stat">Modelo: <code>gemini-2.5-flash-native-audio-latest</code></div>
+                    <div class="omni-stat">Estratégia: <code>round-robin</code></div>
+                </div>
+
+                <div class="setting-btn-row">
+                    <button id="btnSaveConfig" class="save-config-btn">Salvar & Aplicar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JANELA EXPANDIDA GEMINI -->
+    <div id="geminiExpandedCard" class="gemini-expanded-card hidden">
+        <div class="card-header" id="expandedDragHandle">
+            <div class="card-header-left">
+                <div class="drag-grip" title="Arraste para mover">
+                    <svg viewBox="0 0 10 16" width="8" height="14" fill="currentColor">
+                        <circle cx="2" cy="2" r="1.5"></circle>
+                        <circle cx="8" cy="2" r="1.5"></circle>
+                        <circle cx="2" cy="8" r="1.5"></circle>
+                        <circle cx="8" cy="8" r="1.5"></circle>
+                        <circle cx="2" cy="14" r="1.5"></circle>
+                        <circle cx="8" cy="14" r="1.5"></circle>
+                    </svg>
+                </div>
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                    <path d="M12 2 C12 7, 17 12, 22 12 C17 12, 12 17, 12 22 C12 17, 7 12, 2 12 C7 12, 12 7, 12 2 Z" fill="url(#geminiGrad)" />
+                </svg>
+                <span class="card-title">Gemini Assistant</span>
+            </div>
+            <div class="card-header-actions">
+                <button id="btnMinimizeToWidget" class="card-action-btn" title="Minimizar para Widget">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="14" width="16" height="6" rx="2"></rect>
+                    </svg>
+                </button>
+                <button id="btnCloseExpanded" class="card-action-btn" title="Fechar">✕</button>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <!-- Visual 3D Hero da Estrela Gemini com Círculos Orbitais -->
+            <div class="gemini-hero-container">
+                <div class="orbit-circle ring-1"></div>
+                <div class="orbit-circle ring-2"></div>
+                <div class="gemini-star-3d">
+                    <svg viewBox="0 0 100 100" width="90" height="90" class="star-svg-3d">
+                        <defs>
+                            <linearGradient id="gemini3dGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#ff4b4b" />
+                                <stop offset="30%" stop-color="#ffa100" />
+                                <stop offset="60%" stop-color="#00d4ff" />
+                                <stop offset="100%" stop-color="#3b72ff" />
+                            </linearGradient>
+                        </defs>
+                        <path d="M50 5 C50 30, 70 50, 95 50 C70 50, 50 70, 50 95 C50 70, 30 50, 5 50 C30 50, 50 30, 50 5 Z" fill="url(#gemini3dGrad)" filter="drop-shadow(0 0 12px rgba(66, 133, 244, 0.6))" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Diálogo Expandido -->
+            <div id="expandedChatScroll" class="expanded-chat-scroll">
+                <div class="chat-bubble ai">
+                    Gemini Live está conectado com o pool de contas do OmniRoute. Pode falar ou digitar perguntas e comandos de sistema.
+                </div>
+            </div>
+
+            <!-- Barra de Input Flutuante "Ask Gemini" -->
+            <div class="ask-gemini-bar">
+                <input type="text" id="expandedInput" placeholder="Ask Gemini..." autocomplete="off">
+                <div class="ask-bar-controls">
+                    <button class="tool-btn" title="Anexar">+</button>
+                    <button class="tool-btn" id="btnSettingsExpanded" title="Ajustes">⚙</button>
+                    <span class="model-tag">Fast ▾</span>
+                    <button id="btnExpandedMic" class="mic-bubble-btn active" title="Microfone">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="widget.js"></script>
+</body>
+</html>

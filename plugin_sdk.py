@@ -1,0 +1,60 @@
+"""
+SDK de Plug-ins do J.A.R.V.I.S.
+Inspirado na arquitetura modular do Project N.E.K.O.
+Permite a criação e expansão de ferramentas em cenários de jogos,
+casa inteligente, streaming e mídias sociais.
+"""
+
+from dataclasses import dataclass, field
+from typing import Callable, Any, Optional
+
+@dataclass
+class ToolSpec:
+    """Especificação de ferramenta registrada por um plug-in."""
+    name: str
+    description: str
+    parameters: dict
+    handler: Callable[..., Any]
+
+@dataclass
+class PluginMeta:
+    """Metadados descritivos de um plug-in do JARVIS."""
+    id: str
+    name: str
+    version: str = "1.0.0"
+    author: str = "Stark Industries"
+    category: str = "general"  # gaming, smart_home, streaming, social, general
+    description: str = ""
+    icon: str = "🔌"
+    enabled: bool = True
+    installed: bool = True
+
+class JarvisPlugin:
+    """Classe base abstrata para todos os plug-ins do ecossistema JARVIS."""
+    
+    meta: PluginMeta
+    
+    def __init__(self, meta: PluginMeta):
+        self.meta = meta
+        self._tools: list[ToolSpec] = []
+
+    def register_tool(self, name: str, description: str, parameters: dict, handler: Callable[..., Any]):
+        """Registra uma função como ferramenta exposta à IA."""
+        self._tools.append(ToolSpec(
+            name=name,
+            description=description,
+            parameters=parameters,
+            handler=handler
+        ))
+
+    def on_load(self):
+        """Chamado quando o plug-in é carregado e ativado no sistema."""
+        pass
+
+    def on_unload(self):
+        """Chamado quando o plug-in é desativado."""
+        pass
+
+    def get_tools(self) -> list[ToolSpec]:
+        """Retorna as ferramentas registradas pelo plug-in."""
+        return self._tools

@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS & Gemini Live - Central de Monitoramento e Depuração</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0a0d14;
+            --bg-surface: rgba(18, 24, 38, 0.85);
+            --bg-card: rgba(23, 31, 50, 0.7);
+            --border: rgba(66, 153, 225, 0.2);
+            --border-highlight: rgba(99, 179, 237, 0.4);
+            --primary: #38bdf8;
+            --primary-glow: rgba(56, 189, 248, 0.35);
+            --accent: #818cf8;
+            --success: #34d399;
+            --warning: #fbbf24;
+            --danger: #f87171;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --font-main: 'Outfit', -apple-system, sans-serif;
+            --font-code: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, rgba(129, 140, 248, 0.08) 0%, transparent 40%),
+                linear-gradient(to bottom, #070a10, #0d121d);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            min-height: 100vh;
+            padding: 24px;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* HEADER */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 24px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .pulse-core {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 16px var(--success);
+            animation: pulse-glow 2s infinite ease-in-out;
+        }
+
+        .pulse-core.offline {
+            background: var(--danger);
+            box-shadow: 0 0 16px var(--danger);
+            animation: none;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { transform: scale(1); opacity: 1; filter: drop-shadow(0 0 4px var(--success)); }
+            50% { transform: scale(1.25); opacity: 0.8; filter: drop-shadow(0 0 12px var(--success)); }
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #ffffff 30%, var(--primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: var(--font-code);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        button {
+            font-family: var(--font-main);
+            cursor: pointer;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background: rgba(56, 189, 248, 0.15);
+            border-color: var(--primary);
+            box-shadow: 0 0 12px var(--primary-glow);
+        }
+
+        button.btn-primary {
+            background: var(--primary);
+            color: #030712;
+            border-color: var(--primary);
+        }
+
+        button.btn-primary:hover {
+            background: #7dd3fc;
+            box-shadow: 0 0 16px var(--primary-glow);
+        }
+
+        /* GRID METRICS */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px 20px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .card:hover {
+            border-color: var(--border-highlight);
+            transform: translateY(-2px);
+        }
+
+        .card-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .card-value {
+            font-size: 24px;
+            font-weight: 700;
+            font-family: var(--font-code);
+            color: #ffffff;
+        }
+
+        .card-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: var(--font-code);
+        }
+
+        /* MAIN CONTENT SPLIT */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            backdrop-filter: blur(12px);
+            min-height: 420px;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 12px;
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* CONVERSATION TRANSCRIPT */
+        .transcript-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+            max-height: 380px;
+            padding-right: 6px;
+        }
+
+        .turn-card {
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            animation: fadeIn 0.25s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .turn-user {
+            background: rgba(56, 189, 248, 0.1);
+            border-left: 3px solid var(--primary);
+            align-self: flex-start;
+            width: 92%;
+        }
+
+        .turn-model {
+            background: rgba(129, 140, 248, 0.1);
+            border-left: 3px solid var(--accent);
+            align-self: flex-end;
+            width: 92%;
+        }
+
+        .turn-tool {
+            background: rgba(251, 191, 36, 0.08);
+            border-left: 3px solid var(--warning);
+            font-family: var(--font-code);
+            font-size: 12px;
+        }
+
+        .turn-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        /* INJECT PROMPT FORM */
+        .prompt-form {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        .prompt-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-main);
+            font-family: var(--font-main);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .prompt-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        /* LOG VIEWER */
+        .log-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+        }
+
+        .filter-btn.active {
+            background: var(--primary);
+            color: #030712;
+            border-color: var(--primary);
+        }
+
+        .log-terminal {
+            background: #05070c;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 14px;
+            font-family: var(--font-code);
+            font-size: 11.5px;
+            color: #cbd5e1;
+            height: 380px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            line-height: 1.45;
+        }
+
+        .log-entry {
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+
+        .log-time { color: #64748b; margin-right: 6px; }
+        .log-tag-user { color: #38bdf8; font-weight: 600; }
+        .log-tag-model { color: #a78bfa; font-weight: 600; }
+        .log-tag-tool { color: #fbbf24; font-weight: 600; }
+        .log-tag-error { color: #f87171; font-weight: 700; }
+        .log-tag-ok { color: #34d399; font-weight: 600; }
+        .log-tag-audio { color: #94a3b8; }
+
+        /* KEY POOL INSPECTOR */
+        .pool-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+        }
+
+        .pool-badge {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 11px;
+            font-family: var(--font-code);
+        }
+
+        .pool-badge.active {
+            border-color: var(--success);
+            background: rgba(52, 211, 153, 0.08);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot-green { background: var(--success); }
+        .dot-yellow { background: var(--warning); }
+        .dot-red { background: var(--danger); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- HEADER -->
+    <header>
+        <div class="header-title">
+            <div class="pulse-core" id="pulseCore"></div>
+            <div>
+                <h1>J.A.R.V.I.S. // Live Telemetry & Debug Station</h1>
+                <div class="subtitle" id="connectionInfo">Conectando à telemetria local...</div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button onclick="runQuickTest()" id="btnTest">⚡ Teste Rápido</button>
+            <button onclick="testKeyPool()" id="btnKeys">🔑 Checar 7 Contas</button>
+            <button onclick="downloadLogs()">💾 Baixar Logs</button>
+            <button onclick="clearSystemLogs()">🗑️ Limpar</button>
+        </div>
+    </header>
+
+    <!-- METRICS GRID -->
+    <div class="metrics-grid">
+        <div class="card">
+            <div class="card-label">Status Gemini Live <span class="status-dot dot-green" id="dotStatus"></span></div>
+            <div class="card-value" id="valStatus" style="font-size: 18px;">CONECTADO</div>
+            <div class="card-sub" id="valModel">gemini-3.8-live</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Microfone (Usuário) <span>🎤 16kHz</span></div>
+            <div class="card-value" id="valUserPackets">0 pkts</div>
+            <div class="card-sub" id="valUserBytes">0 KB enviados</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Alto-Falante (Gemini) <span>🔊 24kHz</span></div>
+            <div class="card-value" id="valModelPackets">0 pkts</div>
+            <div class="card-sub" id="valModelBytes">0 KB recebidos</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Pool de Contas <span>🔄 Failover</span></div>
+            <div class="card-value" id="valPoolCount">7 Contas</div>
+            <div class="card-sub" id="valFailovers">0 rotações / 0 falhas</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Ferramentas Executadas <span>⚙️ SO</span></div>
+            <div class="card-value" id="valToolCalls">0</div>
+            <div class="card-sub" id="valLastTool">Nenhuma ainda</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Tempo Ativo (Uptime) <span>⏱️</span></div>
+            <div class="card-value" id="valUptime">00:00:00</div>
+            <div class="card-sub" id="valErrors">Erros: 0</div>
+        </div>
+    </div>
+
+    <!-- POOL INSPECTOR -->
+    <div class="panel" style="min-height: auto; padding: 14px 20px;">
+        <div class="panel-header" style="border: none; padding: 0;">
+            <div class="panel-title">🔑 Pool de Contas Gemini (OmniRoute Failover Automático)</div>
+            <span style="font-size: 12px; color: var(--text-muted);" id="poolSummaryLabel">7 contas ativas no combo jarvis</span>
+        </div>
+        <div class="pool-cards" id="poolList">
+            <!-- Badges injetados via JS -->
+        </div>
+    </div>
+
+    <!-- MAIN TWO PANELS -->
+    <div class="main-grid">
+        <!-- PAINEL 1: CONVERSAÇÃO E INJEÇÃO DE TESTE -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">💬 Transcrição ao Vivo & Diálogo</div>
+                <span style="font-size: 12px; color: var(--text-muted);" id="turnCount">0 turnos</span>
+            </div>
+
+            <div class="transcript-container" id="transcriptBox">
+                <div class="turn-card turn-model">
+                    <div class="turn-header">
+                        <span>🤖 JARVIS / Gemini Live</span>
+                        <span>AGORA</span>
+                    </div>
+                    <div>Sistema de monitoramento e depuração ativo. Fale no microfone ou envie um texto abaixo para testar a resposta do assistente.</div>
+                </div>
+            </div>
+
+            <form class="prompt-form" onsubmit="sendTestPrompt(event)">
+                <input type="text" id="promptInput" class="prompt-input" placeholder="Digite uma mensagem de teste (ex: 'Que horas são?', 'Qual o uso da CPU?')...">
+                <button type="submit" class="btn-primary">Enviar</button>
+            </form>
+        </div>
+
+        <!-- PAINEL 2: CONSOLE DE EVENTOS E LOGS DETALHADOS -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📋 Stream de Eventos e Depuração</div>
+                <div class="log-controls">
+                    <button class="filter-btn active" onclick="setLogFilter('all', this)">TODOS</button>
+                    <button class="filter-btn" onclick="setLogFilter('chat', this)">FALA</button>
+                    <button class="filter-btn" onclick="setLogFilter('tools', this)">TOOLS</button>
+                    <button class="filter-btn" onclick="setLogFilter('audio', this)">ÁUDIO</button>
+                    <button class="filter-btn" onclick="setLogFilter('error', this)">ERROS</button>
+                </div>
+            </div>
+
+            <div class="log-terminal" id="logTerminal">
+                <div class="log-entry"><span class="log-time">[00:00:00]</span> <span class="log-tag-ok">INFO</span> Central de telemetria inicializada. Monitorando eventos em tempo real...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let activeFilter = 'all';
+    let autoScroll = true;
+
+    // Elementos DOM
+    const pulseCore = document.getElementById('pulseCore');
+    const connectionInfo = document.getElementById('connectionInfo');
+    const dotStatus = document.getElementById('dotStatus');
+    const valStatus = document.getElementById('valStatus');
+    const valModel = document.getElementById('valModel');
+    const valUserPackets = document.getElementById('valUserPackets');
+    const valUserBytes = document.getElementById('valUserBytes');
+    const valModelPackets = document.getElementById('valModelPackets');
+    const valModelBytes = document.getElementById('valModelBytes');
+    const valPoolCount = document.getElementById('valPoolCount');
+    const valFailovers = document.getElementById('valFailovers');
+    const valToolCalls = document.getElementById('valToolCalls');
+    const valLastTool = document.getElementById('valLastTool');
+    const valUptime = document.getElementById('valUptime');
+    const valErrors = document.getElementById('valErrors');
+    const transcriptBox = document.getElementById('transcriptBox');
+    const logTerminal = document.getElementById('logTerminal');
+    const poolList = document.getElementById('poolList');
+    const promptInput = document.getElementById('promptInput');
+
+    function setLogFilter(filter, btn) {
+        activeFilter = filter;
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderLogs();
+    }
+
+    let cachedEvents = [];
+
+    async function fetchTelemetry() {
+        try {
+            const res = await fetch('/api/debug/telemetry');
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+
+            pulseCore.classList.remove('offline');
+            connectionInfo.textContent = `Online • Servidor Uptime: ${data.uptime} • Modelo: ${data.active_model}`;
+
+            valStatus.textContent = data.active_connection ? "CONECTADO" : "AGUARDANDO CLIENTE";
+            valStatus.style.color = data.active_connection ? "var(--success)" : "var(--warning)";
+            valModel.textContent = `${data.active_model} (${data.active_voice})`;
+
+            valUserPackets.textContent = `${data.user_audio_packets.toLocaleString()} pkts`;
+            valUserBytes.textContent = `${(data.user_audio_bytes / 1024).toFixed(1)} KB enviados`;
+
+            valModelPackets.textContent = `${data.model_audio_packets.toLocaleString()} pkts`;
+            valModelBytes.textContent = `${(data.model_audio_bytes / 1024).toFixed(1)} KB recebidos`;
+
+            valFailovers.textContent = `${data.failover_count} failovers / ${data.error_count} erros`;
+            valToolCalls.textContent = data.tool_calls_count;
+            if (data.tool_calls_history && data.tool_calls_history.length > 0) {
+                const last = data.tool_calls_history[data.tool_calls_history.length - 1];
+                valLastTool.textContent = `${last.name}`;
+            }
+
+            valUptime.textContent = data.uptime;
+            valErrors.textContent = `Erros: ${data.error_count}`;
+            if (data.error_count > 0) valErrors.style.color = "var(--danger)";
+        } catch (e) {
+            pulseCore.classList.add('offline');
+            connectionInfo.textContent = "Desconectado do servidor. Tentando reconectar...";
+            valStatus.textContent = "OFFLINE";
+            valStatus.style.color = "var(--danger)";
+        }
+    }
+
+    async function fetchEvents() {
+        try {
+            const res = await fetch('/api/debug/events?limit=80');
+            if (!res.ok) return;
+            const events = await res.json();
+            cachedEvents = events;
+            renderLogs();
+            renderTranscripts(events);
+        } catch (e) {
+            console.warn("Erro ao buscar eventos:", e);
+        }
+    }
+
+    function renderLogs() {
+        logTerminal.innerHTML = "";
+        const filtered = cachedEvents.filter(ev => {
+            if (activeFilter === 'all') return true;
+            if (activeFilter === 'chat') return ev.type === 'user_text' || ev.type === 'model_text';
+            if (activeFilter === 'tools') return ev.type === 'tool_call' || ev.type === 'tool_result';
+            if (activeFilter === 'audio') return ev.type.includes('audio');
+            if (activeFilter === 'error') return ev.type === 'error' || ev.type === 'account_failover';
+            return true;
+        });
+
+        filtered.forEach(ev => {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const time = ev.timestamp ? ev.timestamp.split(' ')[1] : '';
+
+            let tag = `<span class="log-tag-ok">[${ev.type.toUpperCase()}]</span>`;
+            let content = JSON.stringify(ev.data);
+
+            if (ev.type === 'user_text') {
+                tag = `<span class="log-tag-user">👤 [USUÁRIO]</span>`;
+                content = `"${ev.data.text}"`;
+            } else if (ev.type === 'model_text') {
+                tag = `<span class="log-tag-model">🤖 [GEMINI]</span>`;
+                content = `"${ev.data.text}"`;
+            } else if (ev.type === 'tool_call') {
+                tag = `<span class="log-tag-tool">⚙️ [TOOL]</span>`;
+                content = `${ev.data.name}(${JSON.stringify(ev.data.args)})`;
+            } else if (ev.type === 'tool_result') {
+                tag = `<span class="log-tag-tool">✅ [RESULT]</span>`;
+                content = `${ev.data.name} -> ${JSON.stringify(ev.data.result)}`;
+            } else if (ev.type === 'error') {
+                tag = `<span class="log-tag-error">❌ [ERRO]</span>`;
+                content = ev.data.message;
+            } else if (ev.type === 'account_failover') {
+                tag = `<span class="log-tag-error">🔄 [FAILOVER]</span>`;
+                content = `Conta ${ev.data.from_index} falhou -> Conta ${ev.data.to_index}`;
+            }
+
+            div.innerHTML = `<span class="log-time">[${time}]</span> ${tag} ${content}`;
+            logTerminal.appendChild(div);
+        });
+
+        if (autoScroll) {
+            logTerminal.scrollTop = logTerminal.scrollHeight;
+        }
+    }
+
+    function renderTranscripts(events) {
+        const turns = events.filter(e => e.type === 'user_text' || e.type === 'model_text' || e.type === 'tool_call');
+        if (turns.length === 0) return;
+
+        transcriptBox.innerHTML = "";
+        turns.slice(-15).forEach(t => {
+            const card = document.createElement('div');
+            card.className = `turn-card ${t.type === 'user_text' ? 'turn-user' : (t.type === 'model_text' ? 'turn-model' : 'turn-tool')}`;
+            
+            const time = t.timestamp ? t.timestamp.split(' ')[1] : '';
+            const role = t.type === 'user_text' ? '👤 Usuário' : (t.type === 'model_text' ? '🤖 JARVIS / Gemini' : '⚙️ Ferramenta Automática');
+            const text = t.type === 'tool_call' ? `Executando ferramenta: ${t.data.name}` : (t.data.text || '');
+
+            card.innerHTML = `
+                <div class="turn-header">
+                    <span>${role}</span>
+                    <span>${time}</span>
+                </div>
+                <div>${escapeHtml(text)}</div>
+            `;
+            transcriptBox.appendChild(card);
+        });
+        transcriptBox.scrollTop = transcriptBox.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    async function sendTestPrompt(e) {
+        e.preventDefault();
+        const text = promptInput.value.trim();
+        if (!text) return;
+
+        promptInput.value = "";
+        try {
+            const res = await fetch('/api/debug/inject-prompt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: text })
+            });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                setTimeout(fetchEvents, 300);
+            } else {
+                alert("Erro ao injetar comando: " + (data.message || "desconhecido"));
+            }
+        } catch (err) {
+            alert("Falha na requisição: " + err);
+        }
+    }
+
+    async function runQuickTest() {
+        const btn = document.getElementById('btnTest');
+        btn.disabled = true;
+        btn.textContent = "⏳ Testando...";
+        try {
+            const res = await fetch('/api/debug/test-accounts');
+            const data = await res.json();
+            alert(`Diagnóstico Concluído!\n\nContas no Pool: ${data.total_keys}\nChaves Válidas: ${data.valid_keys}\nLatência Média: ${data.avg_latency_ms}ms\nDetalhes: ${JSON.stringify(data.summary, null, 2)}`);
+        } catch (e) {
+            alert("Erro ao executar teste rápido: " + e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "⚡ Teste Rápido";
+            fetchTelemetry();
+        }
+    }
+
+    async function testKeyPool() {
+        const btn = document.getElementById('btnKeys');
+        btn.disabled = true;
+        btn.textContent = "⏳ Verificando 7 contas...";
+        try {
+            const res = await fetch('/api/debug/test-accounts');
+            const data = await res.json();
+            renderPoolBadges(data.results);
+        } catch (e) {
+            alert("Erro ao verificar contas: " + e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "🔑 Checar 7 Contas";
+        }
+    }
+
+    function renderPoolBadges(results) {
+        if (!results) return;
+        poolList.innerHTML = "";
+        results.forEach((acc, idx) => {
+            const badge = document.createElement('div');
+            badge.className = `pool-badge ${acc.valid ? 'active' : ''}`;
+            badge.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:700;">Conta #${idx + 1}</span>
+                    <span class="status-dot ${acc.valid ? 'dot-green' : 'dot-red'}"></span>
+                </div>
+                <div style="color:var(--text-muted);">${acc.masked_key}</div>
+                <div style="color:${acc.valid ? 'var(--success)' : 'var(--danger)'};">
+                    ${acc.valid ? `OK (${acc.latency_ms}ms)` : `Erro: ${acc.error}`}
+                </div>
+            `;
+            poolList.appendChild(badge);
+        });
+    }
+
+    function downloadLogs() {
+        window.open('/api/debug/download-log', '_blank');
+    }
+
+    async function clearSystemLogs() {
+        if (confirm("Deseja limpar todos os logs da memória e dos arquivos?")) {
+            await fetch('/api/debug/clear-logs', { method: 'POST' });
+            cachedEvents = [];
+            renderLogs();
+            fetchTelemetry();
+        }
+    }
+
+    // Inicialização e loops de atualização
+    fetchTelemetry();
+    fetchEvents();
+    testKeyPool();
+    setInterval(fetchTelemetry, 1500);
+    setInterval(fetchEvents, 1000);
+</script>
+
+</body>
+</html>

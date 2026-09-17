@@ -1,0 +1,30 @@
+# Ambientes e Segredos (NUNCA comitar)
+.env
+.env.*
+!.env.example
+
+# Ambientes Virtuais Python
+.venv/
+venv/
+ENV/
+env/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.bak
+
+# Logs e Telemetria
+logs/
+*.log
+*.jsonl
+
+# Sistema Operacional e IDEs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.agents/
+scratch/
+tmp/

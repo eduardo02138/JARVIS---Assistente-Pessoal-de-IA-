@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J.A.R.V.I.S. // Stark Industries Holographic HUD</title>
+    <!-- Google Fonts: Orbitron & Rajdhani -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-dark">
+    <!-- Grid holográfico de fundo e partículas -->
+    <div class="hologram-background">
+        <div class="grid-overlay"></div>
+        <div class="scanline"></div>
+        <div class="vignette"></div>
+    </div>
+
+    <!-- Container Principal do HUD -->
+    <div class="hud-container">
+        <!-- Barra Superior (Header) -->
+        <header class="hud-header">
+            <div class="header-left">
+                <div class="brand-badge">
+                    <span class="stark-logo">STARK</span>
+                    <span class="division">INDUSTRIES // OS v8.4</span>
+                </div>
+                <div class="status-indicator-box">
+                    <div id="statusDot" class="status-dot standby"></div>
+                    <span id="statusLabel" class="status-label">SISTEMA EM ESPERA</span>
+                </div>
+            </div>
+
+            <div class="header-center">
+                <h1 class="hud-title">J.A.R.V.I.S.</h1>
+                <div class="hud-subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+                <div id="ideModeIndicator" class="ide-mode-badge hidden">⚡ MODO IDE ATIVO (ANTIGRAVITY)</div>
+            </div>
+
+            <div class="header-right">
+                <div class="clock-box">
+                    <div id="liveClock" class="live-clock">--:--:--</div>
+                    <div id="liveDate" class="live-date">--/--/----</div>
+                </div>
+                <button id="btnPlugins" class="hud-icon-btn" title="Central de Plug-ins & Loja" aria-label="Plug-ins">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                    </svg>
+                </button>
+                <button id="btnSettings" class="hud-icon-btn" title="Configurações da Conexão" aria-label="Configurações">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Corpo do HUD (Grid 3 Colunas) -->
+        <main class="hud-main">
+            <!-- Painel Esquerdo: Telemetria & Diagnósticos -->
+            <section class="hud-panel left-panel">
+                <div class="panel-header">
+                    <span class="panel-tag">// 01</span>
+                    <h2 class="panel-title">TELEMETRIA DO SISTEMA</h2>
+                </div>
+
+                <div class="panel-content">
+                    <!-- Gauge CPU -->
+                    <div class="metric-card">
+                        <div class="metric-meta">
+                            <span class="metric-name">PROCESSADOR (CPU)</span>
+                            <span id="cpuValue" class="metric-val">--%</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="cpuBar" class="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <div class="metric-sub">Núcleos lógicos: <span id="cpuCores">--</span></div>
+                    </div>
+
+                    <!-- Gauge RAM -->
+                    <div class="metric-card">
+                        <div class="metric-meta">
+                            <span class="metric-name">MEMÓRIA RAM</span>
+                            <span id="ramValue" class="metric-val">--%</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="ramBar" class="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <div class="metric-sub"><span id="ramUsed">-- GB</span> de <span id="ramTotal">-- GB</span></div>
+                    </div>
+
+                    <!-- Bateria & Uptime -->
+                    <div class="metric-card">
+                        <div class="metric-meta">
+                            <span class="metric-name">ENERGIA & UPTIME</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Fonte de Energia:</span>
+                            <span id="batteryStatus" class="stat-val">Verificando...</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Tempo Ativo:</span>
+                            <span id="uptimeStatus" class="stat-val">--</span>
+                        </div>
+                    </div>
+
+                    <!-- Feed de Execução de Ferramentas -->
+                    <div class="tools-monitor-box">
+                        <div class="monitor-title">REGISTRO DE OPERAÇÕES</div>
+                        <div id="toolsLog" class="tools-log-content">
+                            <div class="log-item idle">[JARVIS] Aguardando instruções operacionais.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Centro: Arc Reactor & Visualizador de Voz -->
+            <section class="hud-center-stage">
+                <div class="reactor-wrapper">
+                    <!-- SVG com anéis concêntricos futuristas -->
+                    <svg class="arc-rings" viewBox="0 0 500 500">
+                        <circle class="ring ring-outer-dashed" cx="250" cy="250" r="230"></circle>
+                        <circle class="ring ring-outer" cx="250" cy="250" r="215"></circle>
+                        <circle class="ring ring-ticks" cx="250" cy="250" r="195"></circle>
+                        <circle class="ring ring-mid" cx="250" cy="250" r="160"></circle>
+                        <circle class="ring ring-inner-dashed" cx="250" cy="250" r="130"></circle>
+                        <circle class="ring ring-core" cx="250" cy="250" r="100"></circle>
+
+                        <!-- Marcadores Triangulares do Reator -->
+                        <g class="reactor-triangles">
+                            <polygon points="250,55 240,75 260,75" class="tri-marker"></polygon>
+                            <polygon points="250,445 240,425 260,425" class="tri-marker"></polygon>
+                            <polygon points="55,250 75,240 75,260" class="tri-marker"></polygon>
+                            <polygon points="445,250 425,240 425,260" class="tri-marker"></polygon>
+                        </g>
+                    </svg>
+
+                    <!-- Canvas do Espectrograma de Áudio -->
+                    <canvas id="visualizerCanvas" width="400" height="400" class="visualizer-canvas"></canvas>
+
+                    <!-- Núcleo Central do Reator com Pulso -->
+                    <div class="reactor-core-glow" id="reactorGlow">
+                        <div class="core-inner-energy"></div>
+                    </div>
+                </div>
+
+                <!-- Estado da IA e Controles de Interação -->
+                <div class="interaction-deck">
+                    <div id="aiStateText" class="ai-state-text">CONECTE-SE PARA INICIAR</div>
+
+                    <div class="deck-buttons">
+                        <button id="btnConnect" class="hud-btn primary glow-btn" aria-label="Conectar ou Desconectar Jarvis">
+                            <span class="btn-icon">⚡</span>
+                            <span id="btnConnectLabel">INICIAR JARVIS</span>
+                        </button>
+
+                        <button id="btnMic" class="hud-btn mic-btn" disabled aria-label="Alternar Microfone">
+                            <span class="btn-icon" id="micIcon">🎙️</span>
+                            <span id="micLabel">MICROFONE</span>
+                        </button>
+                    </div>
+
+                    <div class="push-to-talk-hint">
+                        DICA: Pressione e segure <kbd class="hud-kbd">ESPAÇO</kbd> para falar ou ative o microfone contínuo.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Painel Direito: Diálogo & Comandos Rápidos -->
+            <section class="hud-panel right-panel">
+                <div class="panel-header">
+                    <span class="panel-tag">// 02</span>
+                    <h2 class="panel-title">CANAL DE COMUNICAÇÃO</h2>
+                </div>
+
+                <div class="panel-content flex-column">
+                    <!-- Feed de Transcrição e Diálogo -->
+                    <div id="dialogueContainer" class="dialogue-container">
+                        <div class="dialogue-bubble jarvis">
+                            <div class="speaker-tag">J.A.R.V.I.S.</div>
+                            <div class="bubble-body">Olá, senhor. Sistemas prontos. Pressione 'Iniciar Jarvis' e fale comigo a qualquer momento.</div>
+                        </div>
+                    </div>
+
+                    <!-- Sugestões de Comandos Rápidos -->
+                    <div class="quick-commands-box">
+                        <div class="quick-title">PROTOCOLOS SUGERIDOS:</div>
+                        <div class="quick-chips">
+                            <button class="chip-btn" data-prompt="Jarvis, qual é o status do sistema e da bateria?">📊 Status do Sistema</button>
+                            <button class="chip-btn" data-prompt="Jarvis, que horas são e qual é a data de hoje?">🕒 Horário Atual</button>
+                            <button class="chip-btn" data-prompt="Jarvis, abra o navegador para mim.">🌐 Abrir Navegador</button>
+                            <button class="chip-btn" data-prompt="Jarvis, anote que tenho reunião amanhã às 10 horas.">📝 Criar Anotação</button>
+                            <button class="chip-btn" data-prompt="Jarvis, aumente o volume em 15%.">🔊 Ajustar Volume</button>
+                        </div>
+                    </div>
+
+                    <!-- Barra de Envio Manual de Texto -->
+                    <form id="textForm" class="text-input-form">
+                        <input type="text" id="textInput" class="hud-text-input" placeholder="Digite uma instrução ou fale..." autocomplete="off">
+                        <button type="submit" id="btnSendText" class="hud-send-btn" aria-label="Enviar Comando">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+            </section>
+        </main>
+
+        <!-- Barra Inferior (Footer) -->
+        <footer class="hud-footer">
+            <div class="footer-left">
+                <span class="telemetry-label">MOTOR COGNITIVO:</span>
+                <span id="modelBadge" class="telemetry-value">GEMINI 3.8 LIVE PROTOCOL</span>
+            </div>
+            <div class="footer-center">
+                <span id="interruptedAlert" class="interrupted-alert hidden">⚡ INTERRUPÇÃO DETECTADA - ESCUTANDO O SENHOR</span>
+            </div>
+            <div class="footer-right">
+                <span class="telemetry-label">VOZ SELECIONADA:</span>
+                <span id="voiceBadge" class="telemetry-value">Charon (Britânico)</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Modal de Configurações da Conexão -->
+    <div id="settingsModal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="modal-title">CONFIGURAÇÕES DE COMUNICAÇÃO</h3>
+                <button id="btnCloseSettings" class="close-btn" aria-label="Fechar">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="inputApiKey">Chave de API Gemini (Opcional se já estiver no backend):</label>
+                    <input type="password" id="inputApiKey" class="hud-text-input" placeholder="AIzaSy...">
+                    <small class="form-help">Se configurada no servidor via <code>GEMINI_API_KEY</code>, este campo pode ficar em branco.</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="selectVoice">Voz do J.A.R.V.I.S.:</label>
+                    <select id="selectVoice" class="hud-select">
+                        <option value="Charon" selected>Charon (Grave, sofisticado - Estilo Jarvis)</option>
+                        <option value="Puck">Puck (Natural e ágil)</option>
+                        <option value="Fenrir">Fenrir (Imponente e autoritário)</option>
+                        <option value="Aoede">Aoede (Voz feminina refinada)</option>
+                        <option value="Kore">Kore (Voz feminina suave)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="selectModel">Modelo Multimodal Live:</label>
+                    <select id="selectModel" class="hud-select">
+                        <option value="gemini-2.5-flash-native-audio-latest" selected>gemini-2.5-flash-native-audio-latest (Padrão - Ultrabaixa Latência)</option>
+                        <option value="gemini-2.5-flash-native-audio-latest">gemini-2.5-flash-native-audio-latest (Estável)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnSaveSettings" class="hud-btn primary">SALVAR E APLICAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Central de Plug-ins & Loja (Estilo N.E.K.O) -->
+    <div id="pluginsModal" class="modal-backdrop hidden">
+        <div class="modal-container plugins-modal-container">
+            <div class="modal-header">
+                <div class="modal-title-box">
+                    <span class="panel-tag">// ECOSSISTEMA</span>
+                    <h3 class="modal-title">CENTRAL DE PLUG-INS & EXTENSÕES</h3>
+                </div>
+                <button id="btnClosePlugins" class="close-btn" aria-label="Fechar">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="plugins-tabs">
+                    <button id="tabInstalled" class="plugin-tab active">PLUG-INS ATIVOS</button>
+                    <button id="tabStore" class="plugin-tab">LOJA DE PLUG-INS</button>
+                </div>
+                <div id="pluginsList" class="plugins-grid">
+                    <!-- Preenchido via app.js -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Principal -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
