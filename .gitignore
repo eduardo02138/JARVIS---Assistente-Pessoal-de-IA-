@@ -28,3 +28,6 @@ Thumbs.db
 .agents/
 scratch/
 tmp/
+
+# Preferências e memórias locais do usuário (use user_preferences.example.json como modelo)
+user_preferences.json

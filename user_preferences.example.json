@@ -1,6 +1,6 @@
 {
   "default_apps": {
-    "music_platform": "spotify",
+    "music_platform": null,
     "browser": "default",
     "email_client": "default",
     "text_editor": "antigravity",
