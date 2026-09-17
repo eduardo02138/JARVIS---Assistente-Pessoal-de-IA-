@@ -507,6 +507,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 # Tratamento de Function Calling (Ferramentas do SO)
                                 tool_call = response.tool_call
                                 if tool_call is not None:
+                                    assistant_state["busy"] = True
                                     function_responses = []
                                     for call in tool_call.function_calls:
                                         func_name = call.name

@@ -408,46 +408,56 @@ function initOutputAudio() {
 function playPCMChunk(base64Data) {
     initOutputAudio();
 
-    // Decodifica base64 para Uint8Array
-    const binary = atob(base64Data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
+    try {
+        // Decodifica base64 para Uint8Array
+        const binary = atob(base64Data);
+        const len = binary.length - (binary.length % 2); // Garante alinhamento par de 16-bit
+        if (len <= 0) return;
 
-    // Converte Int16 para Float32
-    const int16Array = new Int16Array(bytes.buffer);
-    const float32Array = new Float32Array(int16Array.length);
-    for (let i = 0; i < int16Array.length; i++) {
-        float32Array[i] = int16Array[i] / 32768.0;
-    }
-
-    // Cria AudioBuffer a 24000Hz
-    const audioBuffer = state.audioCtx.createBuffer(1, float32Array.length, 24000);
-    audioBuffer.getChannelData(0).set(float32Array);
-
-    const source = state.audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(state.analyser);
-
-    // Agendamento contínuo sem cortes
-    const currentTime = state.audioCtx.currentTime;
-    if (state.scheduledEndTime < currentTime) {
-        state.scheduledEndTime = currentTime;
-    }
-
-    source.start(state.scheduledEndTime);
-    state.scheduledEndTime += audioBuffer.duration;
-
-    setJarvisState('speaking', 'JARVIS FALANDO...');
-
-    source.onended = () => {
-        // Se o áudio agendado já foi todo tocado, libera o estado de fala
-        if (state.audioCtx && state.audioCtx.currentTime >= state.scheduledEndTime - 0.08) {
-            state.speaking = false;
-            setJarvisState('active', 'ÀS SUAS ORDENS, SENHOR');
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary.charCodeAt(i);
         }
-    };
+
+        // Converte Int16 para Float32
+        const int16Array = new Int16Array(bytes.buffer, 0, len / 2);
+        const float32Array = new Float32Array(int16Array.length);
+        for (let i = 0; i < int16Array.length; i++) {
+            float32Array[i] = int16Array[i] / 32768.0;
+        }
+
+        // Cria AudioBuffer a 24000Hz
+        const audioBuffer = state.audioCtx.createBuffer(1, float32Array.length, 24000);
+        audioBuffer.getChannelData(0).set(float32Array);
+
+        const source = state.audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(state.analyser);
+
+        // Agendamento contínuo com Jitter Buffer anti-engasgo (120ms)
+        // Evita que variações normais de latência de pacotes da nuvem causem silêncio e voz travando
+        const currentTime = state.audioCtx.currentTime;
+        const JITTER_BUFFER = 0.12; 
+
+        if (state.scheduledEndTime < currentTime) {
+            state.scheduledEndTime = currentTime + JITTER_BUFFER;
+        }
+
+        source.start(state.scheduledEndTime);
+        state.scheduledEndTime += audioBuffer.duration;
+
+        setJarvisState('speaking', 'JARVIS FALANDO...');
+
+        source.onended = () => {
+            // Se o áudio agendado já foi todo tocado, libera o estado de fala
+            if (state.audioCtx && state.audioCtx.currentTime >= state.scheduledEndTime - 0.08) {
+                state.speaking = false;
+                setJarvisState('active', 'ÀS SUAS ORDENS, SENHOR');
+            }
+        };
+    } catch (err) {
+        console.warn("Erro ao decodificar chunk de áudio:", err);
+    }
 }
 
 // Interrupção: para qualquer áudio pendente imediatamente
