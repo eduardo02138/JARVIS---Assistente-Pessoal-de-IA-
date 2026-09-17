@@ -7,6 +7,7 @@ import os
 import json
 import threading
 import logging
+from copy import deepcopy
 
 logger = logging.getLogger("JARVIS_PREFERENCES")
 
@@ -36,23 +37,23 @@ def load_preferences() -> dict:
     """Carrega as preferências salvas no disco. Inicializa com o schema padrão se não existir."""
     with _lock:
         if not os.path.exists(PREFERENCES_FILE):
-            save_preferences_unlocked(DEFAULT_SCHEMA)
-            return dict(DEFAULT_SCHEMA)
+            save_preferences_unlocked(deepcopy(DEFAULT_SCHEMA))
+            return deepcopy(DEFAULT_SCHEMA)
         try:
             with open(PREFERENCES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             # Garante que todas as chaves básicas existem
             for key, val in DEFAULT_SCHEMA.items():
                 if key not in data:
-                    data[key] = val
+                    data[key] = deepcopy(val)
                 elif isinstance(val, dict) and isinstance(data[key], dict):
                     for subkey, subval in val.items():
                         if subkey not in data[key]:
-                            data[key][subkey] = subval
+                            data[key][subkey] = deepcopy(subval)
             return data
         except Exception as e:
             logger.error(f"Erro ao carregar preferências: {e}")
-            return dict(DEFAULT_SCHEMA)
+            return deepcopy(DEFAULT_SCHEMA)
 
 def save_preferences_unlocked(data: dict) -> bool:
     """Salva de forma atômica no arquivo JSON."""
@@ -82,9 +83,9 @@ def set_preference(category: str, key: str, value) -> bool:
                 with open(PREFERENCES_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
             else:
-                data = dict(DEFAULT_SCHEMA)
+                data = deepcopy(DEFAULT_SCHEMA)
         except Exception:
-            data = dict(DEFAULT_SCHEMA)
+            data = deepcopy(DEFAULT_SCHEMA)
 
         if category not in data or not isinstance(data[category], dict):
             data[category] = {}
@@ -115,4 +116,4 @@ def get_all_preferences() -> dict:
 def reset_all_preferences() -> bool:
     """Restaura as configurações de fábrica."""
     with _lock:
-        return save_preferences_unlocked(DEFAULT_SCHEMA)
+        return save_preferences_unlocked(deepcopy(DEFAULT_SCHEMA))

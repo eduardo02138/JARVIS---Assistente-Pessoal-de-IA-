@@ -44,6 +44,33 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "smart_home_get_climate": RiskLevel.READ,
     "list_open_windows": RiskLevel.READ,
 
+    # Google Workspace
+    "workspace_search_emails": RiskLevel.READ,
+    "workspace_create_draft": RiskLevel.LOW_WRITE,
+    "workspace_append_doc": RiskLevel.LOW_WRITE,
+    "workspace_create_keep_note": RiskLevel.LOW_WRITE,
+
+    # Deep Research
+    "deep_research_start": RiskLevel.LOW_WRITE,
+    "deep_research_get_report": RiskLevel.READ,
+    "deep_research_list": RiskLevel.READ,
+
+    # Google Finance & Portfolio
+    "finance_get_quote": RiskLevel.READ,
+    "finance_get_portfolio": RiskLevel.READ,
+    "finance_add_asset": RiskLevel.LOW_WRITE,
+    "finance_get_insights": RiskLevel.READ,
+
+    # Ginjutsu Video & Motion AI
+    "ginjutsu_create_motion_transfer": RiskLevel.LOW_WRITE,
+    "ginjutsu_generate_prompt": RiskLevel.READ,
+    "ginjutsu_list_jobs": RiskLevel.READ,
+
+    # Game Companion Expansions
+    "game_companion_list_installed_games": RiskLevel.READ,
+    "game_companion_launch_game": RiskLevel.LOW_WRITE,
+
+
     # LOW_WRITE: Ações locais seguras
     "adjust_volume": RiskLevel.LOW_WRITE,
     "open_application": RiskLevel.LOW_WRITE,
@@ -139,8 +166,15 @@ class PolicyEngine:
         logger.info(f"Lease de controle concedida a '{owner}' por {ttl_s}s.")
         return self.control_lease_status()
 
-    def revoke_control_lease(self) -> Dict[str, Any]:
-        """Revoga imediatamente a autoridade de controle físico."""
+    def revoke_control_lease(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Revoga a autoridade de controle físico.
+
+        Com session_id, só a sessão dona da lease pode revogá-la: assim uma segunda
+        conexão não derruba o Modo Controle de quem realmente recebeu a autoridade.
+        """
+        if session_id is not None and self._control_lease_owner not in (None, session_id):
+            logger.info("Revogação ignorada: a lease pertence a outra sessão.")
+            return self.control_lease_status()
         self._control_lease_expira_em = 0.0
         self._control_lease_owner = None
         logger.info("Lease de controle revogada.")
@@ -155,11 +189,13 @@ class PolicyEngine:
         return True
 
     def control_lease_status(self) -> Dict[str, Any]:
+        """Estado da lease. 'owner' é mantido mesmo após expirar, para a sessão dona
+        conseguir identificar que a autoridade dela acabou."""
         restante = max(0.0, self._control_lease_expira_em - time.time())
         return {
             "ativa": restante > 0,
             "segundos_restantes": int(restante),
-            "owner": self._control_lease_owner if restante > 0 else None
+            "owner": self._control_lease_owner
         }
 
     def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any],

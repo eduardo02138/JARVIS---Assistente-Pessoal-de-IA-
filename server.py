@@ -39,6 +39,20 @@ if not JARVIS_SECRET_TOKEN:
 # Tempo máximo de espera pela confirmação do usuário em ferramentas de risco
 CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "60"))
 
+
+def liberar_controle_da_sessao(session_id: str) -> None:
+    """Encerra a autoridade física ao fim da sessão dona da lease.
+
+    Sessões que não são donas da lease não mexem no Modo Controle de quem é.
+    """
+    if policy_engine.control_lease_status().get("owner") != session_id:
+        return
+    if system_tools.get_control_mode():
+        system_tools.set_control_mode(False)
+    lease = policy_engine.revoke_control_lease(session_id=session_id)
+    record_event("control_lease_released", lease)
+    logger.info("Sessão encerrada: Modo Controle desativado e lease de controle revogada.")
+
 async def verify_jarvis_token(
     request: Request,
     authorization: Optional[str] = Header(None),
@@ -401,6 +415,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "model": model_name,
                     "voice": voice_name
                 })
+                # Identidade desta sessão: a lease de controle físico pertence a ela
+                sessao_id = secrets.token_urlsafe(12)
                 await websocket.send_json({
                     "type": "connected",
                     "message": f"Sistemas online. Conectado ao modelo {model_name} com a voz {voice_name}.",
@@ -411,14 +427,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "type": "ide_mode",
                     "active": system_tools.get_ide_mode()
                 })
+                # Uma nova sessão não herda o Modo Controle: a autoridade é de quem tem a lease
                 await websocket.send_json({
                     "type": "control_mode",
-                    "active": system_tools.get_control_mode()
+                    "active": system_tools.get_control_mode() and policy_engine.is_control_lease_active(sessao_id),
+                    "lease": policy_engine.control_lease_status()
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
                 assistant_state = {"busy": False}
-                # Identidade desta sessão: a lease de controle físico pertence a ela
-                sessao_id = secrets.token_urlsafe(12)
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
 
@@ -653,14 +669,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             logger.error(f"Erro no loop contínuo do Gemini Live: {gemini_err}")
                             break
 
-                # Executa todos os workers sem cancelamentos indesejados
                 # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
                 async def control_lease_worker():
                     while True:
                         await asyncio.sleep(5)
-                        if system_tools.get_control_mode() and not policy_engine.is_control_lease_active(sessao_id):
+                        dono_desta_sessao = policy_engine.control_lease_status().get("owner") == sessao_id
+                        if (dono_desta_sessao and system_tools.get_control_mode()
+                                and not policy_engine.is_control_lease_active(sessao_id)):
                             system_tools.set_control_mode(False)
-                            lease = policy_engine.revoke_control_lease()
+                            lease = policy_engine.revoke_control_lease(session_id=sessao_id)
                             record_event("control_lease_expired", lease)
                             logger.info("Lease de controle expirada: Modo Controle desativado automaticamente.")
                             await websocket.send_json({
@@ -670,7 +687,18 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 "data": {"sucesso": True, "mensagem": "Autoridade de controle expirada, senhor. Modo Controle desativado."}
                             })
 
-                await asyncio.gather(ws_client_worker(), injection_worker(), from_gemini_worker(), control_lease_worker())
+                # TaskGroup garante o cancelamento dos demais workers quando um deles termina
+                # ou falha: sem isso, o injection_worker antigo continuaria consumindo a fila global.
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(ws_client_worker())
+                        tg.create_task(injection_worker())
+                        tg.create_task(from_gemini_worker())
+                        tg.create_task(control_lease_worker())
+                except* WebSocketDisconnect:
+                    logger.info("Cliente Web HUD desconectado.")
+                finally:
+                    liberar_controle_da_sessao(sessao_id)
                 record_event("client_disconnected")
                 return
 

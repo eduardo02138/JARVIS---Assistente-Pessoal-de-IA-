@@ -545,6 +545,103 @@ def test_lease_expirada_desativa_modo():
     return success
 
 
+def test_lease_nao_revogavel_por_outra_sessao():
+    """Uma segunda sessão não pode derrubar a autoridade concedida à primeira."""
+    from policy_engine import policy_engine
+
+    policy_engine.grant_control_lease(owner="sessao-A", ttl_s=60)
+    policy_engine.revoke_control_lease(session_id="sessao-B")
+    sobreviveu = policy_engine.is_control_lease_active("sessao-A")
+
+    policy_engine.revoke_control_lease(session_id="sessao-A")
+    dona_revoga = not policy_engine.is_control_lease_active("sessao-A")
+
+    success = sobreviveu and dona_revoga
+    detail = f"B tentou revogar e A continuou ativa: {sobreviveu} | A revogou a própria lease: {dona_revoga}"
+    log_test("Lease Protegida contra Revogação de Outra Sessão", success, detail)
+    assert success
+    return success
+
+
+def test_encerramento_de_sessao_libera_controle():
+    """Ao encerrar a sessão dona, o Modo Controle e a lease caem juntos."""
+    import server
+    import system_tools
+    from policy_engine import policy_engine
+
+    estado_original = system_tools.get_control_mode()
+    system_tools.CONTROL_MODE_ACTIVE = True
+    policy_engine.grant_control_lease(owner="sessao-A", ttl_s=60)
+
+    # Uma sessão que não é dona não pode liberar o controle alheio
+    server.liberar_controle_da_sessao("sessao-B")
+    intacta = policy_engine.is_control_lease_active("sessao-A") and system_tools.get_control_mode()
+
+    # A dona encerrando derruba a autoridade imediatamente
+    server.liberar_controle_da_sessao("sessao-A")
+    liberou = (not policy_engine.is_control_lease_active("sessao-A")) and (not system_tools.get_control_mode())
+
+    system_tools.CONTROL_MODE_ACTIVE = estado_original
+    policy_engine.revoke_control_lease()
+
+    success = intacta and liberou
+    detail = f"sessão alheia não mexeu: {intacta} | sessão dona liberou: {liberou}"
+    log_test("Encerramento de Sessão Libera o Controle Físico", success, detail)
+    assert success
+    return success
+
+
+def test_workers_com_taskgroup():
+    """Os workers do WebSocket precisam ser cancelados juntos ao fim da sessão."""
+    import inspect
+    import server
+
+    fonte = inspect.getsource(server.websocket_live_endpoint)
+    usa_taskgroup = "asyncio.TaskGroup()" in fonte
+    sem_gather = "asyncio.gather(ws_client_worker" not in fonte
+    libera_no_fim = "liberar_controle_da_sessao(sessao_id)" in fonte
+
+    success = usa_taskgroup and sem_gather and libera_no_fim
+    detail = f"TaskGroup: {usa_taskgroup} | sem gather: {sem_gather} | libera lease no fim: {libera_no_fim}"
+    log_test("Ciclo de Vida dos Workers (TaskGroup)", success, detail)
+    assert success
+    return success
+
+
+def test_defaults_de_preferencias_isolados():
+    """Alterar preferências carregadas não pode contaminar o DEFAULT_SCHEMA em memória."""
+    import importlib
+    import tempfile
+
+    import preferences_manager
+
+    original_env = os.environ.get("JARVIS_PREFERENCES_FILE")
+    os.environ["JARVIS_PREFERENCES_FILE"] = os.path.join(
+        tempfile.mkdtemp(prefix="jarvis_defaults_"), "user_preferences.json"
+    )
+    importlib.reload(preferences_manager)
+    try:
+        dados = preferences_manager.load_preferences()
+        dados["default_apps"]["browser"] = "contaminado"
+        dados["custom_memories"]["fato"] = "não deveria vazar"
+        schema = preferences_manager.DEFAULT_SCHEMA
+        isolado = (
+            schema["default_apps"]["browser"] == "default"
+            and "fato" not in schema["custom_memories"]
+        )
+    finally:
+        if original_env is None:
+            os.environ.pop("JARVIS_PREFERENCES_FILE", None)
+        else:
+            os.environ["JARVIS_PREFERENCES_FILE"] = original_env
+        importlib.reload(preferences_manager)
+
+    log_test("Isolamento do DEFAULT_SCHEMA (deepcopy)", isolado,
+             "Defaults preservados após alterar as preferências carregadas" if isolado else "DEFAULT_SCHEMA foi contaminado!")
+    assert isolado
+    return isolado
+
+
 def test_controller_sem_evdev():
     """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
     import importlib
@@ -605,6 +702,10 @@ async def run_p0_suite():
     test_control_revogacao_imediata()
     test_lease_vinculada_a_sessao()
     test_lease_expirada_desativa_modo()
+    test_lease_nao_revogavel_por_outra_sessao()
+    test_encerramento_de_sessao_libera_controle()
+    test_workers_com_taskgroup()
+    test_defaults_de_preferencias_isolados()
     test_confirmation_flow_wired()
     test_controller_sem_evdev()
     test_suite_cli_dispatch()
