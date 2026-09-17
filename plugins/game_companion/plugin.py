@@ -224,8 +224,14 @@ class GameCompanionPlugin(JarvisPlugin):
             if not cmd:
                 return {"sucesso": False, "mensagem": f"Comando de inicialização não disponível para {jogo.get('nome')}."}
 
+            import shlex
             import subprocess
-            subprocess.Popen(cmd, shell=True)
+            # shell=False: o comando vem de arquivos .desktop e da biblioteca do Steam,
+            # então metacaracteres de shell (;, &&, |) não podem virar execução arbitrária.
+            argumentos = shlex.split(cmd)
+            if not argumentos:
+                return {"sucesso": False, "mensagem": f"Comando de inicialização inválido para {jogo.get('nome')}."}
+            subprocess.Popen(argumentos)
             self.active_game = jogo.get("nome")
             return {
                 "sucesso": True,

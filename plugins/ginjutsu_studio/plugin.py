@@ -51,7 +51,7 @@ class GinjutsuStudioPlugin(JarvisPlugin):
                 "required": ["source_video_path", "target_character_desc"]
             },
             handler=self.create_motion_transfer,
-            risk_level="LOW_WRITE"
+            risk_level="EXTERNAL_WRITE"
         )
 
         self.register_tool(
@@ -103,9 +103,13 @@ class GinjutsuStudioPlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "job_id": job_id,
             "status": "renderizando",
-            "mensagem": f"Tarefa Ginjutsu iniciada com êxito ({job_id}). O movimento, coreografia e enquadramento de '{source_video_path}' estão sendo transferidos para '{target_character_desc}', senhor."
+            "mensagem": f"Tarefa Ginjutsu simulada (nenhum vídeo foi enviado ao Higgsfield) iniciada ({job_id}). O movimento, coreografia e enquadramento de '{source_video_path}' estão sendo transferidos para '{target_character_desc}', senhor."
         }
 
     def generate_prompt(self, original_actor_description: str, replacement_character: str) -> dict:
@@ -119,6 +123,8 @@ class GinjutsuStudioPlugin(JarvisPlugin):
         )
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "prompt_otimizado": prompt_mestre,
             "mensagem": f"Prompt mestre estruturado no padrão Ginjutsu gerado com sucesso, senhor. Pronto para envio ao pipeline de renderização."
         }
@@ -127,6 +133,8 @@ class GinjutsuStudioPlugin(JarvisPlugin):
         jobs_list = list(self.jobs.values())
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "total": len(jobs_list),
             "jobs": jobs_list,
             "mensagem": f"Constam {len(jobs_list)} tarefa(s) de animação e transferência de movimento no estúdio Ginjutsu, senhor."

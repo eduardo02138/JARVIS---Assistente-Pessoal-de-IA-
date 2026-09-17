@@ -45,7 +45,7 @@ class DeepResearchPlugin(JarvisPlugin):
                 "required": ["topic"]
             },
             handler=self.start_research,
-            risk_level="LOW_WRITE"
+            risk_level="EXTERNAL_WRITE"
         )
 
         self.register_tool(
@@ -107,6 +107,10 @@ class DeepResearchPlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "research_id": research_id,
             "topico": topic,
             "status": "processando_segundo_plano",
@@ -172,6 +176,8 @@ class DeepResearchPlugin(JarvisPlugin):
         if entry["status"] != "concluido":
             return {
                 "sucesso": True,
+                "mock": True,
+                "executado_externamente": False,
                 "research_id": research_id,
                 "status": entry["status"],
                 "progresso": entry["progresso"],
@@ -180,6 +186,10 @@ class DeepResearchPlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "research_id": research_id,
             "topico": entry["topic"],
             "status": "concluido",
@@ -192,6 +202,8 @@ class DeepResearchPlugin(JarvisPlugin):
         lista = list(self.researches.values())
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "total": len(lista),
             "pesquisas": lista,
             "mensagem": f"Senhor, constam {len(lista)} pesquisa(s) profunda(s) registradas no arquivo de dados."

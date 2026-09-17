@@ -105,6 +105,8 @@ class GoogleFinancePlugin(JarvisPlugin):
                 var = ((item["cotacao_atual"] - item["preco_medio"]) / item["preco_medio"]) * 100
                 return {
                     "sucesso": True,
+                    "mock": True,
+                    "executado_externamente": False,
                     "ticker": t,
                     "nome": item["nome"],
                     "preco_atual": item["cotacao_atual"],
@@ -121,6 +123,10 @@ class GoogleFinancePlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "ticker": t,
             "nome": f"Ativo de Mercado ({t})",
             "preco_atual": preco_ref,
@@ -154,6 +160,10 @@ class GoogleFinancePlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "total_investido": round(total_investido, 2),
             "patrimonio_atual": round(total_atual, 2),
             "lucro_total": round(lucro_total, 2),
@@ -170,8 +180,10 @@ class GoogleFinancePlugin(JarvisPlugin):
                 item["preco_medio"] = float(avg_price)
                 return {
                     "sucesso": True,
+                    "mock": True,
+                    "executado_externamente": False,
                     "ticker": t,
-                    "mensagem": f"Posição de {t} atualizada com sucesso no seu portfólio do Google Finance, senhor."
+                    "mensagem": f"Posição de {t} atualizada no portfólio simulado, senhor. Ainda não há conexão com o Google Finance real."
                 }
 
         self.portfolio.append({
@@ -184,6 +196,8 @@ class GoogleFinancePlugin(JarvisPlugin):
         })
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "ticker": t,
             "mensagem": f"Novo ativo {t} adicionado ao seu portfólio no setor '{sector}', senhor."
         }
@@ -207,6 +221,10 @@ class GoogleFinancePlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "alocacao_setorial": alocacao_pct,
             "setores_sub_representados": sub_representados,
             "recomendacao_tatica": recomendacao,

@@ -73,7 +73,7 @@ class GoogleWorkspacePlugin(JarvisPlugin):
                 "required": ["recipient", "subject", "body"]
             },
             handler=self.create_draft,
-            risk_level="LOW_WRITE"
+            risk_level="EXTERNAL_WRITE"
         )
 
         self.register_tool(
@@ -94,7 +94,7 @@ class GoogleWorkspacePlugin(JarvisPlugin):
                 "required": ["doc_title", "content"]
             },
             handler=self.append_doc,
-            risk_level="LOW_WRITE"
+            risk_level="EXTERNAL_WRITE"
         )
 
         self.register_tool(
@@ -119,7 +119,7 @@ class GoogleWorkspacePlugin(JarvisPlugin):
                 "required": ["title", "content"]
             },
             handler=self.create_keep_note,
-            risk_level="LOW_WRITE"
+            risk_level="EXTERNAL_WRITE"
         )
 
     def search_emails(self, query: str, max_results: int = 5) -> dict:
@@ -135,6 +135,10 @@ class GoogleWorkspacePlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "query": query,
             "total_encontrados": len(results),
             "emails": results,
@@ -150,8 +154,10 @@ class GoogleWorkspacePlugin(JarvisPlugin):
         self.drafts.append(draft)
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "rascunho": draft,
-            "mensagem": f"Rascunho de e-mail para '{recipient}' com o assunto '{subject}' gravado no Gmail com sucesso, senhor."
+            "mensagem": f"Rascunho simulado para '{recipient}' com o assunto '{subject}', senhor. Este plug-in ainda opera em demonstração: nada foi gravado no Gmail."
         }
 
     def append_doc(self, doc_title: str, content: str) -> dict:
@@ -162,9 +168,13 @@ class GoogleWorkspacePlugin(JarvisPlugin):
 
         return {
             "sucesso": True,
+
+            "mock": True,
+
+            "executado_externamente": False,
             "documento": doc_title,
             "tamanho_total": len(self.docs[doc_title]),
-            "mensagem": f"Texto anexado com êxito ao documento '{doc_title}' no Google Docs, senhor."
+            "mensagem": f"Texto anexado ao documento '{doc_title}' apenas na simulação local, senhor. O Google Docs real não foi alterado."
         }
 
     def create_keep_note(self, title: str, content: str, tags: str = "") -> dict:
@@ -176,6 +186,8 @@ class GoogleWorkspacePlugin(JarvisPlugin):
         self.keep_notes.append(nota)
         return {
             "sucesso": True,
+            "mock": True,
+            "executado_externamente": False,
             "nota": nota,
             "mensagem": f"Ideia capturada no Google Keep: '{title}'. Está salva e acessível em todos os seus dispositivos, senhor."
         }
