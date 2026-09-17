@@ -816,6 +816,33 @@ def test_mensagens_de_mock_sao_honestas():
     return success
 
 
+def test_configuracao_de_voz_e_texto():
+    """Idioma fixo, sem texto duplicado no HUD e mocks desligados por padrão."""
+    import inspect
+    import server
+    import plugin_manager as pm
+
+    fonte = inspect.getsource(server)
+    idioma_fixo = "language_code=os.environ.get(\"JARVIS_LANGUAGE\"" in fonte
+    sem_duplicata = fonte.count('"type": "text"') == 1
+    tolerancia_microfone = "MIC_GRACE_S" in fonte
+    # Instância nova: mede o padrão de carga, sem sofrer com toggles de outros testes
+    gerenciador_novo = pm.PluginManager()
+    mocks_desligados = not pm.MOCKS_ATIVOS and all(
+        plugin.meta.enabled is False
+        for pid, plugin in gerenciador_novo._plugins.items() if pid in pm.PLUGINS_SIMULADOS
+    )
+
+    success = idioma_fixo and sem_duplicata and tolerancia_microfone and mocks_desligados
+    detail = (
+        f"idioma fixo: {idioma_fixo} | HUD sem texto duplicado: {sem_duplicata} | "
+        f"tolerância do microfone: {tolerancia_microfone} | mocks desligados: {mocks_desligados}"
+    )
+    log_test("Sessão de Voz (idioma, duplicidade e mocks)", success, detail)
+    assert success
+    return success
+
+
 def test_controller_sem_evdev():
     """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
     import importlib
@@ -889,6 +916,7 @@ async def run_p0_suite():
     test_mock_plugin_transparency()
     test_risco_de_escrita_externa()
     test_mensagens_de_mock_sao_honestas()
+    test_configuracao_de_voz_e_texto()
     test_sem_shell_true_em_plugins()
     test_game_timer_expiration()
     test_session_endpoint()

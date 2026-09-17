@@ -118,6 +118,17 @@ STORE_CATALOG = [
     }
 ]
 
+# Plug-ins que ainda respondem com dados simulados. Ficam desligados por padrão para não
+# poluir a conversa com notificações, cotações e e-mails inventados; ative com
+# JARVIS_ATIVAR_MOCKS=1 quando quiser demonstrá-los.
+PLUGINS_SIMULADOS = {
+    "smart_home", "social_feed", "live_stream",
+    "google_workspace", "google_finance", "ginjutsu_studio", "deep_research",
+}
+
+MOCKS_ATIVOS = os.environ.get("JARVIS_ATIVAR_MOCKS", "").strip().lower() in ("1", "true", "sim", "yes")
+
+
 class PluginManager:
     def __init__(self):
         self._plugins: dict[str, JarvisPlugin] = {}
@@ -150,6 +161,12 @@ class PluginManager:
                     attr = getattr(mod, attr_name)
                     if isinstance(attr, type) and issubclass(attr, JarvisPlugin) and attr is not JarvisPlugin:
                         instance = attr()
+                        if instance.meta.id in PLUGINS_SIMULADOS and not MOCKS_ATIVOS:
+                            instance.meta.enabled = False
+                            for item in STORE_CATALOG:
+                                if item["id"] == instance.meta.id:
+                                    item["enabled"] = False
+                                    break
                         instance.on_load()
                         self._plugins[instance.meta.id] = instance
                         logger.info(f"Plug-in '{instance.meta.name}' ({instance.meta.id}) carregado com sucesso.")

@@ -39,6 +39,9 @@ if not JARVIS_SECRET_TOKEN:
 # Tempo máximo de espera pela confirmação do usuário em ferramentas de risco
 CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "60"))
 
+# Silêncio do assistente (segundos) a partir do qual o microfone volta a ser encaminhado
+MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "1.0"))
+
 
 def liberar_controle_da_sessao(session_id: str) -> None:
     """Encerra a autoridade física ao fim da sessão dona da lease.
@@ -368,6 +371,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         response_modalities=[types.Modality.AUDIO],
         thinking_config=types.ThinkingConfig(thinking_budget=0),
         speech_config=types.SpeechConfig(
+            language_code=os.environ.get("JARVIS_LANGUAGE", "pt-BR"),
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
             )
@@ -434,7 +438,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "lease": policy_engine.control_lease_status()
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
-                assistant_state = {"busy": False}
+                assistant_state = {"busy": False, "ultimo_audio": 0.0}
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
 
@@ -477,7 +481,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 record_event("user_audio_chunk", {"bytes": len(pcm_data)})
                                 # Se o assistente estiver respondendo/falando, não repassa o microfone
                                 # para evitar que o som dos alto-falantes cause falso barge-in/cancelamento
-                                if not assistant_state["busy"]:
+                                # Depois que o assistente para de emitir áudio, volta a ouvir mesmo
+                                # antes do turn_complete: senão o começo da frase do usuário se perdia.
+                                silencio = time.time() - assistant_state["ultimo_audio"] > MIC_GRACE_S
+                                if not assistant_state["busy"] or silencio:
                                     await session.send_realtime_input(
                                         audio=types.Blob(
                                             data=pcm_data,
@@ -543,21 +550,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             if part.text:
                                                 is_thought = getattr(part, "thought", False) or False
                                                 record_event("model_text", {"text": part.text, "thought": is_thought})
-                                                clean_part = part.text.strip()
-                                                if (
-                                                    not is_thought
-                                                    and not clean_part.startswith("<ctrl")
-                                                    and not clean_part.startswith("**")
-                                                    and not clean_part.startswith("I've processed")
-                                                    and not clean_part.startswith("Okay, I'm")
-                                                    and not clean_part.startswith("Yes, I can hear")
-                                                ):
-                                                    await websocket.send_json({
-                                                        "type": "text",
-                                                        "text": part.text
-                                                    })
+                                                # O texto exibido vem de output_transcription.
+                                                # Enviar também part.text repetia a mesma frase no HUD.
                                             if part.inline_data and part.inline_data.data:
                                                 record_event("model_audio_chunk", {"bytes": len(part.inline_data.data)})
+                                                assistant_state["ultimo_audio"] = time.time()
                                                 audio_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
                                                 await websocket.send_json({
                                                     "type": "audio",
