@@ -34,7 +34,8 @@ class SocialFeedPlugin(JarvisPlugin):
                     }
                 }
             },
-            handler=self.check_notifications
+            handler=self.check_notifications,
+            risk_level="READ"
         )
 
         self.register_tool(
@@ -54,7 +55,8 @@ class SocialFeedPlugin(JarvisPlugin):
                 },
                 "required": ["platform", "text_content"]
             },
-            handler=self.post_update
+            handler=self.post_update,
+            risk_level="EXTERNAL_WRITE"
         )
 
     def check_notifications(self, only_urgent: bool = False) -> dict:

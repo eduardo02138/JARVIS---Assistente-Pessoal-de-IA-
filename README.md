@@ -15,7 +15,7 @@ Assistente pessoal de voz, automação de sistema operacional e hub de inteligê
 ### 2. Dupla Experiência de Interface
 - 🛸 **HUD Web Holográfico (`/`)**: Reator Arc reativo com espectrograma em tempo real no `<canvas>`, painéis em Glassmorphism, telemetria de hardware e suporte a microfone contínuo ou *Push-to-Talk* (`<Espaço>`).
 - 🪟 **App Desktop Nativo Flutuante (`app.py`)**: Janela transparente sem bordas, arraste nativo via Wayland/X11 (`startSystemMove`), botão de expansão "Ask Gemini" e atalho de ativação rápida:
-  - **`Alt + Espaço`**: Alterna visibilidade imediata do assistente na sua área de trabalho.
+  - **`Alt + Espaço`**: Alterna a visibilidade com a janela em foco. Para funcionar em qualquer aplicativo, registre um atalho global do sistema apontando para `python app.py --toggle` (veja abaixo).
   - **`Esc`**: Recolhe o widget rapidamente.
 - 🛠️ **Central de Depuração & Auditoria (`/debug`)**: Monitor de eventos em tempo real, logs estruturados (`events.jsonl`) e telemetria de hardware/GPU.
 
@@ -77,7 +77,13 @@ Para a interface flutuante transparente com arraste nativo e atalhos:
 ```bash
 ./run_app.sh
 ```
-*Atalho global:* pressione **`Alt + Espaço`** para exibir ou ocultar a interface instantaneamente.
+*Atalho global:* o Qt só captura teclas com a janela em foco (e no Wayland nem isso é garantido), então o atalho de sistema é registrado no ambiente de trabalho e conversa com a instância em execução:
+
+```bash
+python app.py --toggle
+```
+
+No GNOME: **Configurações → Teclado → Atalhos personalizados**, crie um atalho `Alt+Space` com esse comando (use o caminho completo do projeto e do Python do `.venv`). Sem nenhuma instância aberta, o comando inicia o aplicativo.
 
 ### 4. Acessar o HUD Web
 Caso prefira o navegador, acesse:

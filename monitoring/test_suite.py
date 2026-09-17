@@ -195,25 +195,90 @@ def test_plugin_lifecycle_purge():
     assert success
     return success
 
+# Plug-ins que ainda operam com dados simulados: cada chamada precisa se declarar como mock
+CHAMADAS_SIMULADAS = [
+    ("smart_home", "set_light", ("sala", True), {}),
+    ("social_feed", "check_notifications", (), {}),
+    ("live_stream", "read_chat_summary", (), {}),
+    ("google_workspace", "search_emails", ("relatório",), {}),
+    ("google_workspace", "create_draft", ("ana@exemplo.com", "Assunto", "Corpo"), {}),
+    ("google_workspace", "append_doc", ("Documento de Teste", "conteúdo"), {}),
+    ("google_workspace", "create_keep_note", ("Lembrete", "conteúdo da nota"), {}),
+    ("deep_research", "get_report", ("inexistente",), {}),
+    ("deep_research", "list_researches", (), {}),
+    ("google_finance", "get_quote", ("PETR4",), {}),
+    ("google_finance", "get_portfolio", (), {}),
+    ("google_finance", "add_asset", ("PETR4", 10, 30.0), {}),
+    ("google_finance", "get_insights", (), {}),
+    ("ginjutsu_studio", "generate_prompt", ("dançarino original", "robô"), {}),
+    ("ginjutsu_studio", "list_jobs", (), {}),
+]
+
+
 def test_mock_plugin_transparency():
-    """Valida se plug-ins com estado simulado identificam mock=True explicitamente."""
+    """Toda resposta de plug-in simulado precisa declarar mock=True e executado_externamente=False."""
     from plugin_manager import plugin_manager
-    sh = plugin_manager._plugins["smart_home"]
-    res_sh = sh.set_light("sala", True)
 
-    sf = plugin_manager._plugins["social_feed"]
-    res_sf = sf.check_notifications()
+    falhas = []
+    verificados = 0
+    for plugin_id, metodo, args, kwargs in CHAMADAS_SIMULADAS:
+        plugin = plugin_manager._plugins.get(plugin_id)
+        if plugin is None or not hasattr(plugin, metodo):
+            falhas.append(f"{plugin_id}.{metodo} inexistente")
+            continue
+        res = getattr(plugin, metodo)(*args, **kwargs)
+        verificados += 1
+        if res.get("mock") is not True or res.get("executado_externamente") is not False:
+            falhas.append(f"{plugin_id}.{metodo} (mock={res.get('mock')}, externo={res.get('executado_externamente')})")
 
-    ls = plugin_manager._plugins["live_stream"]
-    res_ls = ls.read_chat_summary()
-
-    success = (
-        res_sh.get("mock") is True and
-        res_sf.get("mock") is True and
-        res_ls.get("mock") is True
-    )
-    detail = f"Smart Home: {res_sh.get('mock')} | Social: {res_sf.get('mock')} | Live: {res_ls.get('mock')}"
+    success = not falhas and verificados == len(CHAMADAS_SIMULADAS)
+    detail = f"{verificados} chamadas verificadas" if success else f"Sem marcação de simulação: {falhas}"
     log_test("Transparência de Mocks (mock=True explícito)", success, detail)
+    assert success
+    return success
+
+
+def test_risco_de_escrita_externa():
+    """Ferramentas que escrevem em serviços de terceiros exigem confirmação."""
+    from policy_engine import policy_engine, RiskLevel
+
+    externas = {
+        "workspace_create_draft": {"recipient": "a@b.com", "subject": "s", "body": "b"},
+        "workspace_append_doc": {"doc_title": "d", "content": "c"},
+        "workspace_create_keep_note": {"content": "n"},
+        "deep_research_start": {"topic": "tema"},
+        "ginjutsu_create_motion_transfer": {"source_video": "v.mp4", "target_character": "x"},
+    }
+    erradas = []
+    for tool, args in externas.items():
+        dec = policy_engine.evaluate(tool, args)
+        if dec.risk_level != RiskLevel.EXTERNAL_WRITE or not dec.requires_confirmation:
+            erradas.append(f"{tool} ({dec.risk_level.value}, confirmação={dec.requires_confirmation})")
+
+    success = not erradas
+    detail = f"{len(externas)} ferramentas exigem confirmação" if success else f"Classificação frouxa: {erradas}"
+    log_test("Escrita em Serviços de Terceiros (EXTERNAL_WRITE)", success, detail)
+    assert success
+    return success
+
+
+def test_sem_shell_true_em_plugins():
+    """Nenhum plug-in pode lançar processos com shell=True a partir de dados do sistema."""
+    import glob
+
+    ocorrencias = []
+    for caminho in glob.glob("plugins/*/plugin.py") + ["system_tools.py", "controller_engine.py"]:
+        caminho_abs = os.path.join(RAIZ_PROJETO, caminho)
+        if not os.path.exists(caminho_abs):
+            continue
+        with open(caminho_abs, encoding="utf-8") as f:
+            for numero, linha in enumerate(f, 1):
+                if "shell=True" in linha:
+                    ocorrencias.append(f"{caminho}:{numero}")
+
+    success = not ocorrencias
+    log_test("Execução de Processos sem shell=True", success,
+             "Nenhuma chamada com shell=True" if success else f"Encontrado em: {ocorrencias}")
     assert success
     return success
 
@@ -711,6 +776,8 @@ async def run_p0_suite():
     test_suite_cli_dispatch()
     test_plugin_lifecycle_purge()
     test_mock_plugin_transparency()
+    test_risco_de_escrita_externa()
+    test_sem_shell_true_em_plugins()
     test_game_timer_expiration()
     test_session_endpoint()
     test_unauthenticated_injection_blocked()

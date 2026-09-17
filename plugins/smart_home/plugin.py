@@ -48,7 +48,8 @@ class SmartHomePlugin(JarvisPlugin):
                 },
                 "required": ["room", "state"]
             },
-            handler=self.set_light
+            handler=self.set_light,
+            risk_level="LOW_WRITE"
         )
 
         self.register_tool(
@@ -64,14 +65,16 @@ class SmartHomePlugin(JarvisPlugin):
                 },
                 "required": ["scene_name"]
             },
-            handler=self.activate_scene
+            handler=self.activate_scene,
+            risk_level="LOW_WRITE"
         )
 
         self.register_tool(
             name="smart_home_get_climate",
             description="Consulta a temperatura, refrigeração e telemetria climática dos ambientes da residência.",
             parameters={"type": "OBJECT", "properties": {}},
-            handler=self.get_climate
+            handler=self.get_climate,
+            risk_level="READ"
         )
 
     def set_light(self, room: str, state: bool, color: str = None, brightness: int = None) -> dict:

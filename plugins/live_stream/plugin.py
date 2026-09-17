@@ -42,14 +42,16 @@ class LiveStreamPlugin(JarvisPlugin):
                 },
                 "required": ["is_live"]
             },
-            handler=self.toggle_live
+            handler=self.toggle_live,
+            risk_level="LOW_WRITE"
         )
 
         self.register_tool(
             name="live_stream_read_chat_summary",
             description="Obtém um resumo conciso das últimas mensagens enviadas pelo público no chat da live.",
             parameters={"type": "OBJECT", "properties": {}},
-            handler=self.read_chat_summary
+            handler=self.read_chat_summary,
+            risk_level="READ"
         )
 
         self.register_tool(
@@ -73,7 +75,8 @@ class LiveStreamPlugin(JarvisPlugin):
                 },
                 "required": ["event_type", "username"]
             },
-            handler=self.send_alert
+            handler=self.send_alert,
+            risk_level="EXTERNAL_WRITE"
         )
 
     def toggle_live(self, is_live: bool, title: str = None) -> dict:

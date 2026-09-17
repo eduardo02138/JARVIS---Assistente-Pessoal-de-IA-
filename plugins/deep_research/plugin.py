@@ -171,7 +171,12 @@ class DeepResearchPlugin(JarvisPlugin):
     def get_report(self, research_id: str) -> dict:
         entry = self.researches.get(research_id)
         if not entry:
-            return {"sucesso": False, "mensagem": f"Pesquisa com ID '{research_id}' não encontrada, senhor."}
+            return {
+                "sucesso": False,
+                "mock": True,
+                "executado_externamente": False,
+                "mensagem": f"Pesquisa com ID '{research_id}' não encontrada, senhor."
+            }
 
         if entry["status"] != "concluido":
             return {

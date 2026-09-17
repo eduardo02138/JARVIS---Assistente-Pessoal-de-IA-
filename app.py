@@ -18,6 +18,7 @@ import socket
 import subprocess
 
 from PySide6.QtCore import Qt, QPoint, QUrl
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -28,6 +29,22 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 
 PORT = 8000
 SERVER_URL = f"http://localhost:{PORT}/widget/?app=1"
+
+# Canal local usado pelo atalho global do sistema para mostrar/esconder a janela
+IPC_NOME = "jarvis-desktop-toggle"
+
+
+def enviar_toggle_para_instancia() -> bool:
+    """Pede à instância já aberta que alterne a visibilidade. False se não houver nenhuma."""
+    socket_local = QLocalSocket()
+    socket_local.connectToServer(IPC_NOME)
+    if not socket_local.waitForConnected(500):
+        return False
+    socket_local.write(b"toggle")
+    socket_local.flush()
+    socket_local.waitForBytesWritten(500)
+    socket_local.disconnectFromServer()
+    return True
 
 def is_server_running():
     try:
@@ -195,20 +212,49 @@ class GeminiLiveDesktopApp(QMainWindow):
             self.hide()
         else:
             self.show()
+            self.raise_()
             self.activateWindow()
+
+    def iniciar_servidor_ipc(self):
+        """Escuta o atalho global do sistema (app.py --toggle).
+
+        O Qt só captura atalhos com a janela em foco, e no Wayland nem isso é garantido:
+        o atalho global é configurado no ambiente de trabalho e chega por aqui.
+        """
+        QLocalServer.removeServer(IPC_NOME)
+        self._ipc_server = QLocalServer(self)
+        if not self._ipc_server.listen(IPC_NOME):
+            print(f"Aviso: não foi possível abrir o canal '{IPC_NOME}' para o atalho global.")
+            return
+        self._ipc_server.newConnection.connect(self._tratar_conexao_ipc)
+
+    def _tratar_conexao_ipc(self):
+        conexao = self._ipc_server.nextPendingConnection()
+        if conexao is None:
+            return
+        conexao.readyRead.connect(lambda: (conexao.readAll(), self.toggle_visibility()))
+        conexao.disconnected.connect(conexao.deleteLater)
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.toggle_visibility()
 
 def main():
+    app = QApplication(sys.argv)
+
+    # Modo atalho: alterna a janela da instância em execução e sai
+    if "--toggle" in sys.argv:
+        if enviar_toggle_para_instancia():
+            return
+        print("Nenhuma instância do JARVIS em execução; iniciando o aplicativo.")
+
     start_backend_if_needed()
 
-    app = QApplication(sys.argv)
     app.setApplicationName("GeminiLiveDesktop")
     app.setQuitOnLastWindowClosed(False)
 
     window = GeminiLiveDesktopApp()
+    window.iniciar_servidor_ipc()
     window.show()
 
     sys.exit(app.exec())

@@ -46,12 +46,12 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
 
     # Google Workspace
     "workspace_search_emails": RiskLevel.READ,
-    "workspace_create_draft": RiskLevel.LOW_WRITE,
-    "workspace_append_doc": RiskLevel.LOW_WRITE,
-    "workspace_create_keep_note": RiskLevel.LOW_WRITE,
+    "workspace_create_draft": RiskLevel.EXTERNAL_WRITE,
+    "workspace_append_doc": RiskLevel.EXTERNAL_WRITE,
+    "workspace_create_keep_note": RiskLevel.EXTERNAL_WRITE,
 
     # Deep Research
-    "deep_research_start": RiskLevel.LOW_WRITE,
+    "deep_research_start": RiskLevel.EXTERNAL_WRITE,
     "deep_research_get_report": RiskLevel.READ,
     "deep_research_list": RiskLevel.READ,
 
@@ -62,7 +62,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "finance_get_insights": RiskLevel.READ,
 
     # Ginjutsu Video & Motion AI
-    "ginjutsu_create_motion_transfer": RiskLevel.LOW_WRITE,
+    "ginjutsu_create_motion_transfer": RiskLevel.EXTERNAL_WRITE,
     "ginjutsu_generate_prompt": RiskLevel.READ,
     "ginjutsu_list_jobs": RiskLevel.READ,
 
