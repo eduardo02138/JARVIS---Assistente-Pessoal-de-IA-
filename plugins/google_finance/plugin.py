@@ -112,7 +112,7 @@ class GoogleFinancePlugin(JarvisPlugin):
                     "preco_atual": item["cotacao_atual"],
                     "variacao_diaria": "+1.85%",
                     "variacao_posicao": f"{var:+.2f}%",
-                    "mensagem": f"Cotação simulada: {t} a R$ {item['cotacao_atual']:,.2f}, com {var:+.2f}% na sua posição de demonstração, senhor."
+                    "mensagem": f"Cotação simulada de {t}… não é o preço real de mercado: R$ {item['cotacao_atual']:,.2f} ({var:+.2f}% na posição de demonstração)."
                 }
 
         # Valores referenciais dinâmicos
@@ -131,7 +131,7 @@ class GoogleFinancePlugin(JarvisPlugin):
             "nome": f"Ativo de Mercado ({t})",
             "preco_atual": preco_ref,
             "variacao_diaria": "+0.95%",
-            "mensagem": f"Cotação simulada de {t}: R$ {preco_ref:,.2f}. Valor de demonstração, senhor, não é o preço real de mercado."
+            "mensagem": f"Cotação simulada de {t}… não é o preço real de mercado: R$ {preco_ref:,.2f}."
         }
 
     def get_portfolio(self) -> dict:

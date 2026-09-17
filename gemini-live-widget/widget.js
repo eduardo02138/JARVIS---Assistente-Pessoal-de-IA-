@@ -459,9 +459,9 @@ function flushAudioQueue() {
 
 // ---------------- WEBSOCKET BRIDGE COM GEMINI LIVE ----------------
 async function connectLiveBackend() {
-    if (!jarvisSessionToken) {
-        await initSessionToken();
-    }
+    // Sempre revalida: quando o servidor reinicia sem JARVIS_TOKEN fixo, ele gera um
+    // token novo e o guardado em memória passa a ser recusado com código 1008.
+    await initSessionToken();
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/live`;
 

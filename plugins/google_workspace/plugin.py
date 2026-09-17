@@ -189,5 +189,5 @@ class GoogleWorkspacePlugin(JarvisPlugin):
             "mock": True,
             "executado_externamente": False,
             "nota": nota,
-            "mensagem": f"Ideia registrada na simulação do Google Keep: '{title}'. Ela existe só nesta sessão; não há sincronização com seus dispositivos ainda."
+            "mensagem": f"Ideia registrada na simulação do Google Keep: '{title}'. existe só nesta sessão; não há sincronização."
         }

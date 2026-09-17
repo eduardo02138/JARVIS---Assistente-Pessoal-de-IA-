@@ -490,7 +490,7 @@ function flushAudioQueue() {
 // ---------------- WEBSOCKET: CONEXÃO COM O BACKEND ----------------
 async function connectWebSocket() {
     if (!jarvisSessionToken) {
-        await initSessionToken();
+        await initSessionToken();  // revalida a cada conexão: o servidor pode ter reiniciado
     }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/live`;
