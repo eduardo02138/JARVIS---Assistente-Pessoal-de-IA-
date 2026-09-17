@@ -4,6 +4,22 @@
  * (Vozes & Microfone), VU Meter em tempo real e Web Audio.
  */
 
+let jarvisSessionToken = "";
+async function initSessionToken() {
+    try {
+        const res = await fetch("/api/auth/session");
+        if (res.ok) {
+            const data = await res.json();
+            jarvisSessionToken = data.token;
+            return jarvisSessionToken;
+        }
+    } catch (e) {
+        console.warn("Falha ao inicializar token local no widget:", e);
+    }
+    return "";
+}
+initSessionToken();
+
 // Detecta se está rodando dentro do App Desktop nativo
 if (window.location.search.includes("app=1")) {
     document.body.classList.add("app-mode");
@@ -442,7 +458,10 @@ function flushAudioQueue() {
 }
 
 // ---------------- WEBSOCKET BRIDGE COM GEMINI LIVE ----------------
-function connectLiveBackend() {
+async function connectLiveBackend() {
+    if (!jarvisSessionToken) {
+        await initSessionToken();
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/live`;
 
@@ -454,7 +473,8 @@ function connectLiveBackend() {
         state.ws.send(JSON.stringify({
             type: "init",
             voice: state.voice,
-            model: state.model
+            model: state.model,
+            token: jarvisSessionToken
         }));
     };
 

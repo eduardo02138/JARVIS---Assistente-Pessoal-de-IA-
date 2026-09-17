@@ -1,14 +1,16 @@
 let jarvisSessionToken = "";
 async function initSessionToken() {
     try {
-        const res = await fetch("/api/auth/token");
+        const res = await fetch("/api/auth/session");
         if (res.ok) {
             const data = await res.json();
             jarvisSessionToken = data.token;
+            return jarvisSessionToken;
         }
     } catch (e) {
         console.warn("Falha ao inicializar token local:", e);
     }
+    return "";
 }
 initSessionToken();
 
@@ -473,7 +475,10 @@ function flushAudioQueue() {
 }
 
 // ---------------- WEBSOCKET: CONEXÃO COM O BACKEND ----------------
-function connectWebSocket() {
+async function connectWebSocket() {
+    if (!jarvisSessionToken) {
+        await initSessionToken();
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/live`;
 
@@ -483,11 +488,12 @@ function connectWebSocket() {
     state.ws = new WebSocket(wsUrl);
 
     state.ws.onopen = () => {
-        // Envia mensagem de inicialização com configurações
+        // Envia mensagem de inicialização com configurações e token de autenticação
         state.ws.send(JSON.stringify({
             type: 'init',
             voice: state.voice,
-            model: state.model
+            model: state.model,
+            token: jarvisSessionToken
         }));
     };
 

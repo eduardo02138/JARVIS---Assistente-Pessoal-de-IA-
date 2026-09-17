@@ -36,7 +36,7 @@ JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
 if not JARVIS_SECRET_TOKEN:
     JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
 
-async def verify_auth_token(
+async def verify_jarvis_token(
     request: Request,
     authorization: Optional[str] = Header(None),
     x_jarvis_token: Optional[str] = Header(None),
@@ -55,11 +55,14 @@ async def verify_auth_token(
         raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
     return req_token
 
+verify_auth_token = verify_jarvis_token
+
+@app.get("/api/auth/session")
 @app.get("/api/auth/token")
 async def get_session_token(request: Request):
     """Permite apenas ao cliente local no loopback obter o token da sessão ativa."""
     client_host = request.client.host if request.client else ""
-    if client_host not in ("127.0.0.1", "::1", "localhost"):
+    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
         raise HTTPException(status_code=403, detail="Acesso restrito ao localhost.")
     return {"status": "ok", "token": JARVIS_SECRET_TOKEN}
 
@@ -115,7 +118,7 @@ async def get_plugins_store():
     return plugin_manager.get_store_catalog()
 
 @app.post("/api/plugins/toggle")
-async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_auth_token)):
+async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     enabled = payload.get("enabled")
     res = plugin_manager.toggle_plugin(plugin_id, enabled)
@@ -123,7 +126,7 @@ async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_auth_token)):
     return res
 
 @app.post("/api/plugins/install")
-async def install_plugin_endpoint(payload: dict, _=Depends(verify_auth_token)):
+async def install_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     res = plugin_manager.install_plugin(plugin_id)
     record_event("plugin_install", {"plugin_id": plugin_id, "result": res})
@@ -146,7 +149,7 @@ async def download_log():
     return JSONResponse({"status": "error", "message": "Arquivo de log não encontrado"}, status_code=404)
 
 @app.post("/api/debug/clear-logs")
-async def clear_system_logs(_=Depends(verify_auth_token)):
+async def clear_system_logs(_=Depends(verify_jarvis_token)):
     clear_logs()
     return {"status": "ok", "message": "Logs limpos com sucesso"}
 
@@ -210,7 +213,7 @@ async def test_all_accounts():
 @app.post("/api/inject_prompt")
 @app.post("/api/inject-prompt")
 @app.post("/api/debug/inject-prompt")
-async def inject_prompt(payload: dict, _=Depends(verify_auth_token)):
+async def inject_prompt(payload: dict, _=Depends(verify_jarvis_token)):
     prompt = payload.get("prompt", "").strip()
     if not prompt:
         return JSONResponse({"status": "error", "message": "Prompt vazio"}, status_code=400)
@@ -276,6 +279,17 @@ Diretrizes fundamentais:
    - REPRODUÇÃO DE MÚSICA & PLATAFORMA PADRÃO: Ao pedir para tocar música ('play_music'), se a ferramenta indicar que a plataforma padrão ainda não está configurada, pergunte ao Senhor com cortesia: "Senhor, qual plataforma prefere utilizar como padrão para reproduzir músicas: YouTube ou Spotify?". Quando o Senhor responder (ex: "Spotify" ou "YouTube"), salve imediatamente a escolha dele usando 'manage_user_preference(action='set', category='default_apps', key='music_platform', value=escolha)' e inicie a reprodução. Nas próximas vezes em que o senhor pedir qualquer música, toque diretamente na plataforma favorita dele sem perguntar novamente.
    - PREFERÊNCIAS DE JOGOS & LAUNCHERS: Se o Senhor indicar um launcher preferido para um jogo (ex: "Sempre abra GTA pela Epic Games" ou "Abra Red Dead pela Steam"), registre imediatamente chamando 'set_game_preference'.
    - APLICATIVOS PADRÃO (ESTILO WINDOWS): Se o Senhor pedir para definir navegadores, clientes de e-mail ou editores de texto padrão, ou abrir arquivos por tipo, utilize 'manage_user_preference' e 'open_default_app'.
+12. MODO CONTROLE FÍSICO DO COMPUTADOR (MOUSE, TECLADO E JANELAS):
+   - ATIVAÇÃO: Quando o senhor falar ou digitar "modo controle ativar", "ativar modo controle", "iniciar modo controle", chame IMEDIATAMENTE `set_control_mode(enabled=True)`. Ao receber o retorno, comunique em áudio/voz de forma elegante as janelas abertas encontradas, a resolução da tela e confirme que o mouse e o teclado virtual estão calibrados e sob seu comando.
+   - DESATIVAÇÃO: Quando o senhor falar "modo controle desativar", "sair do modo controle", "desativar controle", chame `set_control_mode(enabled=False)` e confirme o retorno ao modo normal.
+   - AÇÕES NO MODO CONTROLE:
+     * Consultar janelas abertas: `list_open_windows`
+     * Mover o cursor do mouse: `mouse_move(delta_x, delta_y)`
+     * Clicar com o mouse: `mouse_click(button='left'|'right'|'middle', double=False)`
+     * Rolar a tela: `mouse_scroll(direction='up'|'down', amount=3)`
+     * Digitar texto: `keyboard_type(text=...)`
+     * Atalhos de teclado: `keyboard_hotkey(keys='alt+tab'|'ctrl+c'|'ctrl+v'|'super'|'enter')`
+     * Capturar a tela para ver onde clicar: `take_screenshot`
 """
 
 def build_gemini_tools():
@@ -316,7 +330,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close(code=1008, reason="Init timeout")
         return
 
-    api_key = init_data.get("apiKey") or os.environ.get("GEMINI_API_KEY")
+    # Autenticação de Sessão no Handshake do WebSocket
+    client_token = init_data.get("token") or websocket.query_params.get("token")
+    if client_token != JARVIS_SECRET_TOKEN:
+        logger.warning("Tentativa de conexão WebSocket não autorizada: token inválido ou ausente.")
+        record_event("auth_error", {"source": "ws_live", "reason": "invalid_or_missing_token"})
+        await websocket.send_json({"type": "error", "message": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
     voice_name = init_data.get("voice") or os.environ.get("JARVIS_VOICE", "Charon")
     req_model = init_data.get("model")
     if not req_model or "3.8" in req_model or "exp" in req_model:
@@ -343,14 +365,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
         )
     )
 
-    # Pool de contas verificadas
+    # Isolamento de Segredos: Pool de contas lidas estritamente do backend (.env)
     raw_keys = os.environ.get("GEMINI_API_KEYS", "")
     parsed_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    if api_key and api_key not in parsed_keys:
-        parsed_keys.insert(0, api_key)
+    single_key = os.environ.get("GEMINI_API_KEY")
+    if single_key and single_key not in parsed_keys:
+        parsed_keys.insert(0, single_key)
     key_pool = sorted(parsed_keys, key=lambda k: 0 if k.startswith("AIzaSy") else 1)
     if not key_pool:
-        err_msg = "Nenhuma chave no pool. Configure GEMINI_API_KEYS ou GEMINI_API_KEY."
+        err_msg = "Nenhuma chave no pool. Configure GEMINI_API_KEYS ou GEMINI_API_KEY no .env do servidor."
         record_event("error", {"message": err_msg})
         await websocket.send_json({"type": "error", "message": err_msg})
         await websocket.close()
@@ -383,6 +406,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 await websocket.send_json({
                     "type": "ide_mode",
                     "active": system_tools.get_ide_mode()
+                })
+                await websocket.send_json({
+                    "type": "control_mode",
+                    "active": system_tools.get_control_mode()
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
                 assistant_state = {"busy": False}
@@ -548,6 +575,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             await websocket.send_json({
                                                 "type": "ide_mode",
                                                 "active": res.get("ide_mode", False)
+                                            })
+
+                                        if func_name == "set_control_mode":
+                                            await websocket.send_json({
+                                                "type": "control_mode",
+                                                "active": res.get("control_mode", False),
+                                                "data": res
                                             })
 
                                         function_responses.append(

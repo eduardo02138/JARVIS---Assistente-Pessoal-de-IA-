@@ -29,6 +29,18 @@ server = MCPServer(
 
 JARVIS_API_BASE = "http://localhost:8000"
 
+def _get_jarvis_token() -> str:
+    token = os.environ.get("JARVIS_TOKEN")
+    if token:
+        return token
+    try:
+        req = urllib.request.Request(f"{JARVIS_API_BASE}/api/auth/session")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return data.get("token", "")
+    except Exception:
+        return ""
+
 @server.tool()
 def jarvis_get_telemetry() -> str:
     """
@@ -58,10 +70,15 @@ def jarvis_notify_voice(message: str) -> str:
     url = f"{JARVIS_API_BASE}/api/inject_prompt"
     data = json.dumps({"prompt": prompt_payload}).encode("utf-8")
     
+    headers = {"Content-Type": "application/json"}
+    token = _get_jarvis_token()
+    if token:
+        headers["X-Jarvis-Token"] = token
+
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"}
+        headers=headers
     )
     
     try:

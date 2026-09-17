@@ -32,6 +32,7 @@ import psutil
 import shutil
 import glob
 import preferences_manager
+import controller_engine
 
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
 
@@ -761,6 +762,92 @@ def get_ide_mode() -> bool:
     """Retorna True se o modo IDE estiver ativo."""
     return IDE_MODE_ACTIVE
 
+# Estado global do Modo Controle (Mouse, Teclado e Janelas)
+CONTROL_MODE_ACTIVE = False
+
+def get_control_mode() -> bool:
+    """Retorna True se o modo Controle de periféricos estiver ativo."""
+    return CONTROL_MODE_ACTIVE
+
+def set_control_mode(enabled: bool) -> dict:
+    """Ativa ou desativa o Modo Controle físico de mouse, teclado e janelas."""
+    global CONTROL_MODE_ACTIVE
+    CONTROL_MODE_ACTIVE = bool(enabled)
+    if CONTROL_MODE_ACTIVE:
+        windows = controller_engine.get_open_windows()
+        resolution = controller_engine.get_screen_geometry()
+        mouse_pos = controller_engine.get_mouse_position()
+        titles = [w["titulo"] for w in windows]
+        titles_summary = ", ".join(titles[:6])
+        if len(titles) > 6:
+            titles_summary += f" e mais {len(titles) - 6} outros"
+
+        msg = (
+            f"Modo Controle ativado com sucesso, senhor. "
+            f"Resolução do monitor identificada em {resolution}. "
+            f"Janelas e aplicativos abertos: {titles_summary}. "
+            f"O mouse e o teclado virtual estão calibrados e sob seu comando."
+        )
+        return {
+            "sucesso": True,
+            "control_mode": True,
+            "resolucao": resolution,
+            "mouse_posicao": mouse_pos,
+            "janelas_abertas": windows,
+            "total_janelas": len(windows),
+            "mensagem": msg
+        }
+    else:
+        return {
+            "sucesso": True,
+            "control_mode": False,
+            "mensagem": "Modo Controle desativado, senhor. Retornando ao modo de assistência padrão."
+        }
+
+def list_open_windows() -> dict:
+    """Lista detalhadamente todas as janelas e programas abertos no computador."""
+    windows = controller_engine.get_open_windows()
+    resolution = controller_engine.get_screen_geometry()
+    titles = [w["titulo"] for w in windows]
+    return {
+        "sucesso": True,
+        "total": len(windows),
+        "resolucao_tela": resolution,
+        "janelas": windows,
+        "mensagem": f"Senhor, identifiquei {len(windows)} janela(s) e aplicativo(s) em execução: " + ", ".join(titles[:6]) + ("..." if len(titles) > 6 else ".")
+    }
+
+def mouse_move(delta_x: int, delta_y: int) -> dict:
+    """Desloca o cursor do mouse em coordenadas relativas (delta_x, delta_y)."""
+    if not CONTROL_MODE_ACTIVE:
+        return {"sucesso": False, "mensagem": "O Modo Controle precisa estar ativado para operar o mouse, senhor. Diga 'ativar modo controle'."}
+    return controller_engine.move_mouse(delta_x, delta_y)
+
+def mouse_click(button: str = "left", double: bool = False) -> dict:
+    """Executa um clique com o mouse ('left', 'right', 'middle') ou duplo-clique."""
+    if not CONTROL_MODE_ACTIVE:
+        return {"sucesso": False, "mensagem": "O Modo Controle precisa estar ativado para operar o mouse, senhor. Diga 'ativar modo controle'."}
+    return controller_engine.click_mouse(button, double)
+
+def mouse_scroll(direction: str = "down", amount: int = 3) -> dict:
+    """Rola a página ou janela usando a roda do mouse ('up' ou 'down')."""
+    if not CONTROL_MODE_ACTIVE:
+        return {"sucesso": False, "mensagem": "O Modo Controle precisa estar ativado para operar o mouse, senhor. Diga 'ativar modo controle'."}
+    return controller_engine.scroll_mouse(direction, amount)
+
+def keyboard_type(text: str) -> dict:
+    """Digita uma sequência de texto na janela ativa através do teclado virtual."""
+    if not CONTROL_MODE_ACTIVE:
+        return {"sucesso": False, "mensagem": "O Modo Controle precisa estar ativado para usar o teclado, senhor. Diga 'ativar modo controle'."}
+    return controller_engine.type_text(text)
+
+def keyboard_hotkey(keys: str) -> dict:
+    """Executa um atalho de teclado na janela ativa (ex: 'ctrl+c', 'alt+tab', 'super', 'enter')."""
+    if not CONTROL_MODE_ACTIVE:
+        return {"sucesso": False, "mensagem": "O Modo Controle precisa estar ativado para acionar atalhos, senhor. Diga 'ativar modo controle'."}
+    return controller_engine.press_hotkey(keys)
+
+
 def antigravity_open_gemini_bridge() -> dict:
     """Abre a pasta 'gemini' de auditoria e canal direto de mensagens na IDE Antigravity."""
     import gemini_bridge
@@ -1079,6 +1166,105 @@ GEMINI_FUNCTION_DECLARATIONS = [
             },
             "required": ["app_type"]
         }
+    },
+    {
+        "name": "set_control_mode",
+        "description": "Ativa ou desativa o Modo Controle físico do computador. Use enabled=true quando o senhor disser 'modo controle ativar' ou 'ativar modo controle'. Ao ativar, faz a varredura completa das janelas abertas e calibra o mouse e teclado virtual. Use enabled=false para desativar.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True para ativar o Modo Controle, False para desativar."
+                }
+            },
+            "required": ["enabled"]
+        }
+    },
+    {
+        "name": "list_open_windows",
+        "description": "Lista todas as janelas e programas abertos em execução no computador (ex: Steam, VS Code, Antigravity, Navegador, etc.).",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "mouse_move",
+        "description": "Desloca o cursor do mouse na tela através de deslocamentos relativos (delta_x, delta_y). Requer Modo Controle ativo.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "delta_x": {
+                    "type": "INTEGER",
+                    "description": "Deslocamento horizontal em pixels (positivo para direita, negativo para esquerda)."
+                },
+                "delta_y": {
+                    "type": "INTEGER",
+                    "description": "Deslocamento vertical em pixels (positivo para baixo, negativo para cima)."
+                }
+            },
+            "required": ["delta_x", "delta_y"]
+        }
+    },
+    {
+        "name": "mouse_click",
+        "description": "Executa um clique com o mouse ('left', 'right', 'middle') ou duplo-clique. Requer Modo Controle ativo.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "button": {
+                    "type": "STRING",
+                    "description": "Botão a ser clicado: 'left' (esquerdo), 'right' (direito) ou 'middle' (meio). Padrão é 'left'."
+                },
+                "double": {
+                    "type": "BOOLEAN",
+                    "description": "True para executar duplo-clique rápido."
+                }
+            }
+        }
+    },
+    {
+        "name": "mouse_scroll",
+        "description": "Rola a tela/página usando o scroll do mouse para cima ('up') ou para baixo ('down'). Requer Modo Controle ativo.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "direction": {
+                    "type": "STRING",
+                    "description": "Direção da rolagem: 'up' (cima) ou 'down' (baixo)."
+                },
+                "amount": {
+                    "type": "INTEGER",
+                    "description": "Quantidade de passos/linhas de rolagem (padrão: 3)."
+                }
+            }
+        }
+    },
+    {
+        "name": "keyboard_type",
+        "description": "Digita uma frase ou texto diretamente na janela ou campo de texto ativo. Requer Modo Controle ativo.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "text": {
+                    "type": "STRING",
+                    "description": "O texto a ser digitado pelo teclado virtual."
+                }
+            },
+            "required": ["text"]
+        }
+    },
+    {
+        "name": "keyboard_hotkey",
+        "description": "Executa atalhos de teclado na janela ativa (ex: 'ctrl+c', 'ctrl+v', 'alt+tab', 'super', 'enter', 'esc'). Requer Modo Controle ativo.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "keys": {
+                    "type": "STRING",
+                    "description": "Combinação de teclas separadas por '+' (ex: 'alt+tab', 'ctrl+shift+t', 'ctrl+c', 'super')."
+                }
+            },
+            "required": ["keys"]
+        }
     }
 ]
 
@@ -1104,6 +1290,13 @@ TOOL_REGISTRY = {
     "manage_user_preference": manage_user_preference,
     "set_game_preference": set_game_preference,
     "open_default_app": open_default_app,
+    "set_control_mode": set_control_mode,
+    "list_open_windows": list_open_windows,
+    "mouse_move": mouse_move,
+    "mouse_click": mouse_click,
+    "mouse_scroll": mouse_scroll,
+    "keyboard_type": keyboard_type,
+    "keyboard_hotkey": keyboard_hotkey,
 }
 
 # Cópias imutáveis de referência para reconstrução dinâmica

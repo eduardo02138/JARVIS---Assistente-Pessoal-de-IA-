@@ -39,6 +39,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "live_stream_read_chat_summary": RiskLevel.READ,
     "game_companion_get_strategy": RiskLevel.READ,
     "smart_home_get_climate": RiskLevel.READ,
+    "list_open_windows": RiskLevel.READ,
 
     # LOW_WRITE: Ações locais seguras
     "adjust_volume": RiskLevel.LOW_WRITE,
@@ -47,6 +48,12 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "play_music": RiskLevel.LOW_WRITE,
     "take_quick_note": RiskLevel.LOW_WRITE,
     "set_ide_mode": RiskLevel.LOW_WRITE,
+    "set_control_mode": RiskLevel.LOW_WRITE,
+    "mouse_move": RiskLevel.LOW_WRITE,
+    "mouse_click": RiskLevel.LOW_WRITE,
+    "mouse_scroll": RiskLevel.LOW_WRITE,
+    "keyboard_type": RiskLevel.LOW_WRITE,
+    "keyboard_hotkey": RiskLevel.LOW_WRITE,
     "antigravity_open_workspace": RiskLevel.LOW_WRITE,
     "antigravity_open_file": RiskLevel.LOW_WRITE,
     "antigravity_open_gemini_bridge": RiskLevel.LOW_WRITE,
