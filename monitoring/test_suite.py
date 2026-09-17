@@ -707,6 +707,115 @@ def test_defaults_de_preferencias_isolados():
     return isolado
 
 
+def test_desligar_controle_de_outra_sessao():
+    """O caminho real de set_control_mode(False) não pode derrubar a lease alheia."""
+    from policy_engine import policy_engine
+
+    policy_engine.grant_control_lease(owner="sessao-A", ttl_s=60)
+
+    # Caminho real do servidor: a ferramenta só executa se a decisão permitir
+    dec_b = policy_engine.evaluate("set_control_mode", {"enabled": False}, session_id="sessao-B")
+    bloqueado = not dec_b.allowed
+    lease_intacta = policy_engine.is_control_lease_active("sessao-A")
+
+    # A sessão dona continua desligando sem confirmação
+    dec_a = policy_engine.evaluate("set_control_mode", {"enabled": False}, session_id="sessao-A")
+    dona_desliga = dec_a.allowed and not dec_a.requires_confirmation
+    policy_engine.revoke_control_lease()
+
+    # Sem lease de ninguém, qualquer sessão pode desligar
+    dec_livre = policy_engine.evaluate("set_control_mode", {"enabled": False}, session_id="sessao-C")
+
+    success = bloqueado and lease_intacta and dona_desliga and dec_livre.allowed
+    detail = (
+        f"B bloqueada: {bloqueado} | lease de A intacta: {lease_intacta} | "
+        f"A desliga: {dona_desliga} | sem lease qualquer um desliga: {dec_livre.allowed}"
+    )
+    log_test("Desligar Controle Respeita a Sessão Dona", success, detail)
+    assert success
+    return success
+
+
+async def _executar_taskgroup_de_teste():
+    """Reproduz o arranjo de workers do servidor e devolve quem foi cancelado."""
+    estado = {"ws": "rodando", "injection": "rodando"}
+
+    async def worker_longo(nome):
+        try:
+            while True:
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            estado[nome] = "cancelado"
+            raise
+
+    async def worker_gemini():
+        await asyncio.sleep(0.1)
+        raise RuntimeError("falha simulada da sessão Gemini")
+
+    propagou = False
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(worker_longo("ws"))
+            tg.create_task(worker_longo("injection"))
+            tg.create_task(worker_gemini())
+    except* RuntimeError:
+        propagou = True
+    return estado, propagou
+
+
+async def test_falha_do_gemini_encerra_workers():
+    """Erro no loop do Gemini precisa cancelar os demais workers e subir para o failover."""
+    import inspect
+    import server
+
+    estado, propagou = await _executar_taskgroup_de_teste()
+    cancelou_irmaos = estado["ws"] == "cancelado" and estado["injection"] == "cancelado"
+
+    # O worker real precisa propagar o erro em vez de encerrar em silêncio
+    fonte = inspect.getsource(server.websocket_live_endpoint)
+    trecho = fonte.split("Erro no loop contínuo do Gemini Live")[1][:120]
+    propaga_no_servidor = "raise" in trecho and "break" not in trecho
+
+    success = cancelou_irmaos and propagou and propaga_no_servidor
+    detail = (
+        f"irmãos cancelados: {cancelou_irmaos} | exceção propagada: {propagou} | "
+        f"servidor propaga o erro: {propaga_no_servidor}"
+    )
+    log_test("Falha do Gemini Encerra os Workers da Sessão", success, detail)
+    assert success
+    return success
+
+
+def test_mensagens_de_mock_sao_honestas():
+    """A mensagem falada pelo JARVIS precisa avisar que a ação foi simulada."""
+    from plugin_manager import plugin_manager
+
+    escritas_simuladas = [
+        ("google_workspace", "create_draft", ("ana@exemplo.com", "Assunto", "Corpo")),
+        ("google_workspace", "append_doc", ("Documento", "conteúdo")),
+        ("google_workspace", "create_keep_note", ("Nota", "conteúdo")),
+        ("google_finance", "add_asset", ("PETR4", 10, 30.0)),
+        ("google_finance", "get_quote", ("BTC",)),
+        ("deep_research", "start_research", ("tema qualquer",)),
+    ]
+    marcadores = ("simula", "demonstração", "demonstracao", "fictíci")
+    falhas = []
+    for plugin_id, metodo, args in escritas_simuladas:
+        plugin = plugin_manager._plugins.get(plugin_id)
+        if plugin is None or not hasattr(plugin, metodo):
+            falhas.append(f"{plugin_id}.{metodo} inexistente")
+            continue
+        msg = str(getattr(plugin, metodo)(*args).get("mensagem", ""))
+        if not any(m in msg.lower() for m in marcadores):
+            falhas.append(f"{plugin_id}.{metodo}: \"{msg[:70]}\"")
+
+    success = not falhas
+    detail = f"{len(escritas_simuladas)} mensagens avisam que são simulação" if success else f"Mensagens enganosas: {falhas}"
+    log_test("Mensagens de Mock Declaram a Simulação", success, detail)
+    assert success
+    return success
+
+
 def test_controller_sem_evdev():
     """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
     import importlib
@@ -769,6 +878,8 @@ async def run_p0_suite():
     test_lease_expirada_desativa_modo()
     test_lease_nao_revogavel_por_outra_sessao()
     test_encerramento_de_sessao_libera_controle()
+    test_desligar_controle_de_outra_sessao()
+    await test_falha_do_gemini_encerra_workers()
     test_workers_com_taskgroup()
     test_defaults_de_preferencias_isolados()
     test_confirmation_flow_wired()
@@ -777,6 +888,7 @@ async def run_p0_suite():
     test_plugin_lifecycle_purge()
     test_mock_plugin_transparency()
     test_risco_de_escrita_externa()
+    test_mensagens_de_mock_sao_honestas()
     test_sem_shell_true_em_plugins()
     test_game_timer_expiration()
     test_session_endpoint()

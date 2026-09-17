@@ -645,7 +645,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                 lease = policy_engine.grant_control_lease(owner=sessao_id)
                                                 record_event("control_lease_granted", lease)
                                             else:
-                                                lease = policy_engine.revoke_control_lease()
+                                                lease = policy_engine.revoke_control_lease(session_id=sessao_id)
                                                 record_event("control_lease_revoked", lease)
                                             await websocket.send_json({
                                                 "type": "control_mode",
@@ -666,8 +666,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         await session.send_tool_response(function_responses=function_responses)
 
                         except Exception as gemini_err:
+                            # Propaga: o TaskGroup cancela os demais workers e o handler externo
+                            # faz o failover de conta. Encerrar em silêncio deixava a sessão zumbi.
                             logger.error(f"Erro no loop contínuo do Gemini Live: {gemini_err}")
-                            break
+                            raise
 
                 # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
                 async def control_lease_worker():

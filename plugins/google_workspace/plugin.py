@@ -189,5 +189,5 @@ class GoogleWorkspacePlugin(JarvisPlugin):
             "mock": True,
             "executado_externamente": False,
             "nota": nota,
-            "mensagem": f"Ideia capturada no Google Keep: '{title}'. Está salva e acessível em todos os seus dispositivos, senhor."
+            "mensagem": f"Ideia registrada na simulação do Google Keep: '{title}'. Ela existe só nesta sessão; não há sincronização com seus dispositivos ainda."
         }

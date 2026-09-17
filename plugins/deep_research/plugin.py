@@ -1,7 +1,7 @@
 """
 Plug-in: Pesquisa Profunda Assíncrona (Deep Research 🤝 Gemini Live)
 Executa varreduras aprofundadas e relatórios técnicos em segundo plano,
-notificando o usuário por voz e HUD assim que o dossiê estiver completo.
+com relatório simulado ao final. O evento de conclusão é registrado na telemetria (deep_research_completed).
 """
 
 import time
@@ -114,7 +114,7 @@ class DeepResearchPlugin(JarvisPlugin):
             "research_id": research_id,
             "topico": topic,
             "status": "processando_segundo_plano",
-            "mensagem": f"Iniciei a Pesquisa Profunda sobre '{topic}' em segundo plano, senhor. Fique à vontade para fechar este chat ou tratar de outros assuntos. Notificarei assim que o relatório estiver concluído."
+            "mensagem": f"Iniciei a Pesquisa Profunda simulada sobre '{topic}' em segundo plano, senhor. O relatório é de demonstração: nenhuma fonte externa é consultada. Consulte o resultado com deep_research_get_report."
         }
 
     async def _async_research_worker(self, research_id: str, topic: str, focus_areas: str):
@@ -130,7 +130,7 @@ class DeepResearchPlugin(JarvisPlugin):
                 dossie = (
                     f"# Relatório de Pesquisa Profunda: {topic}\n"
                     f"**Foco**: {focus_areas if focus_areas else 'Abrangência Geral'}\n\n"
-                    f"### 1. Panorama Geral\nAnálise de múltiplos pontos de dados concluída.\n\n"
+                    f"### 1. Panorama Geral\nRelatório de demonstração: conteúdo simulado, sem consulta a fontes externas.\n\n"
                     f"### 2. Principais Conclusões\n- Adoção acelerada das tecnologias analisadas.\n"
                     f"- Benefícios mensuráveis em eficiência operacional e segurança.\n\n"
                     f"### 3. Recomendações Táticas\nRecomenda-se prosseguir com integração faseada mantendo telemetria ativa."
@@ -154,6 +154,17 @@ class DeepResearchPlugin(JarvisPlugin):
                     })
                 except Exception:
                     pass
+
+                # Avisa o usuário na sessão ativa: sem isso, o dossiê ficava só no log
+                try:
+                    import server
+                    server.active_session_queue.put_nowait(
+                        f"[NOTIFICAÇÃO DO SISTEMA] A pesquisa profunda simulada sobre '{topic}' "
+                        f"({research_id}) foi concluída. Avise o usuário em uma frase e ofereça o "
+                        f"relatório via deep_research_get_report."
+                    )
+                except Exception as notif_err:
+                    logger.info(f"Notificação de conclusão não entregue à sessão ativa: {notif_err}")
         except asyncio.CancelledError:
             logger.info(f"Pesquisa '{research_id}' cancelada.")
         except Exception as e:
@@ -186,7 +197,7 @@ class DeepResearchPlugin(JarvisPlugin):
                 "research_id": research_id,
                 "status": entry["status"],
                 "progresso": entry["progresso"],
-                "mensagem": f"A pesquisa sobre '{entry['topic']}' ainda está em andamento ({entry['progresso']}% concluído). Emitirei o alerta final em instantes."
+                "mensagem": f"A pesquisa sobre '{entry['topic']}' ainda está em andamento ({entry['progresso']}% concluído na simulação)."
             }
 
         return {

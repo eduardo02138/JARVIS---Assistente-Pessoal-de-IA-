@@ -274,8 +274,19 @@ class PolicyEngine:
                 metadata={"args": args}
             )
 
-        # Desligar o Modo Controle é sempre permitido: revogar autoridade nunca pode travar
+        # Desligar o Modo Controle é imediato para a sessão dona da autoridade.
+        # Outra sessão não derruba o controle de quem recebeu a lease.
         if tool_name == "set_control_mode" and args.get("enabled") is False:
+            dono = self._control_lease_owner
+            if session_id is not None and dono is not None and dono != session_id:
+                return PolicyDecision(
+                    tool_name=tool_name,
+                    risk_level=RiskLevel.LOW_WRITE,
+                    allowed=False,
+                    requires_confirmation=False,
+                    reason="A autoridade de controle pertence a outra sessão: ela mesma precisa desligar o Modo Controle.",
+                    metadata=self.control_lease_status()
+                )
             return PolicyDecision(
                 tool_name=tool_name,
                 risk_level=RiskLevel.LOW_WRITE,

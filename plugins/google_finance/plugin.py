@@ -1,6 +1,6 @@
 """
 Plug-in: Google Finance & Gestão de Portfólio Inteligente
-Permite rastrear cotações em tempo real, consolidar portfólios de investimento,
+Plug-in em modo demonstração: as cotações e o portfólio são simulados localmente,
 analisar alocação de ativos e gerar insights financeiros por comando de voz.
 """
 
@@ -18,7 +18,7 @@ class GoogleFinancePlugin(JarvisPlugin):
             version="1.0.0",
             category="general",
             icon="📈",
-            description="Cotações em tempo real de ativos (B3, S&P 500, Cripto), consolidação de carteira, análise de alocação e insights de investimentos."
+            description="SIMULADO: cotações de demonstração (B3, S&P 500, Cripto), carteira fictícia, análise de alocação e insights. Não consulta o Google Finance real."
         ))
         # Carteira padrão inicial do investidor
         self.portfolio: List[Dict] = [
@@ -31,7 +31,7 @@ class GoogleFinancePlugin(JarvisPlugin):
     def on_load(self):
         self.register_tool(
             name="finance_get_quote",
-            description="Consulta a cotação e variação em tempo real de uma ação, índice ou criptomoeda (ex: 'PETR4', 'NVDA', 'BTC', 'ETH', 'IBOV', 'SP500').",
+            description="SIMULADO: devolve uma cotação de demonstração de ação, índice ou criptomoeda (ex: 'PETR4', 'NVDA', 'BTC'). Os valores não vêm do mercado real.",
             parameters={
                 "type": "OBJECT",
                 "properties": {
@@ -112,7 +112,7 @@ class GoogleFinancePlugin(JarvisPlugin):
                     "preco_atual": item["cotacao_atual"],
                     "variacao_diaria": "+1.85%",
                     "variacao_posicao": f"{var:+.2f}%",
-                    "mensagem": f"O ativo {t} está cotado a R$ {item['cotacao_atual']:,.2f} com valorização de {var:+.2f}% na sua posição, senhor."
+                    "mensagem": f"Cotação simulada: {t} a R$ {item['cotacao_atual']:,.2f}, com {var:+.2f}% na sua posição de demonstração, senhor."
                 }
 
         # Valores referenciais dinâmicos
@@ -131,7 +131,7 @@ class GoogleFinancePlugin(JarvisPlugin):
             "nome": f"Ativo de Mercado ({t})",
             "preco_atual": preco_ref,
             "variacao_diaria": "+0.95%",
-            "mensagem": f"Cotação de {t} no Google Finance: R$ {preco_ref:,.2f} (+0.95% no pregão de hoje)."
+            "mensagem": f"Cotação simulada de {t}: R$ {preco_ref:,.2f}. Valor de demonstração, senhor, não é o preço real de mercado."
         }
 
     def get_portfolio(self) -> dict:
