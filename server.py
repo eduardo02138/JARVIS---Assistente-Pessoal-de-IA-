@@ -563,17 +563,8 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     session_id = payload.get("sessao") or payload.get("session_id")
     user_id = payload.get("usuario") or payload.get("user_id") or "local"
 
-    # Se action_id foi fornecido, resolve sessão correspondente se veio como default/vazio
-    if action_id:
-        pending_obj = policy_engine._pending_actions.get(action_id)
-        if pending_obj:
-            if not session_id or session_id in ("sessao-principal", "default"):
-                session_id = pending_obj.session_id or session_id
-            if user_id in ("local", "default") and pending_obj.user_id:
-                user_id = pending_obj.user_id
-
-    if not session_id:
-        return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' é obrigatório para confirmar ações."}, status_code=400)
+    if not session_id or session_id in ("sessao-principal", "default"):
+        return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório para confirmar ações."}, status_code=400)
 
     if not action_id:
         pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
