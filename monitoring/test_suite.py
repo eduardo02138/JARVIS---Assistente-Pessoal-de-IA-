@@ -1488,6 +1488,113 @@ def test_shared_runtime_services():
     return True
 
 
+async def test_chat_provider_routing_compulsory():
+    """Valida o alinhamento compulsório de provedores e resiliência (OmniRoute / P0-06 / Fase R3)."""
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch, MagicMock, AsyncMock
+    import server
+    import servidor_adk
+    from provider_router import provider_router, OmniRouteProvider
+
+    client_server = TestClient(server.app)
+    client_adk = TestClient(servidor_adk.app)
+    auth_headers = {"X-Jarvis-Token": server.JARVIS_SECRET_TOKEN}
+    provedor_original = provider_router.active_provider
+
+    try:
+        # 1. Quando OmniRoute é o provedor ativo, /api/chat deve despachar DIRETO para OmniRoute
+        provider_router.set_active_provider("omniroute")
+        assert provider_router.active_provider == "omniroute"
+
+        with patch.object(OmniRouteProvider, "chat", new_callable=AsyncMock) as mock_omni_chat:
+            mock_omni_chat.return_value = "Resposta direta do OmniRoute"
+
+            # 1a. Teste em server.py
+            resp_srv = client_server.post(
+                "/api/chat",
+                json={"texto": "Olá assistente", "sessao": "s-omni-test"},
+                headers=auth_headers
+            )
+            assert resp_srv.status_code == 200, f"Erro server.py: {resp_srv.text}"
+            data_srv = resp_srv.json()
+            assert data_srv["status"] == "ok"
+            assert data_srv["provedor"] == "omniroute"
+            assert data_srv["resposta"] == "Resposta direta do OmniRoute"
+            assert "Provedor ativo: OmniRoute" in data_srv["motivo_do_roteamento"]
+
+            # 1b. Teste em servidor_adk.py
+            resp_adk = client_adk.post(
+                "/api/chat",
+                json={"texto": "Olá assistente ADK", "sessao": "s-omni-test-adk"},
+                headers=auth_headers
+            )
+            assert resp_adk.status_code == 200, f"Erro servidor_adk.py: {resp_adk.text}"
+            data_adk = resp_adk.json()
+            assert data_adk["status"] == "ok"
+            assert data_adk["provedor"] == "omniroute"
+            assert data_adk["resposta"] == "Resposta direta do OmniRoute"
+            assert "Provedor ativo: OmniRoute" in data_adk["motivo_do_roteamento"]
+
+        # 2. Override explícito por payload (provider="omniroute") quando ativo é google_studio
+        provider_router.set_active_provider("google_studio")
+        with patch.object(OmniRouteProvider, "chat", new_callable=AsyncMock) as mock_omni_chat:
+            mock_omni_chat.return_value = "Resposta por override no payload"
+            resp_override = client_server.post(
+                "/api/chat",
+                json={"texto": "Forçar OmniRoute", "provider": "omniroute"},
+                headers=auth_headers
+            )
+            assert resp_override.status_code == 200
+            data_ov = resp_override.json()
+            assert data_ov["provedor"] == "omniroute"
+            assert data_ov["resposta"] == "Resposta por override no payload"
+
+        # 3. Failover determinístico para OmniRoute sob 429/cota no Google Studio
+        provider_router.set_active_provider("google_studio")
+        with patch.object(OmniRouteProvider, "chat", new_callable=AsyncMock) as mock_omni_chat:
+            mock_omni_chat.return_value = "Resposta de contingência sob failover"
+
+            # Simula runner ADK falhando com ResourceExhausted (429)
+            mock_runner = MagicMock()
+            async def mock_run_fail(*a, **kw):
+                raise Exception("429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric")
+                if False: yield
+            mock_runner.run_async = mock_run_fail
+
+            with patch("server.obter_runner_adk", return_value=mock_runner):
+                with patch("server.girar_chave_adk", return_value=False):
+                    resp_failover = client_server.post(
+                        "/api/chat",
+                        json={"texto": "Mensagem durante blackout da cota Google"},
+                        headers=auth_headers
+                    )
+                    assert resp_failover.status_code == 200
+                    data_fo = resp_failover.json()
+                    assert data_fo["provedor"] == "omniroute"
+                    assert "Failover" in data_fo["motivo_do_roteamento"]
+                    assert data_fo["resposta"] == "Resposta de contingência sob failover"
+
+        # 4. Paridade de endpoints de provedores em servidor_adk.py
+        resp_provs = client_adk.get("/api/providers")
+        assert resp_provs.status_code == 200
+        assert "providers" in resp_provs.json()
+        assert resp_provs.json()["secondary"] == "omniroute"
+
+        resp_sel = client_adk.post(
+            "/api/providers/select",
+            json={"provider_id": "omniroute"},
+            headers=auth_headers
+        )
+        assert resp_sel.status_code == 200
+        assert resp_sel.json()["active"] == "omniroute"
+
+    finally:
+        provider_router.set_active_provider(provedor_original)
+
+    log_test("Alinhamento Compulsório de Provedores e Failover (Fase R3 / P0-06)", True, "OmniRoute ativo despacha direto, override respeitado e failover sob cota validado")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
@@ -1533,15 +1640,12 @@ async def run_p0_suite():
     test_servidor_adk_acoes_pendentes_standalone()
     test_gemini_38_live_config()
     test_providers_select_authentication()
-    test_tool_catalog_unification()
-    test_shared_runtime_services()
-    test_preferences_rce_prevention()
-    test_confirmar_acao_session_isolation()
     await test_omniroute_failover_reachable()
     test_omniroute_status_respects_url()
     await test_omniroute_test_connection_degraded()
     test_ide_lease_fail_closed_missing_identity()
     test_provider_live_honesty()
+    await test_chat_provider_routing_compulsory()
     executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 

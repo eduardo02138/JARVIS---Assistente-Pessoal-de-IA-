@@ -13,7 +13,6 @@ import time
 import socket
 import asyncio
 import logging
-import urllib.request
 from typing import Dict, Optional
 
 import secrets
@@ -152,54 +151,17 @@ async def health_check():
 
 @app.get("/api/providers")
 async def get_providers_endpoint():
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
-    omni = check_omniroute_status()
-    act = provider_router.active_provider
-
-    return {
-        "active": act,
-        "primary": "google_studio",
-        "secondary": "omniroute",
-        "providers": [
-            {
-                "id": "google_studio",
-                "name": "Google AI Studio API",
-                "tier": "primary",
-                "is_primary": True,
-                "is_active": act == "google_studio",
-                "status": "online" if has_key else "missing_keys",
-                "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
-                "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
-                "features": ["Native Audio 24kHz", "Latência <500ms", "Live WebSockets", "Visão & 55 Ferramentas"],
-                "description": "Provedor primário oficial com velocidade máxima e áudio bidirecional em tempo real."
-            },
-            {
-                "id": "omniroute",
-                "name": "OmniRoute Proxy",
-                "tier": "secondary",
-                "is_secondary": True,
-                "is_active": act == "omniroute",
-                "status": "online" if omni["online"] else "offline",
-                "url": omni["url"],
-                "combo": omni["combo"],
-                "accounts_count": omni["accounts"],
-                "features": ["Failover Automático (Rate Limit 429)", "Balanceamento Round-Robin", "Porta :20128"],
-                "description": "Segundo provedor local de inteligência e contingência para alta disponibilidade."
-            }
-        ]
-    }
+    return provider_router.get_providers_metadata()
 
 @app.post("/api/providers/select")
 async def select_provider_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     global ACTIVE_AI_PROVIDER
-    chosen = (payload.get("provider") or "").strip().lower()
+    chosen = (payload.get("provider") or payload.get("provider_id") or "").strip().lower()
     if provider_router.set_active_provider(chosen):
         ACTIVE_AI_PROVIDER = provider_router.active_provider
-        record_event("provider_changed", {"provider": ACTIVE_AI_PROVIDER})
-        logger.info(f"Provedor ativo de IA alterado para: {ACTIVE_AI_PROVIDER}")
-        return {"status": "ok", "active": ACTIVE_AI_PROVIDER}
+        record_event("provider_changed", {"provider": provider_router.active_provider})
+        logger.info(f"Provedor ativo de IA alterado para: {provider_router.active_provider}")
+        return {"status": "ok", "active": provider_router.active_provider}
     return {"status": "erro", "mensagem": "Provedor inválido. Escolha 'google_studio' ou 'omniroute'."}
 
 @app.post("/api/providers/test")
@@ -648,6 +610,27 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     else:
         caminho, motivo = escolher_caminho(texto)
 
+    # Determinação determinística do provedor ativo para este turno (P0-06 / Fase R3)
+    req_prov = (payload.get("provider") or payload.get("provedor") or "").strip().lower()
+    provedor_ativo = provider_router.resolve_provider(req_prov)
+
+    if provedor_ativo == "omniroute":
+        logger.info("Provedor ativo é OmniRoute. Despachando chat diretamente para OmniRouteProvider...")
+        try:
+            resp_texto = await OmniRouteProvider.chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Provedor ativo: OmniRoute",
+                "provedor": "omniroute",
+                "modelo": f"omniroute/{os.environ.get('OMNIROUTE_MODEL', 'gemini-2.5-flash')}",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
+        except Exception as omni_err:
+            logger.warning("Falha no provedor selecionado OmniRoute: %s. Tentando contingência no Google AI Studio...", omni_err)
+            ultimo_erro = omni_err
+
     if caminho == CAMINHO_RAPIDO:
         tipo_runner = "rapido"
     elif caminho == CAMINHO_COMPUTADOR:
@@ -705,25 +688,32 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
             }, status_code=500)
 
     if not resposta_ok:
-        # Failover automático para o segundo provedor (OmniRoute)
-        logger.info("Google AI Studio indisponível. Acionando OmniRoute (:20128) como segundo provedor...")
-        try:
-            resp_texto = await chamar_omniroute_chat(texto)
-            return {
-                "status": "ok",
-                "caminho": caminho,
-                "motivo_do_roteamento": "Failover: Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
-                "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
-                "resposta": resp_texto,
-                "ferramentas": [],
-            }
-        except Exception as omni_err:
-            logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+        if provedor_ativo == "google_studio":
+            # Failover automático para o segundo provedor (OmniRoute)
+            logger.info("Google AI Studio indisponível. Acionando OmniRoute (:20128) como segundo provedor...")
+            try:
+                resp_texto = await chamar_omniroute_chat(texto)
+                return {
+                    "status": "ok",
+                    "caminho": caminho,
+                    "motivo_do_roteamento": "Failover: Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
+                    "provedor": "omniroute",
+                    "modelo": "omniroute/gemini-2.5-flash",
+                    "resposta": resp_texto,
+                    "ferramentas": [],
+                }
+            except Exception as omni_err:
+                logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+                return JSONResponse({
+                    "status": "erro",
+                    "caminho": caminho,
+                    "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}"
+                }, status_code=503)
+        else:
             return JSONResponse({
                 "status": "erro",
                 "caminho": caminho,
-                "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}"
+                "mensagem": f"OmniRoute e contingência Google AI Studio indisponíveis: {ultimo_erro}"
             }, status_code=503)
 
     # Ingestão assíncrona da sessão na memória de longo prazo (background task)
@@ -742,7 +732,8 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     return {
         "status": "ok",
         "caminho": caminho,
-        "motivo_do_roteamento": motivo,
+        "motivo_do_roteamento": motivo if provedor_ativo == "google_studio" else "Contingência: OmniRoute indisponível -> Google AI Studio acionado",
+        "provedor": "google_studio",
         "modelo": runner.agent.model,
         "resposta": resposta.strip(),
         "ferramentas": ferramentas_executadas,
@@ -1047,7 +1038,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
     model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
-    req_provider = (init_data.get("provider") or "").strip() or ACTIVE_AI_PROVIDER
+    req_provider = (init_data.get("provider") or "").strip() or provider_router.active_provider
     allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
     activity_handling = (
         types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS

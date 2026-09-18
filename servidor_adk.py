@@ -42,8 +42,8 @@ except ImportError:
 
 import secrets
 import transcricao
-import urllib.request
 from typing import Optional
+from provider_router import provider_router, GoogleStudioProvider, OmniRouteProvider
 from fastapi import (
     FastAPI,
     Query,
@@ -247,6 +247,35 @@ async def saude():
     }
 
 
+# ----------------------------- PROVEDORES -----------------------------
+
+@app.get("/api/providers")
+async def obter_provedores():
+    """Retorna o estado e metadados de todos os provedores configurados."""
+    return provider_router.get_providers_metadata()
+
+
+@app.post("/api/providers/select")
+async def selecionar_provedor(payload: dict, _=Depends(verify_jarvis_token)):
+    """Seleciona o provedor de IA ativo no ProviderRouter."""
+    chosen = (payload.get("provider") or payload.get("provider_id") or "").strip().lower()
+    if provider_router.set_active_provider(chosen):
+        logger.info("Provedor ativo de IA alterado para: %s", provider_router.active_provider)
+        return {"status": "ok", "active": provider_router.active_provider}
+    return {"status": "erro", "mensagem": "Provedor inválido. Escolha 'google_studio' ou 'omniroute'."}
+
+
+@app.post("/api/providers/test")
+async def testar_provedores():
+    """Mede a conectividade real de todos os provedores suportados."""
+    results = await provider_router.test_all()
+    return {
+        "status": "ok",
+        "active": provider_router.active_provider,
+        "results": results,
+    }
+
+
 # ----------------------------- MODO TEXTO -----------------------------
 
 @app.post("/api/computer/mode")
@@ -386,6 +415,27 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
         caminho, motivo = "complexo", "execucao de acao autorizada pelo usuario"
 
 
+    # Determinação determinística do provedor ativo para este turno (P0-06 / Fase R3)
+    req_prov = (payload.get("provider") or payload.get("provedor") or "").strip().lower()
+    provedor_ativo = provider_router.resolve_provider(req_prov)
+
+    if provedor_ativo == "omniroute":
+        logger.info("Provedor ativo é OmniRoute. Despachando chat diretamente para OmniRouteProvider...")
+        try:
+            resp_texto = await chamar_omniroute_chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Provedor ativo: OmniRoute",
+                "provedor": "omniroute",
+                "modelo": f"omniroute/{os.environ.get('OMNIROUTE_MODEL', 'gemini-2.5-flash')}",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
+        except Exception as omni_err:
+            logger.warning("Falha no provedor ativo OmniRoute: %s. Tentando contingência com Google AI Studio...", omni_err)
+            ultimo_erro = omni_err
+
     runner = obter_runner(caminho)
     await garantir_sessao(usuario, sessao)
 
@@ -437,25 +487,32 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                 break
 
     if resposta is None:
-        # Failover automático para o OmniRoute (segundo provedor)
-        logger.info("Chaves Google AI Studio esgotadas no pool. Acionando OmniRoute (:20128) como segundo provedor...")
-        try:
-            resp_texto = await chamar_omniroute_chat(texto)
-            return {
-                "status": "ok",
-                "caminho": caminho,
-                "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
-                "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
-                "resposta": resp_texto,
-                "ferramentas": [],
-            }
-        except Exception as omni_err:
-            logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+        if provedor_ativo == "google_studio":
+            # Failover automático para o OmniRoute (segundo provedor)
+            logger.info("Chaves Google AI Studio esgotadas no pool. Acionando OmniRoute (:20128) como segundo provedor...")
+            try:
+                resp_texto = await chamar_omniroute_chat(texto)
+                return {
+                    "status": "ok",
+                    "caminho": caminho,
+                    "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
+                    "provedor": "omniroute",
+                    "modelo": "omniroute/gemini-2.5-flash",
+                    "resposta": resp_texto,
+                    "ferramentas": [],
+                }
+            except Exception as omni_err:
+                logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+                return {
+                    "status": "erro",
+                    "caminho": caminho,
+                    "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
+                }
+        else:
             return {
                 "status": "erro",
                 "caminho": caminho,
-                "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
+                "mensagem": f"OmniRoute e contingência Google AI Studio indisponíveis: {ultimo_erro}",
             }
 
     # Ingestão assíncrona da sessão na memória de longo prazo (background task)
@@ -472,7 +529,8 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     return {
         "status": "ok",
         "caminho": caminho,
-        "motivo_do_roteamento": motivo,
+        "motivo_do_roteamento": motivo if provedor_ativo == "google_studio" else "Contingência: OmniRoute indisponível -> Google AI Studio acionado",
+        "provedor": "google_studio",
         "modelo": runner.agent.model,
         "resposta": resposta,
         "ferramentas": ferramentas,

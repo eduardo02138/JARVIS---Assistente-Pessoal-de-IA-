@@ -170,27 +170,36 @@ class OmniRouteProvider:
             }
 
     @classmethod
-    async def chat(cls, texto: str) -> str:
+    async def chat(cls, texto: str, model: Optional[str] = None) -> str:
         """Chat completion de contingência via OmniRoute. Implementação canônica única."""
         base = cls.get_url().rstrip("/") + "/chat/completions"
         key = cls.get_api_key()
-        modelo = os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash")
+        modelo = model or os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash")
         timeout = float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))
         payload = json.dumps({
             "model": modelo,
             "messages": [{"role": "user", "content": texto}]
         }).encode("utf-8")
+        headers = {"Content-Type": "application/json", "User-Agent": "JARVIS/1.0"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
             base,
             data=payload,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            headers=headers,
             method="POST"
         )
         loop = asyncio.get_running_loop()
 
         def _chamar():
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as he:
+                err_body = he.read().decode("utf-8", errors="ignore")
+                raise RuntimeError(f"OmniRoute HTTP {he.code}: {err_body}") from he
+            except urllib.error.URLError as ue:
+                raise RuntimeError(f"Falha de conexão com OmniRoute: {ue.reason}") from ue
 
         resp_json = await loop.run_in_executor(None, _chamar)
         escolhas = resp_json.get("choices", [])
@@ -214,6 +223,13 @@ class ProviderRouter:
             self._active_provider = pid
             return True
         return False
+
+    def resolve_provider(self, requested: Optional[str] = None) -> str:
+        """Resolve o provedor efetivo: payload explícito tem precedência sobre o padrão global."""
+        req = (requested or "").strip().lower()
+        if req in ("google_studio", "omniroute"):
+            return req
+        return self._active_provider
 
     def get_active(self):
         """Retorna classe do provedor ativo para chat texto."""
@@ -245,4 +261,51 @@ class ProviderRouter:
             "omniroute": omni_res
         }
 
+    def get_providers_metadata(self) -> Dict[str, Any]:
+        """Autoridade única para metadados e status dos provedores de IA."""
+        from jarvis.core.key_pool import get_gemini_keys
+        keys = get_gemini_keys()
+        has_key = len(keys) > 0
+        omni = OmniRouteProvider.check_status()
+        act = self.active_provider
+
+        return {
+            "active": act,
+            "primary": "google_studio",
+            "secondary": "omniroute",
+            "providers": [
+                {
+                    "id": "google_studio",
+                    "name": "Google AI Studio API",
+                    "tier": "primary",
+                    "is_primary": True,
+                    "is_active": act == "google_studio",
+                    "status": "online" if has_key else "missing_keys",
+                    "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
+                    "accounts_count": len(keys),
+                    "features": ["Native Audio 24kHz", "Latência <500ms", "Live WebSockets", "Visão & 55 Ferramentas"],
+                    "description": "Provedor primário oficial com velocidade máxima e áudio bidirecional em tempo real."
+                },
+                {
+                    "id": "omniroute",
+                    "name": "OmniRoute Proxy",
+                    "tier": "secondary",
+                    "is_secondary": True,
+                    "is_active": act == "omniroute",
+                    "status": "online" if omni["online"] else "offline",
+                    "url": omni["url"],
+                    "combo": omni["combo"],
+                    "accounts_count": omni["accounts"],
+                    "features": ["Failover Automático (Rate Limit 429)", "Balanceamento Round-Robin", "Porta :20128"],
+                    "description": "Segundo provedor local de inteligência e contingência para alta disponibilidade."
+                }
+            ]
+        }
+
+
 provider_router = ProviderRouter()
+
+
+def get_providers_metadata() -> Dict[str, Any]:
+    """Fachada pública para metadados dos provedores."""
+    return provider_router.get_providers_metadata()
