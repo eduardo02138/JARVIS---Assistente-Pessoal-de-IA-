@@ -378,8 +378,9 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala natural e sensível (~0.006). Evita cortes de voz em fones e microfones comuns
-            const isSpeaking = rms >= 0.006;
+            // Limiar de fala natural (0.012 por padrão, configurável via localStorage). Evita cortes de voz e filtra vazamento de áudio ambiente/vídeo
+            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.012;
+            const isSpeaking = rms >= vadThreshold;
             if (isSpeaking) {
                 speechHoldover = 3; // Mantem envio por ~380ms adicionais
             } else if (speechHoldover > 0) {
@@ -421,12 +422,30 @@ async function initAudio() {
         processor.connect(state.inputAudioCtx.destination);
         state.audioProcessor = processor;
 
-        dom.liveStatusText.textContent = "Gemini Live Conectado";
-        dom.statusBadgeChip.classList.remove("muted");
-        dom.statusBadgeChip.classList.add("active");
-        dom.chipLabel.textContent = "Microfone Ativo";
-        if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
-        if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
+        if (state.paused) {
+            // Se já estiver mutado, mantém trilhas desligadas e chip no estado mutado
+            if (state.mediaStream) {
+                try {
+                    state.mediaStream.getAudioTracks().forEach(t => { t.enabled = false; });
+                } catch (_) {}
+            }
+            if (state.inputAudioCtx && state.inputAudioCtx.state === "running") {
+                try { state.inputAudioCtx.suspend(); } catch (_) {}
+            }
+            dom.liveStatusText.textContent = "Microfone pausado";
+            dom.statusBadgeChip.classList.remove("active");
+            dom.statusBadgeChip.classList.add("muted");
+            dom.chipLabel.textContent = "Microfone Mutado";
+            if (dom.btnExpandedMic) dom.btnExpandedMic.classList.remove("active");
+            if (dom.btnDrawerMic) dom.btnDrawerMic.classList.remove("active");
+        } else {
+            dom.liveStatusText.textContent = "Gemini Live Conectado";
+            dom.statusBadgeChip.classList.remove("muted");
+            dom.statusBadgeChip.classList.add("active");
+            dom.chipLabel.textContent = "Microfone Ativo";
+            if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
+            if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
+        }
     } catch (err) {
         console.warn("Aviso de microfone:", err);
         dom.liveStatusText.textContent = "Microfone não autorizado";
@@ -1219,6 +1238,12 @@ function applyMode(mode, reconnect = true) {
             initWebSocket();
         }
     }
+
+    if (state.paused) {
+        dom.chipLabel.textContent = "Microfone Mutado";
+        dom.statusBadgeChip.classList.remove("active");
+        dom.statusBadgeChip.classList.add("muted");
+    }
 }
 
 // ---------------- GESTÃO DE PROVEDORES (GOOGLE STUDIO 1º / OMNIROUTE 2º) ----------------
@@ -1495,6 +1520,30 @@ async function toggleMicrophonePause(forceState) {
         if (dom.btnExpandedMic) dom.btnExpandedMic.classList.remove("active");
         if (dom.btnDrawerMic) dom.btnDrawerMic.classList.remove("active");
         flushAudioQueue();
+
+        // 1. Hardware Mute: desabilita trilhas de captura no nível da mídia
+        if (state.mediaStream) {
+            try {
+                state.mediaStream.getAudioTracks().forEach(t => { t.enabled = false; });
+            } catch (e) {
+                console.warn("Falha ao desabilitar tracks do microfone:", e);
+            }
+        }
+
+        // 2. Suspende AudioContext de captura
+        if (state.inputAudioCtx && state.inputAudioCtx.state === "running") {
+            try { state.inputAudioCtx.suspend(); } catch (_) {}
+        }
+
+        // 3. Notifica o backend para fail-closed e corte do buffer da Live API
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            try {
+                state.ws.send(JSON.stringify({ type: "microphone_state", muted: true }));
+                state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
+            } catch (e) {
+                console.warn("Falha ao notificar estado de microfone mutado via WebSocket:", e);
+            }
+        }
     } else {
         if (dom.iconPlay) dom.iconPlay.classList.add("hidden");
         if (dom.iconPause) dom.iconPause.classList.remove("hidden");
@@ -1506,9 +1555,18 @@ async function toggleMicrophonePause(forceState) {
         if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
         if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
 
+        // 1. Reabilita trilhas de captura no nível da mídia
+        if (state.mediaStream) {
+            try {
+                state.mediaStream.getAudioTracks().forEach(t => { t.enabled = true; });
+            } catch (e) {
+                console.warn("Falha ao reabilitar tracks do microfone:", e);
+            }
+        }
+
         if (state.micMode !== "ptt") state.listening = true;
 
-        // Desperta AudioContext se suspenso pelo navegador
+        // 2. Desperta AudioContext se suspenso pelo navegador
         try {
             if (state.inputAudioCtx && state.inputAudioCtx.state === "suspended") {
                 await state.inputAudioCtx.resume();
@@ -1518,6 +1576,15 @@ async function toggleMicrophonePause(forceState) {
             }
         } catch (e) {
             console.warn("Falha ao resumir AudioContext:", e);
+        }
+
+        // 3. Notifica o backend que o microfone está desmutado
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            try {
+                state.ws.send(JSON.stringify({ type: "microphone_state", muted: false }));
+            } catch (e) {
+                console.warn("Falha ao notificar estado de microfone ativo via WebSocket:", e);
+            }
         }
 
         // Se ainda não inicializou o microfone ou a stream caiu, inicializa agora
