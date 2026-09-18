@@ -216,7 +216,11 @@ async function conectar(tentativaReconexao = false) {
   await revalidarToken();
 
   const protocolo = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = `${protocolo}//${location.host}/ws/live`;
+  const params = new URLSearchParams({
+    sessao: estado.sessao,
+    usuario: estado.usuario,
+  });
+  const url = `${protocolo}//${location.host}/ws/live?${params.toString()}`;
   estado.ws = new WebSocket(url);
   mostrarEstado("Conectando…");
 
