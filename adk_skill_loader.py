@@ -210,6 +210,17 @@ class ADKSkillLoader:
     def skills_carregadas(self) -> dict[str, Skill]:
         return dict(self._skills)
 
+    def skills_unicas(self, apenas_ativas: bool = False) -> list[Skill]:
+        """Retorna lista de skills sem duplicatas causadas por aliases (deduplicadas pelo frontmatter.name)."""
+        alvo = set(self._skills)
+        if apenas_ativas:
+            alvo &= set(self.ids_ativos())
+        unicas: dict[str, Skill] = {}
+        for k in sorted(alvo):
+            sk = self._skills[k]
+            unicas[sk.frontmatter.name] = sk
+        return list(unicas.values())
+
     def ids_carregados(self) -> list[str]:
         return sorted(self._skills)
 
