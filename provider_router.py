@@ -183,7 +183,7 @@ class OmniRouteProvider:
         """Chat completion de contingência via OmniRoute. Implementação canônica única."""
         base = cls.get_url().rstrip("/") + "/chat/completions"
         key = cls.get_api_key()
-        modelo = cls.get_model()
+        modelo = cls.get_model()  # Respeita OMNIROUTE_MODEL
         timeout = float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))
         payload = json.dumps({
             "model": modelo,
