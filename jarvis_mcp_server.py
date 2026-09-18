@@ -146,6 +146,18 @@ def jarvis_read_bridge_audit(limit: int = 20) -> str:
     except Exception as e:
         return json.dumps({"erro": f"Falha ao ler audit.jsonl: {str(e)}"}, ensure_ascii=False)
 
+@server.tool()
+def jarvis_list_skills() -> str:
+    """
+    Lista todas as Skills Google ADK dos plug-ins do JARVIS (metadados L1,
+    instruções L2 e recursos L3), indicando se cada uma está ativa ou simulada.
+    """
+    try:
+        from adk_skill_loader import adk_skill_loader
+        return json.dumps(adk_skill_loader.relatorio(), indent=2, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"erro": f"Falha ao listar skills: {str(e)}"}, ensure_ascii=False)
+
 
 # ---------------- FERRAMENTAS DE PLUG-INS (Habilidades ADK) ----------------
 # Expõe as ferramentas de todos os plug-ins ativos pelo protocolo MCP, com os
