@@ -22,7 +22,10 @@ import logging
 import os
 from typing import Any, Awaitable, Callable, Optional
 
-logger = logging.getLogger("JARVIS.Transcricao")
+try:
+    from monitoring.logger import logger
+except Exception:
+    logger = logging.getLogger("JARVIS.Transcricao")
 
 
 def get_language_codes() -> list[str]:
