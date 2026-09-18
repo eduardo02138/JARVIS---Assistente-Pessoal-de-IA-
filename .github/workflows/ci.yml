@@ -35,12 +35,33 @@ jobs:
         run: |
           python -c "import servidor_adk; import server; import provider_router; import policy_engine; import system_tools; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
 
-      - name: Run Architecture & Security Test Suite
+      - name: Run R1 Trust Gates Suite
+        env:
+          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          JARVIS_TOKEN: "ci-secret-token-test-123"
+        run: |
+          PYTHONPATH=. pytest monitoring/test_trust_gates.py -v
+
+      - name: Run P0 Reproduction Regressions
+        env:
+          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          JARVIS_TOKEN: "ci-secret-token-test-123"
+        run: |
+          PYTHONPATH=. pytest monitoring/test_reproduction_p0.py -v
+
+      - name: Run Architecture & Security Test Suite (P0)
         env:
           GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           python monitoring/test_suite.py --p0
+
+      - name: Run Google ADK Test Suite
+        env:
+          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          JARVIS_TOKEN: "ci-secret-token-test-123"
+        run: |
+          python monitoring/test_adk.py
 
       - name: Run Gitleaks Secret Detector
         run: |
