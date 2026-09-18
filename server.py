@@ -37,7 +37,7 @@ if not JARVIS_SECRET_TOKEN:
     JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
 
 # Tempo máximo de espera pela confirmação do usuário em ferramentas de risco
-CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "60"))
+CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "30"))
 
 # Silêncio do assistente (segundos) a partir do qual o microfone volta a ser encaminhado
 MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "1.0"))
@@ -121,7 +121,7 @@ async def health_check():
         "gemini_api_key_configured": has_key,
         "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
         "omniroute_combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
-        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
     }
 
 @app.get("/api/status")
@@ -195,7 +195,7 @@ async def test_all_accounts():
                 cl._api_client._websocket_ssl_ctx["ping_interval"] = None
                 cl._api_client._websocket_ssl_ctx["ping_timeout"] = None
 
-            test_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+            test_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
             test_config = types.LiveConnectConfig(response_modalities=[types.Modality.TEXT])
             async with cl.aio.live.connect(model=test_model, config=test_config) as s:
                 await s.send_client_content(
@@ -361,11 +361,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
         return
 
     voice_name = init_data.get("voice") or os.environ.get("JARVIS_VOICE", "Charon")
-    req_model = init_data.get("model")
-    if not req_model or "3.8" in req_model or "exp" in req_model:
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
-    else:
-        model_name = req_model
+    # O modelo pedido pelo cliente é respeitado; o .env define o padrão.
+    # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
+    req_model = (init_data.get("model") or "").strip()
+    model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
 
     config = types.LiveConnectConfig(
         response_modalities=[types.Modality.AUDIO],

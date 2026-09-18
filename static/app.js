@@ -39,7 +39,7 @@ const state = {
     speaking: false,
     ws: null,
     voice: localStorage.getItem('jarvis_voice') || 'Charon',
-    model: localStorage.getItem('jarvis_model') || 'gemini-2.5-flash-native-audio-latest',
+    model: localStorage.getItem('jarvis_model') || 'gemini-3.8-live',
     isPushToTalkActive: false,
     
     // Áudio

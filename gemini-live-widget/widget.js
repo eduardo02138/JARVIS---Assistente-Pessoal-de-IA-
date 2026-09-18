@@ -51,7 +51,7 @@ const state = {
 
     // Configurações
     voice: localStorage.getItem("gemini_live_voice") || "Puck",
-    model: "gemini-2.5-flash-native-audio-latest",
+    model: "gemini-3.8-live",
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
     micMode: localStorage.getItem("gemini_mic_mode") || "always",
     echoCancellation: localStorage.getItem("gemini_echo") !== "false",
