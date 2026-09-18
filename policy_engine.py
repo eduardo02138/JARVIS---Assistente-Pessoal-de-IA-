@@ -43,6 +43,12 @@ class PendingAction:
 
 # Mapeamento inicial de ferramentas nativas e de plug-ins para seus níveis de risco
 TOOL_RISK_MAP: Dict[str, RiskLevel] = {
+    # Ferramentas Canônicas Unificadas (Fase R1)
+    "system_get_datetime": RiskLevel.READ,
+    "system_get_status": RiskLevel.READ,
+    "browser_open_url": RiskLevel.EXTERNAL_WRITE,
+    "browser_search_web": RiskLevel.LOW_WRITE,
+
     # Módulo Google ADK
     "hora_atual": RiskLevel.READ,
     "status_do_sistema": RiskLevel.READ,
@@ -96,10 +102,12 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "game_companion_launch_game": RiskLevel.LOW_WRITE,
 
 
+    # EXTERNAL_WRITE: Abertura de navegador externo (unificado com browser_open_url e abrir_site)
+    "open_website": RiskLevel.EXTERNAL_WRITE,
+
     # LOW_WRITE: Ações locais seguras
     "adjust_volume": RiskLevel.LOW_WRITE,
     "open_application": RiskLevel.LOW_WRITE,
-    "open_website": RiskLevel.LOW_WRITE,
     # Apenas abre o navegador com a URL de busca; não escreve em serviço nenhum
     "search_web": RiskLevel.LOW_WRITE,
     "play_music": RiskLevel.LOW_WRITE,

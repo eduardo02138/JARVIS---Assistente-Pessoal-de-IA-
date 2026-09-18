@@ -1364,9 +1364,83 @@ def test_confirmar_acao_session_isolation():
     return True
 
 
+def test_tool_catalog_unification():
+    """Valida que o ToolCatalog é a Autoridade Única para as ferramentas, unificando os 4 pares e adaptadores (Fase R1)."""
+    import system_tools
+    import agentes.ferramentas as af
+    from tool_catalog import tool_catalog, ToolDefinition
+    from policy_engine import policy_engine, RiskLevel
+
+    # 1. Resolução canônica de aliases
+    pares_esperados = {
+        "get_current_datetime": "system_get_datetime",
+        "hora_atual": "system_get_datetime",
+        "get_system_status": "system_get_status",
+        "status_do_sistema": "system_get_status",
+        "open_website": "browser_open_url",
+        "abrir_site": "browser_open_url",
+        "search_web": "browser_search_web",
+        "pesquisar_na_web": "browser_search_web",
+    }
+    for alias, canonic in pares_esperados.items():
+        resolvido = tool_catalog.resolve_canonical_name(alias)
+        assert resolvido == canonic, f"Alias '{alias}' deveria resolver para '{canonic}', mas resolveu para '{resolvido}'"
+
+    # 2. Execução transparente única (single source of truth)
+    dt_canonica = system_tools.system_get_datetime()
+    dt_legacy = system_tools.get_current_datetime()
+    dt_af = af.hora_atual()
+    assert dt_canonica["data"] == dt_legacy["data"] == dt_af["data"]
+    assert dt_canonica["hora"] == dt_legacy["hora"]
+    assert "dia_semana" in dt_canonica and "dia_da_semana" in dt_canonica
+
+    # 3. Status unificado sem congelamento (interval=None)
+    st_canonica = system_tools.system_get_status()
+    st_legacy = system_tools.get_system_status()
+    st_af = af.status_do_sistema()
+    assert st_canonica["cpu_cores"] == st_legacy["cpu_cores"] == st_af["cpu_nucleos"]
+    assert "cpu_percentual" in st_canonica and "ram_percentual" in st_canonica
+
+    # 4. Alinhamento rigoroso de políticas no PolicyEngine
+    assert policy_engine.get_risk_level("system_get_status") == RiskLevel.READ
+    assert policy_engine.get_risk_level("get_system_status") == RiskLevel.READ
+    assert policy_engine.get_risk_level("status_do_sistema") == RiskLevel.READ
+
+    assert policy_engine.get_risk_level("system_get_datetime") == RiskLevel.READ
+    assert policy_engine.get_risk_level("get_current_datetime") == RiskLevel.READ
+    assert policy_engine.get_risk_level("hora_atual") == RiskLevel.READ
+
+    assert policy_engine.get_risk_level("browser_open_url") == RiskLevel.EXTERNAL_WRITE
+    assert policy_engine.get_risk_level("open_website") == RiskLevel.EXTERNAL_WRITE
+    assert policy_engine.get_risk_level("abrir_site") == RiskLevel.EXTERNAL_WRITE
+
+    assert policy_engine.get_risk_level("browser_search_web") == RiskLevel.LOW_WRITE
+    assert policy_engine.get_risk_level("search_web") == RiskLevel.LOW_WRITE
+    assert policy_engine.get_risk_level("pesquisar_na_web") == RiskLevel.LOW_WRITE
+
+    # 5. Adaptadores (Gemini, ADK, MCP)
+    decls = tool_catalog.get_gemini_declarations()
+    nomes_decls = {d["name"] for d in decls}
+    assert "system_get_status" in nomes_decls
+    assert "browser_open_url" in nomes_decls
+
+    adk_tools = tool_catalog.get_adk_tools()
+    nomes_adk = {t.name for t in adk_tools}
+    assert "system_get_status" in nomes_adk
+    assert "browser_open_url" in nomes_adk
+
+    mcp_name, mcp_fn = tool_catalog.get("system_get_status").to_mcp_wrapper()
+    assert mcp_name == "jarvis_system_get_status"
+    assert callable(mcp_fn)
+
+    log_test("Unificação do Catálogo de Ferramentas (ToolCatalog & ToolDefinition - Fase R1)", True, "4 pares unificados, aliases preservados e adaptadores operacionais")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
+    test_tool_catalog_unification()
     test_preferences_rce_prevention()
     test_confirmar_acao_session_isolation()
     test_localhost_binding()
@@ -1407,6 +1481,7 @@ async def run_p0_suite():
     test_servidor_adk_acoes_pendentes_standalone()
     test_gemini_38_live_config()
     test_providers_select_authentication()
+    test_tool_catalog_unification()
     test_preferences_rce_prevention()
     test_confirmar_acao_session_isolation()
     await test_omniroute_failover_reachable()

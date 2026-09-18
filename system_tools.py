@@ -64,10 +64,11 @@ PERMITTED_APP_PREFERENCES = {
     "music_platform": {"youtube", "spotify"}
 }
 
-def get_system_status() -> dict:
+def system_get_status() -> dict:
     """
     Retorna telemetria detalhada de hardware: uso de CPU, memória RAM,
-    espaço em disco, status da bateria (se disponível) e processos ativos.
+    espaço em disco, status da bateria (se disponível), GPU e processos ativos.
+    Função canônica unificada do ecossistema JARVIS (Fase R1).
     """
     cpu_percent = psutil.cpu_percent(interval=None)
     cpu_cores = psutil.cpu_count(logical=True)
@@ -85,32 +86,55 @@ def get_system_status() -> dict:
     hours, remainder = divmod(int(uptime.total_seconds()), 3600)
     minutes, _ = divmod(remainder, 60)
 
+    # Status GPU
+    gpu_info = get_gpu_status()
+
     return {
+        "status": "ok",
+        "sucesso": True,
         "cpu_percent": f"{cpu_percent}%",
+        "cpu_percentual": cpu_percent,
         "cpu_cores": cpu_cores,
+        "cpu_nucleos": cpu_cores,
         "ram_used_gb": f"{memory.used / (1024**3):.2f} GB",
-        "ram_total_gb": f"{memory.total / (1024**3):.2f} GB",
+        "ram_usada_gb": round(memory.used / (1024**3), 1),
+        "ram_total_gb": round(memory.total / (1024**3), 1),
         "ram_percent": f"{memory.percent}%",
+        "ram_percentual": memory.percent,
         "disk_free_gb": f"{disk.free / (1024**3):.2f} GB",
         "disk_percent": f"{disk.percent}%",
         "battery": battery_info,
-        "gpu": get_gpu_status(),
+        "gpu": gpu_info,
         "uptime": f"{hours} horas e {minutes} minutos",
+        "ligado_ha_horas": round(uptime.total_seconds() / 3600, 1),
         "status_geral": "Todos os subsistemas operando em parâmetros nominais, senhor.",
         "mensagem": f"CPU em {cpu_percent}%, Memória RAM em {memory.percent}% ({memory.used / (1024**3):.1f} GB de {memory.total / (1024**3):.1f} GB usados), Disco com {disk.free / (1024**3):.1f} GB livres. Todos os subsistemas nominais."
     }
 
-def get_current_datetime() -> dict:
-    """Retorna data, dia da semana e horário exato com precisão de segundos."""
+def get_system_status() -> dict:
+    """Retorna telemetria detalhada de hardware (alias para system_get_status)."""
+    return system_get_status()
+
+def system_get_datetime() -> dict:
+    """Retorna data, dia da semana e horário exato com precisão de segundos e formato amigável."""
     now = datetime.datetime.now()
     dias = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
     dia_semana = dias[now.weekday()]
     return {
+        "status": "ok",
+        "sucesso": True,
         "data": now.strftime("%d/%m/%Y"),
         "hora": now.strftime("%H:%M:%S"),
+        "hora_curta": now.strftime("%H:%M"),
+        "dia_semana": dia_semana,
         "dia_da_semana": dia_semana,
+        "iso": now.isoformat(),
         "mensagem": f"Hoje é {dia_semana}, dia {now.strftime('%d de %B de %Y')}, e são {now.strftime('%H horas e %M minutos')}."
     }
+
+def get_current_datetime() -> dict:
+    """Retorna data, dia da semana e horário exato (alias para system_get_datetime)."""
+    return system_get_datetime()
 
 def list_installed_games(filter_name: str = "") -> dict:
     """
@@ -396,25 +420,50 @@ def open_application(app_name: str) -> dict:
         }
 
 
-def search_web(query: str) -> dict:
+def browser_open_url(url: str) -> dict:
     """
-    Abre o navegador padrão com a pesquisa solicitada pelo usuário no Google.
+    Abre qualquer site ou endereço web diretamente no navegador padrão do usuário.
+    Função canônica unificada do ecossistema JARVIS (Fase R1).
     """
-    import urllib.parse
-    encoded = urllib.parse.quote(query)
-    search_url = f"https://www.google.com/search?q={encoded}"
+    clean_url = url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = f"https://{clean_url}"
+    if not shutil.which("xdg-open"):
+        return {"sucesso": False, "status": "erro", "mensagem": "xdg-open não está disponível neste sistema."}
     try:
-        subprocess.Popen(["xdg-open", search_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(["xdg-open", clean_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return {
             "sucesso": True,
-            "query": query,
-            "mensagem": f"Abrindo resultados de busca para '{query}' no seu navegador, senhor."
+            "status": "ok",
+            "url": clean_url,
+            "mensagem": f"Acessando o site '{clean_url}' no seu navegador, senhor."
         }
     except Exception as e:
-        return {
-            "sucesso": False,
-            "mensagem": f"Não foi possível abrir o navegador para a pesquisa: {str(e)}"
-        }
+        return {"sucesso": False, "status": "erro", "mensagem": f"Falha ao abrir o site: {str(e)}"}
+
+def open_website(url: str) -> dict:
+    """Abre qualquer site ou endereço web diretamente no navegador padrão (alias para browser_open_url)."""
+    return browser_open_url(url)
+
+def browser_search_web(query: str = "", consulta: str = "") -> dict:
+    """
+    Abre o navegador padrão com a pesquisa solicitada pelo usuário no Google.
+    Suporta tanto o parâmetro 'query' quanto 'consulta' para compatibilidade.
+    Função canônica unificada do ecossistema JARVIS (Fase R1).
+    """
+    import urllib.parse
+    termo = (query or consulta or "").strip()
+    encoded = urllib.parse.quote(termo)
+    search_url = f"https://www.google.com/search?q={encoded}"
+    res = browser_open_url(search_url)
+    res["query"] = termo
+    res["consulta"] = termo
+    res["mensagem"] = f"Abrindo resultados de busca para '{termo}' no seu navegador, senhor."
+    return res
+
+def search_web(query: str) -> dict:
+    """Abre o navegador padrão com a pesquisa solicitada (alias para browser_search_web)."""
+    return browser_search_web(query=query)
 
 def adjust_volume(action: str, percent: int = 10) -> dict:
     """
@@ -480,21 +529,6 @@ def read_notes() -> dict:
         }
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Erro ao acessar notas: {str(e)}"}
-
-def open_website(url: str) -> dict:
-    """Abre qualquer site ou endereço web diretamente no navegador padrão."""
-    clean_url = url.strip()
-    if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
-        clean_url = "https://" + clean_url
-    try:
-        subprocess.Popen(["xdg-open", clean_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        return {
-            "sucesso": True,
-            "url": clean_url,
-            "mensagem": f"Acessando o site '{clean_url}' no seu navegador, senhor."
-        }
-    except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao abrir o site: {str(e)}"}
 
 def play_music(query: str, platform: str = None) -> dict:
     """
@@ -1023,6 +1057,16 @@ GEMINI_FUNCTION_DECLARATIONS = [
         "parameters": {"type": "OBJECT", "properties": {}}
     },
     {
+        "name": "system_get_status",
+        "description": "Obtém a telemetria em tempo real do sistema: uso de CPU, memória RAM, bateria, disco e tempo ligado.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "system_get_datetime",
+        "description": "Obtém data, dia da semana e horário exato com precisão e fuso local.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
         "name": "get_system_status",
         "description": "Obtém a telemetria em tempo real do sistema: uso de CPU, memória RAM, bateria, disco e tempo ligado.",
         "parameters": {"type": "OBJECT", "properties": {}}
@@ -1044,6 +1088,20 @@ GEMINI_FUNCTION_DECLARATIONS = [
                 }
             },
             "required": ["app_name"]
+        }
+    },
+    {
+        "name": "browser_search_web",
+        "description": "Pesquisa um termo ou assunto na web abrindo o navegador do usuário.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "O termo ou pergunta a ser pesquisada."
+                }
+            },
+            "required": ["query"]
         }
     },
     {
@@ -1165,6 +1223,20 @@ GEMINI_FUNCTION_DECLARATIONS = [
         "name": "antigravity_open_gemini_bridge",
         "description": "Abre a pasta 'gemini' de auditoria e canal direto de mensagens na IDE Antigravity.",
         "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "browser_open_url",
+        "description": "Abre qualquer site ou endereço web diretamente no navegador padrão do usuário.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "url": {
+                    "type": "STRING",
+                    "description": "Endereço do site a ser aberto (ex: 'github.com', 'youtube.com', 'https://globo.com')."
+                }
+            },
+            "required": ["url"]
+        }
     },
     {
         "name": "open_website",
@@ -1379,6 +1451,12 @@ GEMINI_FUNCTION_DECLARATIONS = [
 ]
 
 TOOL_REGISTRY = {
+    # Ferramentas canônicas unificadas (Fase R1)
+    "system_get_status": system_get_status,
+    "system_get_datetime": system_get_datetime,
+    "browser_open_url": browser_open_url,
+    "browser_search_web": browser_search_web,
+    # Ferramentas base do sistema e aliases
     "list_installed_games": list_installed_games,
     "get_gpu_status": get_gpu_status,
     "get_system_status": get_system_status,
@@ -1436,6 +1514,87 @@ def rebuild_registry(dynamic_tools: list):
                 "parameters": t.parameters
             })
             existing_names.add(t.name)
+
+
+def _populate_tool_catalog():
+    """Registra as ferramentas base e canônicas no catálogo unificado (ToolCatalog)."""
+    try:
+        from tool_catalog import tool_catalog, ToolDefinition
+        from policy_engine import RiskLevel, policy_engine
+
+        # Registra canônicas com aliases
+        tool_catalog.register(ToolDefinition(
+            name="system_get_status",
+            handler=system_get_status,
+            description="Obtém a telemetria em tempo real do sistema: uso de CPU, memória RAM, bateria, disco e tempo ligado.",
+            parameters={"type": "OBJECT", "properties": {}},
+            risk_level=RiskLevel.READ,
+            aliases=["get_system_status", "status_do_sistema"],
+            tags=["system", "telemetry"]
+        ))
+
+        tool_catalog.register(ToolDefinition(
+            name="system_get_datetime",
+            handler=system_get_datetime,
+            description="Obtém data, dia da semana e horário exato com precisão e fuso local.",
+            parameters={"type": "OBJECT", "properties": {}},
+            risk_level=RiskLevel.READ,
+            aliases=["get_current_datetime", "hora_atual"],
+            tags=["system", "datetime"]
+        ))
+
+        tool_catalog.register(ToolDefinition(
+            name="browser_open_url",
+            handler=browser_open_url,
+            description="Abre qualquer site ou endereço web diretamente no navegador padrão do usuário.",
+            parameters={
+                "type": "OBJECT",
+                "properties": {
+                    "url": {"type": "STRING", "description": "URL ou endereço web a ser aberto."}
+                },
+                "required": ["url"]
+            },
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            aliases=["open_website", "abrir_site"],
+            tags=["browser", "web"]
+        ))
+
+        tool_catalog.register(ToolDefinition(
+            name="browser_search_web",
+            handler=browser_search_web,
+            description="Pesquisa um termo ou assunto na web abrindo o navegador padrão do usuário.",
+            parameters={
+                "type": "OBJECT",
+                "properties": {
+                    "query": {"type": "STRING", "description": "O termo ou pergunta a ser pesquisada."}
+                },
+                "required": ["query"]
+            },
+            risk_level=RiskLevel.LOW_WRITE,
+            aliases=["search_web", "pesquisar_na_web"],
+            tags=["browser", "search"]
+        ))
+
+        # Registra demais ferramentas base
+        decl_map = {d["name"]: d for d in GEMINI_FUNCTION_DECLARATIONS}
+        for name, fn in TOOL_REGISTRY.items():
+            if tool_catalog.get(name):
+                continue
+            decl = decl_map.get(name, {})
+            risk = policy_engine.get_risk_level(name) or RiskLevel.READ
+            tool_catalog.register(ToolDefinition(
+                name=name,
+                handler=fn,
+                description=decl.get("description", getattr(fn, "__doc__", "") or f"Ferramenta {name}"),
+                parameters=decl.get("parameters", {"type": "OBJECT", "properties": {}}),
+                risk_level=risk,
+                tags=["system"]
+            ))
+    except Exception as e:
+        logger.warning(f"Erro ao inicializar ToolCatalog a partir de system_tools: {e}")
+
+
+_populate_tool_catalog()
 
 
 
