@@ -247,26 +247,52 @@ def test_gate4_live_provider_honesty():
 # ==============================================================================
 
 def test_gate5_frontend_widget_sends_token_on_provider_select():
-    """Gate 5: O widget do Gemini Live deve autenticar mutações de provedor."""
+    """Gate 5: O widget do Gemini Live deve autenticar mutações de provedor e validar retorno HTTP."""
     with open("gemini-live-widget/widget.js", "r", encoding="utf-8") as f:
         src = f.read()
 
-    # O widget deve obter token da sessão ou localStorage e passá-lo ao trocar provider
-    assert "/api/providers/select" in src
-    assert "jarvisSessionToken" in src or "Authorization" in src or "X-Jarvis-Token" in src, (
-        "FALHA GATE 5: widget.js não inclui credenciais ao chamar rotas de API protegidas!"
+    # Extrai o corpo da função setProvider
+    assert "async function setProvider" in src, "Função setProvider não encontrada no widget.js"
+    inicio = src.find("async function setProvider")
+    fim = src.find("\n}", inicio)
+    set_provider_code = src[inicio:fim]
+
+    # 1. Verifica que /api/providers/select é chamado dentro de setProvider
+    assert "/api/providers/select" in set_provider_code, (
+        "FALHA GATE 5: setProvider não chama /api/providers/select"
+    )
+
+    # 2. Verifica autenticação específica no fetch de setProvider
+    assert "X-Jarvis-Token" in set_provider_code or "Authorization" in set_provider_code, (
+        "FALHA GATE 5: setProvider não inclui X-Jarvis-Token ou Authorization na requisição de seleção de provedor!"
+    )
+
+    # 3. Verifica que valida resp.ok antes de assumir o provedor
+    assert "resp.ok" in set_provider_code or "res.ok" in set_provider_code, (
+        "FALHA GATE 5: setProvider assume sucesso sem verificar se a resposta HTTP foi bem-sucedida (resp.ok)!"
     )
 
 
 def test_gate1_static_adk_client_sessions_are_isolated():
-    """Gate 1: Clientes do static_adk devem gerar identificadores únicos de sessão."""
+    """Gate 1: Clientes do static_adk devem gerar identificadores únicos de sessão e propagá-los no WebSocket."""
     with open("static_adk/app.js", "r", encoding="utf-8") as f:
         src = f.read()
 
-    # Não pode depender unicamente de um fallback hardcoded estático compartilhado por todos
+    # 1. Identificador dinâmico por cliente
     assert "crypto.randomUUID" in src or "Math.random" in src or "uuid" in src, (
-        "FALHA GATE 1: static_adk/app.js não gera identificador dinâmico/único por cliente, "
-        "fazendo clientes standalone compartilharem a mesma sessão lógica!"
+        "FALHA GATE 1: static_adk/app.js não gera identificador dinâmico/único por cliente!"
+    )
+
+    # 2. Propagação estrita da sessão e usuário no WebSocket
+    assert "sessao" in src and "usuario" in src, "FALHA GATE 1: Parâmetros de identidade ausentes no app.js"
+
+    # Extrai o bloco de conexão do WebSocket
+    assert "new WebSocket" in src, "Instanciação do WebSocket não encontrada"
+    idx_ws = src.find("new WebSocket")
+    bloco_ws = src[max(0, idx_ws - 300):idx_ws + 100]
+    assert ("sessao" in bloco_ws and "ws/live" in bloco_ws), (
+        "FALHA GATE 1: static_adk/app.js conecta ao /ws/live sem propagar o query param 'sessao', "
+        "causando fragmentação de identidade entre HTTP e WebSocket!"
     )
 
 
