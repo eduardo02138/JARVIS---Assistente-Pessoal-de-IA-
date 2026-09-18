@@ -175,11 +175,15 @@ class OmniRouteProvider:
             }
 
     @classmethod
+    def get_model(cls) -> str:
+        return os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash")
+
+    @classmethod
     async def chat(cls, texto: str) -> str:
         """Chat completion de contingência via OmniRoute. Implementação canônica única."""
         base = cls.get_url().rstrip("/") + "/chat/completions"
         key = cls.get_api_key()
-        modelo = os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash")
+        modelo = cls.get_model()
         timeout = float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))
         payload = json.dumps({
             "model": modelo,

@@ -445,7 +445,7 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho,
                 "motivo_do_roteamento": "Provedor ativo: OmniRoute",
                 "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
+                "modelo": f"omniroute/{OmniRouteProvider.get_model()}",
                 "resposta": resp_texto,
                 "ferramentas": [],
             }
@@ -517,7 +517,7 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho,
                 "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
                 "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
+                "modelo": f"omniroute/{OmniRouteProvider.get_model()}",
                 "resposta": resp_texto,
                 "ferramentas": [],
             }

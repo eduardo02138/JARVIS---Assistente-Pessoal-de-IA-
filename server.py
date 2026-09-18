@@ -140,8 +140,6 @@ async def get_index():
 async def get_debug_dashboard():
     return FileResponse(os.path.join(MONITORING_DIR, "dashboard.html"))
 
-ACTIVE_AI_PROVIDER = os.environ.get("AI_PROVIDER", "google_studio")
-
 def check_omniroute_status() -> dict:
     """Verifica se o OmniRoute (segundo provedor) está operacional via OmniRouteProvider."""
     return OmniRouteProvider.check_status()
@@ -208,13 +206,11 @@ async def get_providers_endpoint():
 
 @app.post("/api/providers/select")
 async def select_provider_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
-    global ACTIVE_AI_PROVIDER
     chosen = (payload.get("provider") or "").strip().lower()
     if provider_router.set_active_provider(chosen):
-        ACTIVE_AI_PROVIDER = provider_router.active_provider
-        record_event("provider_changed", {"provider": ACTIVE_AI_PROVIDER})
-        logger.info(f"Provedor ativo de IA alterado para: {ACTIVE_AI_PROVIDER}")
-        return {"status": "ok", "active": ACTIVE_AI_PROVIDER}
+        record_event("provider_changed", {"provider": provider_router.active_provider})
+        logger.info(f"Provedor ativo de IA alterado para: {provider_router.active_provider}")
+        return {"status": "ok", "active": provider_router.active_provider}
     return {"status": "erro", "mensagem": "Provedor inválido. Escolha 'google_studio' ou 'omniroute'."}
 
 @app.post("/api/providers/test")
@@ -700,7 +696,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho,
                 "motivo_do_roteamento": "Provedor ativo: OmniRoute",
                 "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
+                "modelo": f"omniroute/{OmniRouteProvider.get_model()}",
                 "resposta": resp_texto,
                 "ferramentas": [],
             }
@@ -778,7 +774,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho,
                 "motivo_do_roteamento": "Failover: Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
                 "provedor": "omniroute",
-                "modelo": "omniroute/gemini-2.5-flash",
+                "modelo": f"omniroute/{OmniRouteProvider.get_model()}",
                 "resposta": resp_texto,
                 "ferramentas": [],
             }
@@ -1112,7 +1108,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
     model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
-    req_provider = (init_data.get("provider") or "").strip() or ACTIVE_AI_PROVIDER
+    req_provider = (init_data.get("provider") or "").strip() or provider_router.active_provider
     allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
     activity_handling = (
         types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
