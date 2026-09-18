@@ -435,6 +435,27 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
             texto = f"O usuario confirmou expressamente a acao. Execute a ferramenta {pending.tool_name} agora."
             caminho, motivo = "complexo", "execucao de acao autorizada pelo usuario"
 
+    from provider_router import provider_router, OmniRouteProvider
+    if provider_router.active_provider == "omniroute":
+        logger.info("Provedor ativo é OmniRoute. Despachando chat diretamente...")
+        try:
+            resp_texto = await OmniRouteProvider.chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Provedor ativo: OmniRoute",
+                "provedor": "omniroute",
+                "modelo": "omniroute/gemini-2.5-flash",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
+        except Exception as omni_err:
+            logger.warning("Falha no provedor ativo OmniRoute: %s", omni_err)
+            return {
+                "status": "erro",
+                "caminho": caminho,
+                "mensagem": f"Provedor OmniRoute indisponível: {omni_err}",
+            }
 
     runner = obter_runner(caminho)
     await garantir_sessao(usuario, sessao)
@@ -523,6 +544,7 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
         "status": "ok",
         "caminho": caminho,
         "motivo_do_roteamento": motivo,
+        "provedor": "google_studio",
         "modelo": runner.agent.model,
         "resposta": resposta,
         "ferramentas": ferramentas,
