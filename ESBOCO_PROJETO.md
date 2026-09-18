@@ -110,3 +110,43 @@ O projeto integra diretamente com o **OmniRoute**:
 - **Combo Dedicado**: `jarvis` configurado no OmniRoute com estratégia `round-robin`.
 - **Pool de Contas**: Suporte a failover automático entre as **7 contas Gemini** cadastradas. Se uma conta atingir limite de cota (*Rate Limit 429*), o JARVIS rotaciona de forma transparente para a próxima conta disponível sem interromper a sessão.
 - **Configuração Segura**: Chaves carregadas via `.env` com permissões restritas `0600`.
+
+
+---
+
+## 7. Módulo Google ADK Voice Agent (Arquitetura Unificada)
+
+O repositório unifica a ponte nativa do JARVIS e o ecossistema oficial do **Google Agent Development Kit (ADK)**:
+
+```text
+                    CLIENTE ÚNICO
+                 HTML + JS + Microfone
+                         │
+                         ▼
+                SERVIDOR ÚNICO / ADK
+                         │
+                 ┌───────┴────────┐
+                 │                │
+                 ▼                ▼
+           CAMINHO RÁPIDO   COORDENADOR AVANÇADO
+          (baixa latência)      (complexo)
+          tarefas simples    sub-agentes especialistas
+                 │                │
+                 │          ┌─────┴─────┐
+                 │          ▼           ▼
+                 │     especialista  especialista
+                 │       sistema      navegador
+                 │
+                 └──────────┬───────────┘
+                            ▼
+                       MESMA RESPOSTA
+                       TEXTO OU VOZ
+```
+
+### Decisões de Engenharia ADK
+1. **Runner.run_live() vs StreamingMode**: A seleção da Live API é feita exclusivamente por `Runner.run_live()`. Em Python, o enum `StreamingMode.BIDI` não é lido no fluxo live e foi removido.
+2. **Segregação de Modelos**:
+   - `LIVE_MODEL_PRIMARY`: Modelos Live nativos com WebSockets bidirecionais (`gemini-3.8-live` ou `gemini-2.5-flash-native-audio-latest`).
+   - `TEXT_MODEL`: Modelos textuais convencionais (`gemini-flash-latest` com fallback para `gemini-2.5-flash`).
+3. **Persistência de Memória Durável**: Utiliza `DatabaseSessionService` (`sqlite+aiosqlite:///sessoes.db`) garantindo que as preferências e memórias de usuário (`user:`) sobrevivam a reinicializações de processo.
+4. **Resiliência a Quotas (HTTP 429)**: Rotação dinâmica do pool de chaves (`GEMINI_API_KEYS`).

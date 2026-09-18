@@ -122,6 +122,29 @@ http://127.0.0.1:8000
 
 ---
 
+
+---
+
+## 🎙️ Arquitetura Nativa Google ADK (Voice Agent v0.1)
+
+Além da bridge customizada do JARVIS, o projeto conta com um módulo nativo baseado no **Google Agent Development Kit (ADK 2.9+)**:
+
+- **Cliente Único & Roteamento Interno**: O usuário interage por texto ou voz sem precisar selecionar versão do agente. O roteador (`agentes/roteador.py`) despacha heurística e semanticamente:
+  - *Caminho Rápido (`criar_agente_rapido`)*: Consultas diretas de baixa latência (hora, status, busca simples).
+  - *Caminho Coordenador (`criar_agente_coordenador`)*: Tarefas complexas orquestrando especialistas (`especialista_sistema`, `especialista_navegador`) via `AgentTool`.
+- **Persistência Durável com `DatabaseSessionService`**: Suporte a SQLite assíncrono (`sessoes.db`). As memórias gravadas sob a chave `user:` persistem mesmo com o reinício do servidor.
+- **Modelos Dedicados & Failover**:
+  - **Live (Voz Bidirecional)**: `gemini-3.8-live` ou `gemini-2.5-flash-native-audio-latest` através de `Runner.run_live()` e `LiveRequestQueue`.
+  - **Texto & Sub-agentes**: `gemini-flash-latest` com failover automático em caso de 503 para `gemini-2.5-flash`.
+- **Rotação Automática de Chaves**: Caso uma chave atinja a cota (HTTP 429), o sistema faz o failover transparente para a próxima chave configurada em `GEMINI_API_KEYS`.
+
+### Como Iniciar o Servidor ADK
+```bash
+# Executar o servidor de voz ADK (porta 8100)
+.venv/bin/python servidor_adk.py
+```
+Acesse em: `http://127.0.0.1:8100`
+
 ## 🧪 Validação & Testes Automatizados
 
 O repositório inclui uma suíte de testes de integridade arquitetural e de segurança:
@@ -145,5 +168,8 @@ O repositório inclui uma suíte de testes de integridade arquitetural e de segu
 ├── gemini-live-widget/        # Frontend do widget flutuante e modo expandido "Ask Gemini"
 ├── static/                    # Frontend do HUD Holográfico Sci-Fi (Reator Arc)
 ├── monitoring/                # Logs estruturados (events.jsonl) e suíte de testes P0
+├── servidor_adk.py            # Servidor FastAPI com Google ADK Runner e DatabaseSessionService
+├── agentes/                   # Agentes ADK (assistente.py, roteador.py, ferramentas.py)
+├── static_adk/                # Cliente web unificado para o agente ADK
 └── run_jarvis.sh              # Script utilitário para subida rápida do ambiente
 ```

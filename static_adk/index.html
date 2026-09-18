@@ -1,0 +1,33 @@
+<title>Agente de Voz — ADK + Gemini Live</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/estilo.css">
+
+<main>
+  <header>
+    <h1>Agente de Voz em Tempo Real</h1>
+    <p class="subtitulo">Google ADK + Gemini Live API</p>
+  </header>
+
+  <section class="controles">
+    <div class="botoes">
+      <button id="btnConectar" class="primario">Entrar no modo live</button>
+      <button id="btnMicrofone" disabled>Microfone</button>
+    </div>
+    <p id="estado" class="estado">Desconectado</p>
+  </section>
+
+  <section class="conversa" id="conversa" aria-live="polite"></section>
+
+  <form id="formTexto" class="entrada-texto">
+    <input id="campoTexto" type="text" placeholder="Escrever em vez de falar…" autocomplete="off">
+    <button type="submit">Enviar</button>
+  </form>
+
+  <section class="ferramentas">
+    <h2>Ferramentas</h2>
+    <ul id="listaFerramentas"></ul>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
