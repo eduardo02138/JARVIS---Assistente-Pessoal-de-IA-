@@ -575,6 +575,12 @@ def play_music(query: str, platform: str = None) -> dict:
         except Exception as e:
             return {"sucesso": False, "mensagem": f"Falha ao iniciar reprodução no YouTube: {str(e)}"}
 
+ALLOWED_DEFAULT_APPS = {
+    "gedit", "code", "antigravity", "kate", "nano", "vim", "subl",
+    "firefox", "google-chrome", "chromium", "brave",
+    "vlc", "mpv", "rhythmbox", "eog", "xdg-open", "default"
+}
+
 # ----------------- GERENCIAMENTO DE MEMÓRIA & PREFERÊNCIAS -----------------
 def manage_user_preference(action: str, category: str, key: str = None, value: str = None) -> dict:
     """
@@ -611,6 +617,14 @@ def manage_user_preference(action: str, category: str, key: str = None, value: s
     elif action == "set":
         if value is None:
             return {"sucesso": False, "mensagem": "O valor (value) é obrigatório para definir uma preferência."}
+        if category == "default_apps":
+            clean_bin = os.path.basename(str(value).strip().lower().split()[0])
+            if clean_bin not in ALLOWED_DEFAULT_APPS:
+                return {
+                    "sucesso": False,
+                    "mensagem": f"Executável '{value}' rejeitado por segurança. Binários permitidos para default_apps: {sorted(list(ALLOWED_DEFAULT_APPS))}"
+                }
+            value = clean_bin
         ok = preferences_manager.set_preference(category, key, value)
         return {
             "sucesso": ok,
@@ -643,8 +657,8 @@ def set_game_preference(game_name: str, preferred_distributor: str, custom_args:
     return {
         "sucesso": ok,
         "jogo": clean_game,
-        "distribuidora_preferida": preferred_distributor,
-        "mensagem": f"Memória atualizada: agora o jogo '{game_name}' será iniciado prioritariamente via {preferred_distributor}, senhor."
+        "preferencias": val,
+        "mensagem": f"Preferências do jogo '{clean_game}' gravadas na memória com sucesso, senhor." if ok else "Falha ao gravar preferência de jogo."
     }
 
 def open_default_app(app_type: str, target: str = None) -> dict:
@@ -658,8 +672,9 @@ def open_default_app(app_type: str, target: str = None) -> dict:
     try:
         if clean_type == "browser":
             url = target or "https://www.google.com"
-            if app_pref != "default" and shutil.which(app_pref):
-                subprocess.Popen([app_pref, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            clean_bin = os.path.basename(str(app_pref).strip().lower().split()[0])
+            if clean_bin in ALLOWED_DEFAULT_APPS and clean_bin != "default" and shutil.which(clean_bin):
+                subprocess.Popen([clean_bin, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
                 subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             return {"sucesso": True, "mensagem": f"Navegador padrão aberto com sucesso, senhor."}
@@ -667,11 +682,12 @@ def open_default_app(app_type: str, target: str = None) -> dict:
         elif clean_type == "text_editor":
             editor = app_pref if app_pref != "default" else "antigravity"
             file_target = target or "."
-            if shutil.which(editor):
-                subprocess.Popen([editor, file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            clean_bin = os.path.basename(str(editor).strip().lower().split()[0])
+            if clean_bin in ALLOWED_DEFAULT_APPS and shutil.which(clean_bin):
+                subprocess.Popen([clean_bin, file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
                 subprocess.Popen(["xdg-open", file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            return {"sucesso": True, "mensagem": f"Editor de texto ({editor}) aberto para '{file_target}', senhor."}
+            return {"sucesso": True, "mensagem": f"Editor de texto ({clean_bin}) aberto para '{file_target}', senhor."}
 
         elif clean_type == "email":
             mailto = f"mailto:{target}" if target else "mailto:"

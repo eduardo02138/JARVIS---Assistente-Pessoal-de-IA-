@@ -105,7 +105,6 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "play_music": RiskLevel.LOW_WRITE,
     "take_quick_note": RiskLevel.LOW_WRITE,
     "open_default_app": RiskLevel.LOW_WRITE,
-    "manage_user_preference": RiskLevel.LOW_WRITE,
     "set_game_preference": RiskLevel.LOW_WRITE,
     # Controle físico de mouse e teclado: liberado apenas sob uma lease ativa (ver CONTROL_TOOLS)
     "mouse_move": RiskLevel.LOW_WRITE,
@@ -122,7 +121,8 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "smart_home_activate_scene": RiskLevel.LOW_WRITE,
     "live_stream_toggle_status": RiskLevel.LOW_WRITE,
 
-    # EXTERNAL_WRITE: Comunicação com serviços de terceiros
+    # EXTERNAL_WRITE: Comunicação com serviços de terceiros e mutação de configuração do sistema
+    "manage_user_preference": RiskLevel.EXTERNAL_WRITE,
     "social_feed_post_update": RiskLevel.EXTERNAL_WRITE,
     "live_stream_send_alert": RiskLevel.EXTERNAL_WRITE,
 
