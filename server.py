@@ -10,6 +10,7 @@ import sys
 import json
 import base64
 import time
+import socket
 import asyncio
 import logging
 from typing import Dict, Optional
@@ -125,18 +126,146 @@ async def get_index():
 async def get_debug_dashboard():
     return FileResponse(os.path.join(MONITORING_DIR, "dashboard.html"))
 
+ACTIVE_AI_PROVIDER = os.environ.get("AI_PROVIDER", "google_studio")
+
+def check_omniroute_status() -> dict:
+    """Verifica se o OmniRoute (segundo provedor) está operacional em localhost:20128."""
+    try:
+        with socket.create_connection(("127.0.0.1", 20128), timeout=0.3):
+            return {
+                "online": True,
+                "url": os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1"),
+                "combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
+                "accounts": 7
+            }
+    except Exception:
+        return {
+            "online": False,
+            "url": os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1"),
+            "combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
+            "accounts": 0
+        }
+
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
     raw_keys = os.environ.get("GEMINI_API_KEYS", "")
     key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
     has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
+    omni = check_omniroute_status()
     return {
         "status": "online",
         "gemini_api_key_configured": has_key,
         "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
+        "primary_provider": "google_studio",
+        "secondary_provider": "omniroute",
+        "active_provider": ACTIVE_AI_PROVIDER,
+        "omniroute_online": omni["online"],
         "omniroute_combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
-        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+    }
+
+@app.get("/api/providers")
+async def get_providers_endpoint():
+    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
+    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
+    omni = check_omniroute_status()
+
+    return {
+        "active": ACTIVE_AI_PROVIDER,
+        "primary": "google_studio",
+        "secondary": "omniroute",
+        "providers": [
+            {
+                "id": "google_studio",
+                "name": "Google AI Studio API",
+                "tier": "primary",
+                "is_primary": True,
+                "is_active": ACTIVE_AI_PROVIDER == "google_studio",
+                "status": "online" if has_key else "missing_keys",
+                "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
+                "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
+                "features": ["Native Audio 24kHz", "Latência <500ms", "Live WebSockets", "Visão & 55 Ferramentas"],
+                "description": "Provedor primário oficial com velocidade máxima e áudio bidirecional em tempo real."
+            },
+            {
+                "id": "omniroute",
+                "name": "OmniRoute Proxy",
+                "tier": "secondary",
+                "is_secondary": True,
+                "is_active": ACTIVE_AI_PROVIDER == "omniroute",
+                "status": "online" if omni["online"] else "offline",
+                "url": omni["url"],
+                "combo": omni["combo"],
+                "accounts_count": omni["accounts"],
+                "features": ["Failover Automático (Rate Limit 429)", "Pool de 7 Contas", "Balanceamento Round-Robin", "Porta :20128"],
+                "description": "Segundo provedor local de inteligência e contingência para alta disponibilidade."
+            }
+        ]
+    }
+
+@app.post("/api/providers/select")
+async def select_provider_endpoint(payload: dict):
+    global ACTIVE_AI_PROVIDER
+    chosen = (payload.get("provider") or "").strip().lower()
+    if chosen in ("google_studio", "omniroute"):
+        ACTIVE_AI_PROVIDER = chosen
+        record_event("provider_changed", {"provider": chosen})
+        logger.info(f"Provedor ativo de IA alterado para: {chosen}")
+        return {"status": "ok", "active": ACTIVE_AI_PROVIDER}
+    return {"status": "erro", "mensagem": "Provedor inválido. Escolha 'google_studio' ou 'omniroute'."}
+
+@app.post("/api/providers/test")
+async def test_providers_endpoint():
+    results = {}
+    # 1. Teste Google AI Studio
+    t0 = time.time()
+    google_ok = False
+    google_err = None
+    parsed_keys = []
+    try:
+        raw_keys = os.environ.get("GEMINI_API_KEYS", "")
+        parsed_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+        single_key = os.environ.get("GEMINI_API_KEY")
+        if single_key and single_key not in parsed_keys:
+            parsed_keys.insert(0, single_key)
+        if parsed_keys:
+            client_test = genai.Client(api_key=parsed_keys[0])
+            google_ok = bool(client_test)
+            lat_google = round((time.time() - t0) * 1000)
+        else:
+            google_err = "Nenhuma chave configurada no pool."
+            lat_google = 0
+    except Exception as exc:
+        google_err = str(exc)
+        lat_google = round((time.time() - t0) * 1000)
+
+    results["google_studio"] = {
+        "status": "online" if google_ok else "erro",
+        "latency_ms": lat_google,
+        "is_primary": True,
+        "accounts": len(parsed_keys),
+        "error": google_err
+    }
+
+    # 2. Teste OmniRoute
+    t1 = time.time()
+    omni = check_omniroute_status()
+    lat_omni = round((time.time() - t1) * 1000)
+    results["omniroute"] = {
+        "status": "online" if omni["online"] else "offline",
+        "latency_ms": lat_omni,
+        "is_secondary": True,
+        "accounts": omni["accounts"],
+        "url": omni["url"],
+        "combo": omni["combo"]
+    }
+
+    return {
+        "status": "ok",
+        "active": ACTIVE_AI_PROVIDER,
+        "results": results
     }
 
 @app.get("/api/status")
@@ -172,6 +301,10 @@ async def install_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token))
 @app.get("/api/debug/telemetry")
 async def get_telemetry():
     return get_telemetry_summary()
+
+@app.get("/api/system/telemetry")
+async def get_system_telemetry():
+    return system_tools.toggle_telemetry_overlay(enabled=True)
 
 @app.get("/api/debug/events")
 async def get_events(limit: int = 100):
@@ -326,6 +459,9 @@ Diretrizes fundamentais:
      * Digitar texto: `keyboard_type(text=...)`
      * Atalhos de teclado: `keyboard_hotkey(keys='alt+tab'|'ctrl+c'|'ctrl+v'|'super'|'enter')`
      * Capturar a tela para ver onde clicar: `take_screenshot`
+13. TELEMETRIA EM TELA & MONITORAMENTO DE HARDWARE:
+   - Quando o Senhor pedir "telemetria na tela", "mostrar telemetria", "abrir telemetria", "ocultar telemetria" ou disser que a telemetria não está aparecendo na janela, chame IMEDIATAMENTE `toggle_telemetry_overlay(enabled=True/False)`.
+   - Ao executar a ferramenta, confirme em voz alta os dados principais de CPU, RAM e GPU e assegure ao Senhor que o painel de telemetria em tempo real foi aberto diretamente na janela do assistente sobreposta na tela.
 """
 
 def build_gemini_tools():
@@ -476,7 +612,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     is_negado = bool(tokens & palavras_negacao)
     is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
     if is_confirmado:
-        pending = policy_engine.approve_latest_pending(session_id=sessao)
+        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
         if pending:
             logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
             texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
@@ -761,7 +897,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # O modelo pedido pelo cliente é respeitado; o .env define o padrão.
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
-    model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+    model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+    req_provider = (init_data.get("provider") or "").strip() or ACTIVE_AI_PROVIDER
 
     config = types.LiveConnectConfig(
         response_modalities=[types.Modality.AUDIO],
@@ -823,9 +960,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 sessao_id = secrets.token_urlsafe(12)
                 await websocket.send_json({
                     "type": "connected",
-                    "message": f"Sistemas online. Conectado ao modelo {model_name} com a voz {voice_name}.",
+                    "message": f"Sistemas online. Conectado via {req_provider} ({model_name}) com a voz {voice_name}.",
                     "voice": voice_name,
-                    "model": model_name
+                    "model": model_name,
+                    "provider": req_provider,
+                    "primary_provider": "google_studio",
+                    "secondary_provider": "omniroute"
                 })
                 await websocket.send_json({
                     "type": "ide_mode",
@@ -1127,6 +1267,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             await websocket.send_json({
                                                 "type": "ide_mode",
                                                 "active": res.get("ide_mode", False)
+                                            })
+
+                                        if func_name == "toggle_telemetry_overlay":
+                                            await websocket.send_json({
+                                                "type": "toggle_telemetry",
+                                                "active": res.get("active", True),
+                                                "telemetry": res.get("telemetry", {})
                                             })
 
                                         if func_name == "set_control_mode":

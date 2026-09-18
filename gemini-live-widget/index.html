@@ -79,6 +79,10 @@
                                 <option value="tank-3.8">🛡️ Tank 3.8 Live</option>
                                 <option value="simples">⚡ Simples</option>
                             </select>
+                            <div id="providerPill" class="provider-pill" title="1º Provedor: Google AI Studio API. Clique para alternar para OmniRoute (2º Provedor)">
+                                <span class="provider-dot online"></span>
+                                <span id="providerBadgeText">Google Studio (1º)</span>
+                            </div>
                         </div>
                         <span id="liveStatusText" class="status-micro">Pronto para conversar</span>
                     </div>
@@ -113,6 +117,15 @@
                         <div class="avatar-img">E</div>
                         <span class="online-indicator" title="7 contas OmniRoute ativas"></span>
                     </div>
+
+                    <!-- Botão Telemetria em Tela (HUD) -->
+                    <button id="btnToggleTelemetry" class="icon-action-btn" title="Mostrar Telemetria em Tela (CPU, GPU, RAM)" aria-label="Telemetria">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="20" x2="18" y2="10"></line>
+                            <line x1="12" y1="20" x2="12" y2="4"></line>
+                            <line x1="6" y1="20" x2="6" y2="14"></line>
+                        </svg>
+                    </button>
 
                     <!-- Botão Legenda / Transcrição -->
                     <button id="btnToggleCaptions" class="icon-action-btn" title="Mostrar Transcrição / Legenda" aria-label="Legendas">
@@ -233,11 +246,87 @@
             </div>
         </div>
 
+        <!-- Gaveta de Telemetria do Sistema em Tempo Real (HUD) -->
+        <div id="telemetryDrawer" class="telemetry-drawer hidden">
+            <div class="telemetry-drawer-header">
+                <div class="telemetry-drawer-title">
+                    <span class="telemetry-live-dot"></span>
+                    <span>Telemetria do Sistema // Em Tempo Real</span>
+                </div>
+                <div class="telemetry-drawer-actions">
+                    <button type="button" id="btnRefreshTelemetry" class="drawer-mini-btn" title="Atualizar dados agora">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <polyline points="1 20 1 14 7 14"></polyline>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                    </button>
+                    <button type="button" id="btnCloseTelemetryDrawer" class="drawer-mini-btn close" title="Fechar telemetria">✕</button>
+                </div>
+            </div>
+
+            <div class="telemetry-drawer-grid">
+                <!-- Card CPU -->
+                <div class="hud-stat-box">
+                    <div class="hud-stat-header">
+                        <span class="hud-stat-label">PROCESSADOR (CPU)</span>
+                        <span id="hudCpuVal" class="hud-stat-num">--%</span>
+                    </div>
+                    <div class="hud-bar-track">
+                        <div id="hudCpuBar" class="hud-bar-fill cpu" style="width: 0%;"></div>
+                    </div>
+                    <div class="hud-stat-sub" id="hudCpuSub">Núcleos lógicos: --</div>
+                </div>
+
+                <!-- Card GPU NVIDIA RTX -->
+                <div class="hud-stat-box">
+                    <div class="hud-stat-header">
+                        <span class="hud-stat-label" id="hudGpuModel">GPU NVIDIA RTX</span>
+                        <span id="hudGpuTempVal" class="hud-stat-num warm">--°C</span>
+                    </div>
+                    <div class="hud-bar-track">
+                        <div id="hudGpuBar" class="hud-bar-fill gpu" style="width: 0%;"></div>
+                    </div>
+                    <div class="hud-stat-sub">
+                        <span>Uso: <strong id="hudGpuUso">--%</strong></span> |
+                        <span>VRAM: <strong id="hudVramVal">-- / --</strong></span>
+                    </div>
+                </div>
+
+                <!-- Card Memória RAM -->
+                <div class="hud-stat-box">
+                    <div class="hud-stat-header">
+                        <span class="hud-stat-label">MEMÓRIA RAM</span>
+                        <span id="hudRamVal" class="hud-stat-num">--%</span>
+                    </div>
+                    <div class="hud-bar-track">
+                        <div id="hudRamBar" class="hud-bar-fill ram" style="width: 0%;"></div>
+                    </div>
+                    <div class="hud-stat-sub" id="hudRamSub">-- GB usados</div>
+                </div>
+
+                <!-- Card Provedor Ativo & Conexão -->
+                <div class="hud-stat-box full-width">
+                    <div class="hud-provider-row">
+                        <div class="hud-prov-info">
+                            <span class="hud-prov-tag">PROVEDOR ATIVO</span>
+                            <span id="hudActiveProviderName" class="hud-prov-val">Google AI Studio API (1º)</span>
+                        </div>
+                        <div class="hud-prov-info align-right">
+                            <span class="hud-prov-tag">SISTEMA</span>
+                            <span id="hudActiveUptime" class="hud-prov-val green">● ONLINE</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ABA / MODAL DE CONFIGURAÇÃO COMPLETA (VOZES & MICROFONE) -->
         <div id="settingsPanel" class="settings-panel hidden">
             <div class="settings-header">
                 <div class="settings-nav-tabs">
                     <button class="tab-btn active" data-tab="tab-modes">⚡ Modos</button>
+                    <button class="tab-btn" data-tab="tab-providers">🌐 Provedores</button>
                     <button class="tab-btn" data-tab="tab-voices">🎙️ Vozes</button>
                     <button class="tab-btn" data-tab="tab-mic">🎤 Microfone</button>
                     <button class="tab-btn" data-tab="tab-omni">⚡ OmniRoute</button>
@@ -385,6 +474,64 @@
                 </div>
             </div>
 
+            <!-- Aba Provedores: Google AI Studio (1º) e OmniRoute (2º) -->
+            <div id="tab-providers" class="tab-content">
+                <div class="tab-desc">Arquitetura de Inteligência: Google AI Studio como 1º Provedor e OmniRoute como 2º Provedor de contingência.</div>
+
+                <div class="providers-container">
+                    <!-- Provedor 1: Google AI Studio API -->
+                    <div class="provider-card active" id="cardProviderGoogle" data-provider="google_studio">
+                        <div class="provider-card-top">
+                            <div class="provider-title-group">
+                                <span class="provider-icon">✨</span>
+                                <div>
+                                    <div class="provider-name">Google AI Studio API</div>
+                                    <span class="provider-tier-tag primary">⭐ 1º Provedor (Primário)</span>
+                                </div>
+                            </div>
+                            <span class="provider-status-badge online" id="badgeStatusGoogle">🟢 Online</span>
+                        </div>
+                        <p class="provider-desc">Conexão direta oficial via Google GenAI SDK. Áudio nativo 24kHz bidirecional, latência sub-500ms, visão e 55 ferramentas integradas.</p>
+                        <div class="provider-features-list">
+                            <span class="feat-tag">✓ Native Audio Live</span>
+                            <span class="feat-tag">✓ Latência &lt;500ms</span>
+                            <span class="feat-tag">✓ 4 Contas no Pool</span>
+                        </div>
+                        <div class="provider-card-footer">
+                            <button class="provider-action-btn active" id="btnActivateGoogle">✓ Provedor Ativo</button>
+                        </div>
+                    </div>
+
+                    <!-- Provedor 2: OmniRoute Local -->
+                    <div class="provider-card" id="cardProviderOmni" data-provider="omniroute">
+                        <div class="provider-card-top">
+                            <div class="provider-title-group">
+                                <span class="provider-icon">⚡</span>
+                                <div>
+                                    <div class="provider-name">OmniRoute Local Proxy</div>
+                                    <span class="provider-tier-tag secondary">🛡️ 2º Provedor (Reserva)</span>
+                                </div>
+                            </div>
+                            <span class="provider-status-badge" id="badgeStatusOmni">⚡ Online (:20128)</span>
+                        </div>
+                        <p class="provider-desc">Proxy multi-contas na porta <code>:20128</code> com pool de 7 contas sincronizadas. Atua como segundo provedor e failover automático de cotas (429).</p>
+                        <div class="provider-features-list">
+                            <span class="feat-tag">✓ Failover Automático 429</span>
+                            <span class="feat-tag">✓ Pool de 7 Contas</span>
+                            <span class="feat-tag">✓ Combo: jarvis</span>
+                        </div>
+                        <div class="provider-card-footer">
+                            <button class="provider-action-btn" id="btnActivateOmni">Definir como Ativo</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="provider-footer-tools">
+                    <button id="btnTestProvidersLatency" class="ghost-btn">⚡ Testar Latência dos Provedores</button>
+                    <span id="providerLatencyReport" class="provider-latency-report"></span>
+                </div>
+            </div>
+
             <!-- Aba 3: OmniRoute & Inteligência -->
             <div id="tab-omni" class="tab-content">
                 <div class="omni-status-card">
@@ -482,6 +629,6 @@
         </div>
     </div>
 
-    <script src="widget.js?v=2.5"></script>
+    <script src="widget.js?v=2.7"></script>
 </body>
 </html>

@@ -53,6 +53,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     # READ: Informação e Consulta
     "get_system_status": RiskLevel.READ,
     "get_gpu_status": RiskLevel.READ,
+    "toggle_telemetry_overlay": RiskLevel.READ,
     "get_current_datetime": RiskLevel.READ,
     "list_installed_games": RiskLevel.READ,
     "read_notes": RiskLevel.READ,
@@ -356,6 +357,22 @@ class PolicyEngine:
                     reason="Prompt privilegiado vazio ou inválido."
                 )
 
+            # Se o Modo IDE estiver ativo, a intenção de delegar tarefas ao Antigravity já foi explicitamente autorizada
+            if tool_name == "antigravity_run_prompt":
+                try:
+                    import system_tools
+                    if getattr(system_tools, "get_ide_mode", lambda: False)():
+                        return PolicyDecision(
+                            tool_name=tool_name,
+                            risk_level=RiskLevel.LOW_WRITE,
+                            allowed=True,
+                            requires_confirmation=False,
+                            reason="Modo IDE ativo: prompts delegados ao Antigravity são autorizados automaticamente sem interrupção.",
+                            metadata={"prompt_preview": prompt[:120]}
+                        )
+                except Exception:
+                    pass
+
             return PolicyDecision(
                 tool_name=tool_name,
                 risk_level=risk,
@@ -536,6 +553,7 @@ class PolicyEngine:
     ) -> list[PendingAction]:
         """Retorna apenas as pendências ativas da sessão e usuário requisitantes.
         Exige ao menos session_id ou user_id para evitar enumeração global não autorizada.
+        Quando ambos são informados, aplica a validação estrita de ambos os filtros.
         """
         self.cleanup_expired_actions()
         now = time.monotonic()

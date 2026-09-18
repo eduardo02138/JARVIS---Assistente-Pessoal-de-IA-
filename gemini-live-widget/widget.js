@@ -58,6 +58,7 @@ const state = {
         if (mode === "tank-3.8") return "gemini-3.8-live";
         return "gemini-2.5-flash-native-audio-latest";
     })(),
+    provider: localStorage.getItem("jarvis_provider") || "google_studio",
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
     micMode: localStorage.getItem("gemini_mic_mode") || "always",
     echoCancellation: localStorage.getItem("gemini_echo") !== "false",
@@ -131,7 +132,37 @@ const dom = {
     expandedInput: document.getElementById("expandedInput"),
     btnExpandedMic: document.getElementById("btnExpandedMic"),
     btnCloseWidget: document.getElementById("btnCloseWidget"),
-    btnCloseExpanded: document.getElementById("btnCloseExpanded")
+    btnCloseExpanded: document.getElementById("btnCloseExpanded"),
+
+    // Provedores de Inteligência
+    providerPill: document.getElementById("providerPill"),
+    providerBadgeText: document.getElementById("providerBadgeText"),
+    cardProviderGoogle: document.getElementById("cardProviderGoogle"),
+    cardProviderOmni: document.getElementById("cardProviderOmni"),
+    btnActivateGoogle: document.getElementById("btnActivateGoogle"),
+    btnActivateOmni: document.getElementById("btnActivateOmni"),
+    btnTestProvidersLatency: document.getElementById("btnTestProvidersLatency"),
+    badgeStatusGoogle: document.getElementById("badgeStatusGoogle"),
+    badgeStatusOmni: document.getElementById("badgeStatusOmni"),
+
+    // Telemetria em Tela (HUD)
+    btnToggleTelemetry: document.getElementById("btnToggleTelemetry"),
+    telemetryDrawer: document.getElementById("telemetryDrawer"),
+    btnRefreshTelemetry: document.getElementById("btnRefreshTelemetry"),
+    btnCloseTelemetryDrawer: document.getElementById("btnCloseTelemetryDrawer"),
+    hudCpuVal: document.getElementById("hudCpuVal"),
+    hudCpuBar: document.getElementById("hudCpuBar"),
+    hudCpuSub: document.getElementById("hudCpuSub"),
+    hudGpuModel: document.getElementById("hudGpuModel"),
+    hudGpuTempVal: document.getElementById("hudGpuTempVal"),
+    hudGpuBar: document.getElementById("hudGpuBar"),
+    hudGpuUso: document.getElementById("hudGpuUso"),
+    hudVramVal: document.getElementById("hudVramVal"),
+    hudRamVal: document.getElementById("hudRamVal"),
+    hudRamBar: document.getElementById("hudRamBar"),
+    hudRamSub: document.getElementById("hudRamSub"),
+    hudActiveProviderName: document.getElementById("hudActiveProviderName"),
+    hudActiveUptime: document.getElementById("hudActiveUptime")
 };
 
 // ---------------- SISTEMA DE ARRASTE DA JANELA NATIVA (WAYLAND & X11) ----------------
@@ -575,6 +606,7 @@ async function connectLiveBackend() {
             type: "init",
             voice: state.voice,
             model: state.model,
+            provider: state.provider,
             token: jarvisSessionToken
         }));
     };
@@ -591,9 +623,11 @@ async function connectLiveBackend() {
                 break;
             case "connected":
                 state.connected = true;
-                dom.liveStatusText.textContent = `Gemini Live (${msg.model || state.model})`;
+                const provRotulo = (msg.provider || state.provider) === "omniroute" ? "OmniRoute" : "Google Studio";
+                dom.liveStatusText.textContent = `Gemini Live [${provRotulo}] (${msg.model || state.model})`;
                 dom.statusBadgeChip.classList.add("active");
                 initAudio();
+                updateProviderUI();
                 break;
 
             case "warn":
@@ -662,6 +696,10 @@ async function connectLiveBackend() {
                     pararVisaoDeTela();
                     appendChatMessage("tool", "Modo Controle desativado.", { source: "tool" });
                 }
+                break;
+
+            case "toggle_telemetry":
+                toggleTelemetryDrawer(msg.active, msg.telemetry);
                 break;
 
             case "tool_result":
@@ -876,6 +914,89 @@ function applyMode(mode, reconnect = true) {
     }
 }
 
+// ---------------- GESTÃO DE PROVEDORES (GOOGLE STUDIO 1º / OMNIROUTE 2º) ----------------
+function updateProviderUI() {
+    const isGoogle = state.provider === "google_studio";
+    if (dom.providerBadgeText) {
+        dom.providerBadgeText.textContent = isGoogle ? "Google Studio (1º)" : "OmniRoute (2º)";
+    }
+    if (dom.providerPill) {
+        dom.providerPill.classList.toggle("omniroute-active", !isGoogle);
+        dom.providerPill.title = isGoogle
+            ? "1º Provedor: Google AI Studio API (Ativo). Clique para alternar para OmniRoute (2º Provedor)."
+            : "2º Provedor: OmniRoute Proxy (Ativo). Clique para alternar para Google AI Studio (1º Provedor).";
+    }
+    if (dom.cardProviderGoogle) dom.cardProviderGoogle.classList.toggle("active", isGoogle);
+    if (dom.cardProviderOmni) dom.cardProviderOmni.classList.toggle("active", !isGoogle);
+    if (dom.btnActivateGoogle) {
+        dom.btnActivateGoogle.textContent = isGoogle ? "✓ Provedor Ativo" : "Definir como Ativo";
+        dom.btnActivateGoogle.classList.toggle("active", isGoogle);
+    }
+    if (dom.btnActivateOmni) {
+        dom.btnActivateOmni.textContent = !isGoogle ? "✓ Provedor Ativo" : "Definir como Ativo";
+        dom.btnActivateOmni.classList.toggle("active", !isGoogle);
+    }
+}
+
+async function setProvider(newProvider, reconnect = true) {
+    if (newProvider !== "google_studio" && newProvider !== "omniroute") return;
+    state.provider = newProvider;
+    localStorage.setItem("jarvis_provider", newProvider);
+    updateProviderUI();
+
+    try {
+        await fetch("/api/providers/select", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: newProvider })
+        });
+    } catch (e) {
+        console.warn("Falha ao sincronizar provedor com o backend:", e);
+    }
+
+    appendChatMessage("gemini", newProvider === "google_studio"
+        ? "⭐ Provedor alterado: Google AI Studio API ativado como 1º Provedor (Primário)."
+        : "🛡️ Provedor alterado: OmniRoute ativado como 2º Provedor (Proxy multi-contas)."
+    );
+
+    if (reconnect && state.ws) {
+        state.ws.close();
+        initWebSocket();
+    }
+}
+
+if (dom.providerPill) {
+    dom.providerPill.addEventListener("click", () => {
+        const next = state.provider === "google_studio" ? "omniroute" : "google_studio";
+        setProvider(next, true);
+    });
+}
+if (dom.btnActivateGoogle) {
+    dom.btnActivateGoogle.addEventListener("click", () => setProvider("google_studio", true));
+}
+if (dom.btnActivateOmni) {
+    dom.btnActivateOmni.addEventListener("click", () => setProvider("omniroute", true));
+}
+
+if (dom.btnTestProvidersLatency) {
+    dom.btnTestProvidersLatency.addEventListener("click", async () => {
+        if (dom.providerLatencyReport) dom.providerLatencyReport.textContent = "Testando conexões...";
+        try {
+            const resp = await fetch("/api/providers/test", { method: "POST" });
+            const data = await resp.json();
+            if (data.status === "ok" && data.results) {
+                const g = data.results.google_studio;
+                const o = data.results.omniroute;
+                dom.providerLatencyReport.textContent = `Google Studio: ${g.latency_ms}ms (${g.status}) | OmniRoute: ${o.latency_ms}ms (${o.status})`;
+            } else {
+                dom.providerLatencyReport.textContent = "Erro ao testar provedores.";
+            }
+        } catch (err) {
+            dom.providerLatencyReport.textContent = `Erro: ${err.message}`;
+        }
+    });
+}
+
 // ---------------- CONFIGURAÇÃO DE VOZES ----------------
 function updateVoiceSelectionUI() {
     document.querySelectorAll(".voice-card").forEach(card => {
@@ -922,6 +1043,7 @@ function toggleSettings(forceOpen) {
         dom.settingsPanel.classList.remove("hidden");
         dom.keyboardDrawer.classList.add("hidden");
         dom.captionsDrawer.classList.add("hidden");
+        if (dom.telemetryDrawer) toggleTelemetryDrawer(false);
         updateVoiceSelectionUI();
         sendBridgeMessage("PYBRIDGE_RESIZE", "560,540");
     } else {
@@ -950,6 +1072,94 @@ dom.btnSaveConfig.addEventListener("click", () => {
     initAudio();
     toggleSettings(false);
 });
+
+// ---------------- TELEMETRIA EM TELA (HUD) ----------------
+let telemetryPollInterval = null;
+
+async function fetchTelemetryData() {
+    try {
+        const res = await fetch("/api/system/telemetry");
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.telemetry) {
+                renderTelemetryHUD(data.telemetry);
+            }
+        }
+    } catch (e) {
+        console.warn("Falha ao consultar telemetria:", e);
+    }
+}
+
+function renderTelemetryHUD(t) {
+    if (!t) return;
+    if (dom.hudCpuVal) dom.hudCpuVal.textContent = t.cpu_percent || "--%";
+    if (dom.hudCpuBar) dom.hudCpuBar.style.width = t.cpu_percent || "0%";
+    if (dom.hudCpuSub) dom.hudCpuSub.textContent = `Núcleos lógicos: ${t.cpu_cores || "--"}`;
+
+    if (dom.hudGpuModel) dom.hudGpuModel.textContent = t.gpu_modelo || "GPU NVIDIA RTX";
+    if (dom.hudGpuTempVal) dom.hudGpuTempVal.textContent = t.gpu_temp || "--°C";
+    if (dom.hudGpuBar) dom.hudGpuBar.style.width = t.gpu_uso || "0%";
+    if (dom.hudGpuUso) dom.hudGpuUso.textContent = t.gpu_uso || "--%";
+    if (dom.hudVramVal) dom.hudVramVal.textContent = `${t.vram_usada || "--"} / ${t.vram_total || "--"}`;
+
+    if (dom.hudRamVal) dom.hudRamVal.textContent = t.ram_percent || "--%";
+    if (dom.hudRamBar) dom.hudRamBar.style.width = t.ram_percent || "0%";
+    if (dom.hudRamSub) dom.hudRamSub.textContent = `${t.ram_used_gb || "--"} de ${t.ram_total_gb || "--"}`;
+
+    if (dom.hudActiveProviderName) {
+        dom.hudActiveProviderName.textContent = state.provider === "omniroute"
+            ? "OmniRoute Local Proxy (2º)"
+            : "Google AI Studio API (1º)";
+    }
+    if (dom.hudActiveUptime) {
+        dom.hudActiveUptime.textContent = t.uptime ? `● UPTIME: ${t.uptime}` : "● ONLINE";
+    }
+}
+
+function toggleTelemetryDrawer(forceState, data) {
+    if (!dom.telemetryDrawer) return;
+    const isCurrentlyOpen = !dom.telemetryDrawer.classList.contains("hidden");
+    const shouldOpen = forceState !== undefined ? forceState : !isCurrentlyOpen;
+
+    if (shouldOpen) {
+        dom.telemetryDrawer.classList.remove("hidden");
+        if (dom.btnToggleTelemetry) dom.btnToggleTelemetry.classList.add("active");
+        dom.settingsPanel.classList.add("hidden");
+        dom.captionsDrawer.classList.add("hidden");
+        dom.keyboardDrawer.classList.add("hidden");
+        if (dom.btnToggleCaptions) dom.btnToggleCaptions.classList.remove("active");
+        if (dom.btnToggleKeyboard) dom.btnToggleKeyboard.classList.remove("active");
+
+        sendBridgeMessage("PYBRIDGE_RESIZE", "560,450");
+
+        if (data) {
+            renderTelemetryHUD(data);
+        } else {
+            fetchTelemetryData();
+        }
+
+        if (telemetryPollInterval) clearInterval(telemetryPollInterval);
+        telemetryPollInterval = setInterval(fetchTelemetryData, 2500);
+    } else {
+        dom.telemetryDrawer.classList.add("hidden");
+        if (dom.btnToggleTelemetry) dom.btnToggleTelemetry.classList.remove("active");
+        if (telemetryPollInterval) {
+            clearInterval(telemetryPollInterval);
+            telemetryPollInterval = null;
+        }
+        sendBridgeMessage("PYBRIDGE_RESIZE", "560,240");
+    }
+}
+
+if (dom.btnToggleTelemetry) {
+    dom.btnToggleTelemetry.addEventListener("click", () => toggleTelemetryDrawer());
+}
+if (dom.btnCloseTelemetryDrawer) {
+    dom.btnCloseTelemetryDrawer.addEventListener("click", () => toggleTelemetryDrawer(false));
+}
+if (dom.btnRefreshTelemetry) {
+    dom.btnRefreshTelemetry.addEventListener("click", () => fetchTelemetryData());
+}
 
 // ---------------- CONTROLE DE MODOS & PAUSA ----------------
 dom.btnPauseLive.addEventListener("click", () => {
@@ -980,6 +1190,7 @@ function toggleKeyboardDrawer(forceState) {
         dom.btnToggleKeyboard.classList.add("active");
         dom.settingsPanel.classList.add("hidden");
         dom.captionsDrawer.classList.add("hidden");
+        if (dom.telemetryDrawer) toggleTelemetryDrawer(false);
         dom.btnToggleCaptions.classList.remove("active");
 
         // Expande o widget flutuante em ~3.5 a 4.5 cm (altura de 240px para 420px)
@@ -1045,6 +1256,7 @@ dom.btnToggleCaptions.addEventListener("click", () => {
     dom.settingsPanel.classList.add("hidden");
     dom.keyboardDrawer.classList.add("hidden");
     dom.btnToggleKeyboard.classList.remove("active");
+    if (dom.telemetryDrawer) toggleTelemetryDrawer(false);
     if (!dom.captionsDrawer.classList.contains("hidden")) {
         sendBridgeMessage("PYBRIDGE_RESIZE", "560,380");
     } else {
@@ -1115,6 +1327,7 @@ dom.btnCloseWidget.addEventListener("click", () => {
 
 // Inicialização
 updateVoiceSelectionUI();
+updateProviderUI();
 initWaveAnimation();
 window.addEventListener("pointerdown", async () => {
     if (state.audioCtx && state.audioCtx.state === "suspended") {

@@ -893,8 +893,57 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao comunicar com o agente Antigravity: {str(e)}"}
 
+def toggle_telemetry_overlay(enabled: bool = True) -> dict:
+    """
+    Exibe ou oculta a sobreposição (HUD) de telemetria em tempo real na tela/janela do assistente,
+    mostrando métricas de CPU, GPU, VRAM e RAM.
+    """
+    sys_status = get_system_status()
+    gpu_status = sys_status.get("gpu", {})
+    cpu_p = sys_status.get("cpu_percent", "0%")
+    ram_p = sys_status.get("ram_percent", "0%")
+    ram_used = sys_status.get("ram_used_gb", "0 GB")
+    ram_total = sys_status.get("ram_total_gb", "0 GB")
+    gpu_model = gpu_status.get("modelo", "NVIDIA GeForce")
+    gpu_temp = gpu_status.get("temperatura", "0°C")
+    gpu_uso = gpu_status.get("uso_gpu", "0%")
+    vram_usada = gpu_status.get("vram_usada_mb", "0 MB")
+    vram_total = gpu_status.get("vram_total_mb", "0 MB")
+
+    return {
+        "sucesso": True,
+        "active": bool(enabled),
+        "telemetry": {
+            "cpu_percent": cpu_p,
+            "cpu_cores": sys_status.get("cpu_cores", 0),
+            "ram_used_gb": ram_used,
+            "ram_total_gb": ram_total,
+            "ram_percent": ram_p,
+            "gpu_modelo": gpu_model,
+            "gpu_uso": gpu_uso,
+            "gpu_temp": gpu_temp,
+            "vram_usada": vram_usada,
+            "vram_total": vram_total,
+            "uptime": sys_status.get("uptime", "")
+        },
+        "mensagem": f"Telemetria em tela {'ativada e visível na sua janela' if enabled else 'ocultada'}, senhor. Processador em {cpu_p}, RAM em {ram_p}, {gpu_model} em {gpu_temp} e {gpu_uso} de uso."
+    }
+
 # Declarações de Schema para Gemini Function Calling
 GEMINI_FUNCTION_DECLARATIONS = [
+    {
+        "name": "toggle_telemetry_overlay",
+        "description": "Exibe ou oculta a tela/painel de telemetria de hardware (CPU, GPU GeForce RTX, VRAM, RAM e temperatura) diretamente na janela do assistente sobreposta na tela do usuário.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "enabled": {
+                    "type": "BOOLEAN",
+                    "description": "True para mostrar/abrir a telemetria na janela, False para fechar/ocultar."
+                }
+            }
+        }
+    },
     {
         "name": "list_installed_games",
         "description": "Varre e lista todos os jogos e aplicativos instalados no computador, identificando a distribuidora/plataforma (Steam, Lutris, Epic Games/Heroic, Wine ou Nativo Linux), a pasta de instalação e comandos de inicialização.",
@@ -1273,6 +1322,7 @@ TOOL_REGISTRY = {
     "list_installed_games": list_installed_games,
     "get_gpu_status": get_gpu_status,
     "get_system_status": get_system_status,
+    "toggle_telemetry_overlay": toggle_telemetry_overlay,
     "get_current_datetime": get_current_datetime,
     "open_application": open_application,
     "search_web": search_web,

@@ -271,8 +271,79 @@ def test_smoke_servidor_adk_standalone():
     print(" [✔ PASS] Smoke Test servidor_adk.py Standalone (Runtime e Endpoints)")
 
 
+def test_confirmacao_chat_http_texto_com_isolamento_user_id():
+    """Valida que POST /api/chat ('sim') aprova a ação pendente usando session_id e user_id (P0.17.1)."""
+    import server
+    import servidor_adk
+    from unittest.mock import patch, MagicMock
+
+    auth_headers = {"X-Jarvis-Token": server.JARVIS_SECRET_TOKEN}
+
+    # 1. Teste no server.py
+    client_server = TestClient(server.app)
+    sess_1 = "sessao-chat-srv"
+    user_1 = "usuario-chat-srv"
+    args_1 = {"url": "https://server.com"}
+    pending_1 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_1, user_id=user_1)
+    assert pending_1.status == "pending"
+
+    async def mock_run_async(*a, **kw):
+        if False: yield
+    mock_runner_obj = MagicMock()
+    mock_runner_obj.run_async = mock_run_async
+
+    with patch("server.obter_runner_adk", return_value=mock_runner_obj):
+        resp_1 = client_server.post(
+            "/api/chat",
+            json={"texto": "sim", "sessao": sess_1, "usuario": user_1},
+            headers=auth_headers
+        )
+        assert resp_1.status_code == 200
+
+    # Valida aprovação e consumo one-shot
+    consumido_1 = policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_1, user_id=user_1)
+    assert consumido_1 is True, "server.py /api/chat -> 'sim' falhou em aprovar ação com user_id!"
+
+    # 2. Teste no servidor_adk.py (standalone)
+    auth_headers_adk = {"X-Jarvis-Token": servidor_adk.JARVIS_SECRET_TOKEN}
+    client_adk = TestClient(servidor_adk.app)
+    sess_2 = "sessao-chat-adk"
+    user_2 = "usuario-chat-adk"
+    args_2 = {"url": "https://adk.com"}
+    pending_2 = policy_engine.create_pending_action("abrir_site", args_2, session_id=sess_2, user_id=user_2)
+    assert pending_2.status == "pending"
+
+    with patch("servidor_adk.obter_runner", return_value=mock_runner_obj):
+        resp_2 = client_adk.post(
+            "/api/chat",
+            json={"texto": "sim, pode executar", "sessao": sess_2, "usuario": user_2},
+            headers=auth_headers_adk
+        )
+        assert resp_2.status_code == 200
+
+    consumido_2 = policy_engine.consume_authorization("abrir_site", args_2, session_id=sess_2, user_id=user_2)
+    assert consumido_2 is True, "servidor_adk.py /api/chat -> 'sim' falhou em aprovar ação com user_id!"
+
+    # 3. Teste de rejeição por incompatibilidade de user_id
+    sess_3 = "sessao-chat-fail"
+    user_dono = "usuario-legitimo"
+    user_invasor = "usuario-invasor"
+    pending_3 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_3, user_id=user_dono)
+
+    with patch("server.obter_runner_adk", return_value=mock_runner_obj):
+        client_server.post(
+            "/api/chat",
+            json={"texto": "sim", "sessao": sess_3, "usuario": user_invasor},
+            headers=auth_headers
+        )
+    # Não deve ter aprovado para o dono nem para o invasor
+    assert policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_3, user_id=user_dono) is False
+
+    print(" [✔ PASS] Confirmação via POST /api/chat ('sim') em server.py e servidor_adk.py com user_id (P0.17.1)")
+
+
 def executar_todos_testes_adk():
-    print("=== EXECUTANDO TESTES DO GOOGLE ADK & POLICY GATE (FASE P0.17) ===")
+    print("=== EXECUTANDO TESTES DO GOOGLE ADK & POLICY GATE (FASE P0.17.1) ===")
     test_roteador_inteligente()
     test_ausencia_de_auto_autorizacao_no_llm()
     test_policy_engine_bloqueio_e_one_shot()
@@ -280,8 +351,9 @@ def executar_todos_testes_adk():
     test_autenticacao_http_endpoints_adk()
     test_autenticacao_e_confirmacao_live_adk_por_texto()
     test_confirmacao_comportamental_voz_live_adk()
+    test_confirmacao_chat_http_texto_com_isolamento_user_id()
     test_smoke_servidor_adk_standalone()
-    print("Todos os 8 cenários do módulo ADK P0.17 passaram com 100% de conformidade!")
+    print("Todos os 9 cenários do módulo ADK P0.17.1 passaram com 100% de conformidade!")
 
 if __name__ == "__main__":
     executar_todos_testes_adk()

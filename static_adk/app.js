@@ -128,14 +128,34 @@ function desligarMicrofone() {
 }
 
 // ---------------- CONEXÃO COM O SERVIDOR ----------------
-function conectar() {
+async function revalidarToken() {
+  try {
+    const res = await fetch("/api/auth/session");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.token) {
+        estado.token = data.token;
+        localStorage.setItem("jarvis_token", data.token);
+        return data.token;
+      }
+    }
+  } catch (e) {
+    console.warn("Não foi possível carregar token de sessão:", e);
+  }
+  return estado.token;
+}
+
+async function conectar(tentativaReconexao = false) {
+  mostrarEstado("Autenticando…");
+  await revalidarToken();
+
   const protocolo = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${protocolo}//${location.host}/ws/live`;
   estado.ws = new WebSocket(url);
   mostrarEstado("Conectando…");
 
   estado.ws.onopen = () => {
-    // Handshake autenticado obrigatório
+    // Handshake autenticado obrigatório com token revalidado
     estado.ws.send(JSON.stringify({
       type: "init",
       token: estado.token
@@ -186,23 +206,33 @@ function conectar() {
     }
   };
 
-  estado.ws.onclose = () => {
-    mostrarEstado("Desconectado");
-    el.conectar.textContent = "Entrar no modo live";
-    el.microfone.disabled = true;
+  estado.ws.onclose = async (evento) => {
     desligarMicrofone();
     pararAudio();
     estado.ws = null;
+
+    // Se recusado com 1008 (Unauthorized / Stale Token), busca token novo do backend e reconecta
+    if (evento && evento.code === 1008 && !tentativaReconexao) {
+      mostrarEstado("Token expirado (1008). Revalidando credenciais…", "erro");
+      await revalidarToken();
+      console.log("Token renovado após fechamento 1008. Reconectando...");
+      setTimeout(() => conectar(true), 1200);
+      return;
+    }
+
+    mostrarEstado("Desconectado");
+    el.conectar.textContent = "Entrar no modo live";
+    el.microfone.disabled = true;
   };
 
   estado.ws.onerror = () => mostrarEstado("Falha na conexão", "erro");
 }
 
-el.conectar.addEventListener("click", () => {
+el.conectar.addEventListener("click", async () => {
   if (estado.ws) {
     estado.ws.close();
   } else {
-    conectar();
+    await conectar();
   }
 });
 
@@ -224,6 +254,11 @@ el.form.addEventListener("submit", async (evento) => {
     estado.ws.send(JSON.stringify({ tipo: "texto", texto }));
     return;
   }
+
+  if (!estado.token) {
+    await revalidarToken();
+  }
+
   const resposta = await fetch("/api/chat", {
     method: "POST",
     headers: {
@@ -239,16 +274,5 @@ el.form.addEventListener("submit", async (evento) => {
   (resposta.ferramentas || []).forEach((nome) => registrarFerramenta(nome, "ok"));
 });
 
-
-// Carrega o token de sessão da API se ainda não tiver
-(async function carregarToken() {
-  try {
-    const res = await fetch("/api/auth/session").then(r => r.json());
-    if (res.token) {
-      estado.token = res.token;
-      localStorage.setItem("jarvis_token", res.token);
-    }
-  } catch (e) {
-    console.warn("Não foi possível carregar token de sessão:", e);
-  }
-})();
+// Inicialização imediata do token na carga da página
+revalidarToken();

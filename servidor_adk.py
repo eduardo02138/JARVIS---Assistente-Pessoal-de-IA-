@@ -31,8 +31,9 @@ try:
 except ImportError:
     pass
 
-import time
 import secrets
+import urllib.request
+import urllib.error
 from typing import Optional
 from fastapi import (
     FastAPI,
@@ -296,7 +297,7 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     is_negado = bool(tokens & palavras_negacao)
     is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
     if is_confirmado:
-        pending = policy_engine.approve_latest_pending(session_id=sessao)
+        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
         if pending:
             logger.info("Usuario aprovou acao pendente %s (%s)", pending.action_id, pending.tool_name)
             texto = f"O usuario confirmou expressamente a acao. Execute a ferramenta {pending.tool_name} agora."
@@ -348,10 +349,45 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                     "mensagem": f"Modelos de texto indisponíveis no momento: {erro_final}",
                 }
     else:
+        # Failover automático para o OmniRoute (segundo provedor)
+        logger.info("Chaves Google AI Studio esgotadas no pool. Acionando OmniRoute (:20128) como segundo provedor...")
+        try:
+            url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1") + "/chat/completions"
+            key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
+            payload_omni = json.dumps({
+                "model": "gemini-2.5-flash",
+                "messages": [{"role": "user", "content": texto}]
+            }).encode("utf-8")
+            req_omni = urllib.request.Request(
+                url_omni,
+                data=payload_omni,
+                headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
+                method="POST"
+            )
+            loop = asyncio.get_running_loop()
+            def _chamar_omni():
+                with urllib.request.urlopen(req_omni, timeout=8.0) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            resp_json = await loop.run_in_executor(None, _chamar_omni)
+            ch = resp_json.get("choices", [])
+            if ch and "message" in ch[0]:
+                resp_texto = ch[0]["message"].get("content", "").strip()
+                return {
+                    "status": "ok",
+                    "caminho": caminho,
+                    "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
+                    "provedor": "omniroute",
+                    "modelo": "omniroute/gemini-2.5-flash",
+                    "resposta": resp_texto,
+                    "ferramentas": [],
+                }
+        except Exception as omni_err:
+            logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+
         return {
             "status": "erro",
             "caminho": caminho,
-            "mensagem": f"Todas as chaves do pool estão sem cota: {ultimo_erro}",
+            "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
         }
 
     return {
