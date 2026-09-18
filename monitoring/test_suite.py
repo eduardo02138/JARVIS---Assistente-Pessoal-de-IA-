@@ -532,17 +532,17 @@ def test_control_lease():
 
     # 3. Com lease ativa, as ações comuns passam direto
     policy_engine.grant_control_lease(owner="teste", ttl_s=60)
-    dec_com_lease = policy_engine.evaluate("mouse_move", {"delta_x": 10, "delta_y": 5})
+    dec_com_lease = policy_engine.evaluate("mouse_move", {"delta_x": 10, "delta_y": 5}, session_id="teste")
     liberado_com_lease = dec_com_lease.allowed and not dec_com_lease.requires_confirmation
 
     # 4. Ações perigosas continuam exigindo confirmação mesmo com lease
-    dec_hotkey = policy_engine.evaluate("keyboard_hotkey", {"keys": "alt+f4"})
-    dec_texto = policy_engine.evaluate("keyboard_type", {"text": "sudo rm -rf /tmp/teste"})
+    dec_hotkey = policy_engine.evaluate("keyboard_hotkey", {"keys": "alt+f4"}, session_id="teste")
+    dec_texto = policy_engine.evaluate("keyboard_type", {"text": "sudo rm -rf /tmp/teste"}, session_id="teste")
     perigosas_confirmam = dec_hotkey.requires_confirmation and dec_texto.requires_confirmation
 
     # 5. Lease expirada volta a bloquear
     policy_engine.grant_control_lease(owner="teste", ttl_s=0)
-    dec_expirada = policy_engine.evaluate("mouse_click", {"button": "left"})
+    dec_expirada = policy_engine.evaluate("mouse_click", {"button": "left"}, session_id="teste")
     expira = not dec_expirada.allowed
     policy_engine.revoke_control_lease()
 
