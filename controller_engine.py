@@ -29,13 +29,6 @@ except ImportError:
     e = _EcodesIndisponivel()
     logger.warning("evdev não encontrado: o controle físico de mouse e teclado está desativado.")
 
-
-def _erro_sem_evdev() -> dict:
-    return {
-        "sucesso": False,
-        "erro": "Controle físico indisponível: o módulo evdev não está instalado neste ambiente."
-    }
-
 # Capacidades do dispositivo virtual completo (Mouse + Teclado)
 CAPABILITIES = {
     e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL],

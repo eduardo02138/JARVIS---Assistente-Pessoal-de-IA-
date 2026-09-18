@@ -43,7 +43,6 @@ except ImportError:
 import secrets
 import transcricao
 import urllib.request
-import urllib.error
 from typing import Optional
 from fastapi import (
     FastAPI,

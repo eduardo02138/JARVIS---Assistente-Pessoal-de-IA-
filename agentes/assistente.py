@@ -14,7 +14,10 @@ de auto-autorização: a aprovação só pode vir de uma ação legítima do usu
 """
 
 import os
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger("JARVIS_ASSISTENTE")
 
 from google.adk.agents import Agent
 from google.adk.tools import ToolContext, load_memory

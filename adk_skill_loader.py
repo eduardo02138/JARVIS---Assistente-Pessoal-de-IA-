@@ -39,9 +39,6 @@ except Exception:  # PyYAML ausente
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
 
-# subdiretórios da camada L3
-L3_DIRS = ("references", "assets", "scripts")
-
 
 def _ler_recursos(dir_skill: str) -> Resources:
     """Monta a camada L3 (references/assets/scripts) a partir do diretório da skill."""

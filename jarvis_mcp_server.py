@@ -47,8 +47,8 @@ def jarvis_get_telemetry() -> str:
     Obtém a telemetria em tempo real do computador do usuário (CPU, memória RAM,
     GPU NVIDIA RTX dedicada com VRAM e temperatura, bateria e uptime).
     """
-    gpu = system_tools.get_gpu_status()
     sys_status = system_tools.get_system_status()
+    gpu = sys_status.get("gpu", {})
     
     result = {
         "sistema": sys_status,
@@ -197,7 +197,7 @@ def _registrar_ferramentas_de_plugins():
                         )
                     )
 
-            def _criar_wrapper(plugin_inst, tool_spec):
+            def _criar_wrapper(tool_spec):
                 def _wrapper(**kwargs):
                     try:
                         resultado = tool_spec.handler(**kwargs)
@@ -215,7 +215,7 @@ def _registrar_ferramentas_de_plugins():
                 _wrapper.__signature__ = inspect.Signature(parametros)
                 return _wrapper
 
-            wrapper = _criar_wrapper(plugin, spec)
+            wrapper = _criar_wrapper(spec)
             if nome_mcp in registradas:
                 continue
             try:

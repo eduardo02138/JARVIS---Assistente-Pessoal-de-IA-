@@ -1,3 +1,16 @@
+"""
+Ferramentas de sistema operacional e automações do JARVIS.
+"""
+import os
+import sys
+import subprocess
+import datetime
+import psutil
+import shutil
+import glob
+import preferences_manager
+import controller_engine
+
 def get_gpu_status() -> dict:
     """Verifica e retorna o uso, temperatura e memória VRAM da GPU dedicada."""
     try:
@@ -21,19 +34,6 @@ def get_gpu_status() -> dict:
         pass
     return {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
 
-"""
-Ferramentas de sistema operacional e automações do JARVIS.
-"""
-import os
-import sys
-import subprocess
-import datetime
-import psutil
-import shutil
-import glob
-import preferences_manager
-import controller_engine
-
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
 
 # Mapeamento de nomes comuns em português para executáveis no Linux
@@ -54,12 +54,22 @@ APP_ALIASES = {
     "editor": "gedit"
 }
 
+# Allowlist de aplicativos permitidos para preferências de sistema (Mitigação P0-01)
+PERMITTED_APP_PREFERENCES = {
+    "text_editor": {"default", "antigravity", "gedit", "code", "cursor", "subl", "nano", "vim", "kate", "xed", "mousepad", "leafpad", "notepadqq"},
+    "browser": {"default", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "firefox", "brave", "brave-browser", "opera", "microsoft-edge"},
+    "email_client": {"default", "thunderbird", "evolution", "kmail", "geary"},
+    "image_viewer": {"default", "eog", "feh", "gwenview", "ristretto", "viewnior"},
+    "video_player": {"default", "vlc", "mpv", "totem"},
+    "music_platform": {"youtube", "spotify"}
+}
+
 def get_system_status() -> dict:
     """
     Retorna telemetria detalhada de hardware: uso de CPU, memória RAM,
     espaço em disco, status da bateria (se disponível) e processos ativos.
     """
-    cpu_percent = psutil.cpu_percent(interval=0.1)
+    cpu_percent = psutil.cpu_percent(interval=None)
     cpu_cores = psutil.cpu_count(logical=True)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
@@ -611,6 +621,20 @@ def manage_user_preference(action: str, category: str, key: str = None, value: s
     elif action == "set":
         if value is None:
             return {"sucesso": False, "mensagem": "O valor (value) é obrigatório para definir uma preferência."}
+
+        # Mitigação P0-01: Validar e sanitizar executáveis para evitar RCE
+        clean_val = str(value).strip().lower()
+        if category == "default_apps":
+            if key in PERMITTED_APP_PREFERENCES:
+                if clean_val not in PERMITTED_APP_PREFERENCES[key]:
+                    permitidos = ", ".join(sorted(PERMITTED_APP_PREFERENCES[key]))
+                    return {
+                        "sucesso": False,
+                        "mensagem": f"O aplicativo '{value}' não é permitido para '{key}'. Permitidos: {permitidos}."
+                    }
+            elif clean_val.startswith(("/", "\\")) or any(c in clean_val for c in (";", "&", "|", "`", "$")):
+                return {"sucesso": False, "mensagem": f"Valor de aplicativo padrão inválido ou potencialmente inseguro: '{value}'."}
+
         ok = preferences_manager.set_preference(category, key, value)
         return {
             "sucesso": ok,
@@ -658,6 +682,10 @@ def open_default_app(app_type: str, target: str = None) -> dict:
     try:
         if clean_type == "browser":
             url = target or "https://www.google.com"
+            if clean_type in PERMITTED_APP_PREFERENCES and app_pref.lower() not in PERMITTED_APP_PREFERENCES[clean_type]:
+                app_pref = "default"
+            if url.startswith("-") or any(c in url for c in (";", "&", "|", "`", "$")):
+                return {"sucesso": False, "mensagem": "URL inválida ou insegura para o navegador."}
             if app_pref != "default" and shutil.which(app_pref):
                 subprocess.Popen([app_pref, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
@@ -666,7 +694,11 @@ def open_default_app(app_type: str, target: str = None) -> dict:
 
         elif clean_type == "text_editor":
             editor = app_pref if app_pref != "default" else "antigravity"
+            if clean_type in PERMITTED_APP_PREFERENCES and editor.lower() not in PERMITTED_APP_PREFERENCES[clean_type]:
+                editor = "antigravity"
             file_target = target or "."
+            if file_target.startswith("-") or any(c in file_target for c in (";", "&", "|", "`", "$")):
+                return {"sucesso": False, "mensagem": "Caminho de arquivo inválido ou inseguro para editor de texto."}
             if shutil.which(editor):
                 subprocess.Popen([editor, file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:

@@ -5,7 +5,7 @@ Permite a criação e expansão de ferramentas em cenários de jogos,
 casa inteligente, streaming e mídias sociais.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Any, Optional
 
 @dataclass

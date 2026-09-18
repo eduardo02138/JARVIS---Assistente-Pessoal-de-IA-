@@ -13,7 +13,6 @@ import os
 import socket
 import time
 import urllib.request
-import urllib.error
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 

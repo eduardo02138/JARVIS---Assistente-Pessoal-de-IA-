@@ -17,7 +17,7 @@ import time
 import socket
 import subprocess
 
-from PySide6.QtCore import Qt, QPoint, QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (

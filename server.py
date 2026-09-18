@@ -14,7 +14,6 @@ import socket
 import asyncio
 import logging
 import urllib.request
-import urllib.error
 from typing import Dict, Optional
 
 import secrets
@@ -104,8 +103,6 @@ async def verify_jarvis_token(
     if req_token != JARVIS_SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
     return req_token
-
-verify_auth_token = verify_jarvis_token
 
 @app.get("/api/auth/session")
 @app.get("/api/auth/token")
@@ -228,7 +225,7 @@ async def test_providers_endpoint():
 
 @app.get("/api/status")
 async def system_status():
-    return system_tools.get_system_status()
+    return await asyncio.to_thread(system_tools.get_system_status)
 
 # ----------------- ENDPOINTS DO ECOSSISTEMA DE PLUG-INS (N.E.K.O SDK) -----------------
 @app.get("/api/plugins")
@@ -562,15 +559,6 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     aprovado = payload.get("aprovado", True)
     session_id = payload.get("sessao") or payload.get("session_id")
     user_id = payload.get("usuario") or payload.get("user_id") or "local"
-
-    # Se action_id foi fornecido, resolve sessão correspondente se veio como default/vazio
-    if action_id:
-        pending_obj = policy_engine._pending_actions.get(action_id)
-        if pending_obj:
-            if not session_id or session_id in ("sessao-principal", "default"):
-                session_id = pending_obj.session_id or session_id
-            if user_id in ("local", "default") and pending_obj.user_id:
-                user_id = pending_obj.user_id
 
     if not session_id:
         return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' é obrigatório para confirmar ações."}, status_code=400)
@@ -1373,7 +1361,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 )
 
                         elif msg_type == "get_status":
-                            status = system_tools.get_system_status()
+                            status = await asyncio.to_thread(system_tools.get_system_status)
                             await websocket.send_json({"type": "system_status", "data": status})
 
                         elif msg_type in ("video", "screen_frame", "imagem"):
@@ -1535,7 +1523,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             executor = system_tools.TOOL_REGISTRY.get(func_name)
                                             if executor:
                                                 try:
-                                                    res = executor(**args)
+                                                    if asyncio.iscoroutinefunction(executor):
+                                                        res = await executor(**args)
+                                                    else:
+                                                        res = await asyncio.to_thread(executor, **args)
                                                 except Exception as exc:
                                                     res = {"sucesso": False, "erro": str(exc)}
                                             else:
@@ -1651,6 +1642,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
             return
         except Exception as e:
             last_err = e
+            err_str = str(e).upper()
+            is_quota_or_api_error = any(m in err_str for m in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "API_KEY", "QUOTA", "PERMISSION_DENIED"))
+            if not is_quota_or_api_error:
+                logger.error(f"Erro interno de aplicação na sessão Live (não é falha de cota de API): {e}", exc_info=True)
+                try:
+                    await websocket.send_json({"type": "error", "message": f"Erro interno na sessão Live: {e}"})
+                except Exception:
+                    pass
+                return
+
             next_idx = (idx + 1) % len(key_pool)
             record_event("account_failover", {
                 "from_index": idx + 1,

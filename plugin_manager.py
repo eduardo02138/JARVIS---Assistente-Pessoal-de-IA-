@@ -8,7 +8,7 @@ import sys
 import importlib
 import logging
 from typing import Optional
-from plugin_sdk import JarvisPlugin, ToolSpec, PluginMeta
+from plugin_sdk import JarvisPlugin, ToolSpec
 
 logger = logging.getLogger("jarvis.plugins")
 

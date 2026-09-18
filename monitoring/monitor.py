@@ -8,7 +8,6 @@ import sys
 import time
 import json
 import urllib.request
-import urllib.error
 
 SERVER_URL = "http://127.0.0.1:8000"
 
@@ -45,7 +44,6 @@ def main():
     print(CLEAR_SCREEN, end="")
     print(f"{CYAN}{BOLD}Iniciando Monitor de Telemetria JARVIS...{RESET}")
 
-    last_seen_event_time = ""
 
     while True:
         telemetry = get_json("/api/debug/telemetry")
