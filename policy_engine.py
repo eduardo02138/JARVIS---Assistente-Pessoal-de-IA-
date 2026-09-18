@@ -210,7 +210,7 @@ class PolicyEngine:
 
     def grant_control_lease(self, owner: str = "hud", ttl_s: int = CONTROL_LEASE_TTL_S) -> Dict[str, Any]:
         """Concede autoridade temporária de controle físico após confirmação do usuário."""
-        self._control_lease_expira_em = time.time() + ttl_s
+        self._control_lease_expira_em = time.monotonic() + ttl_s
         self._control_lease_owner = owner
         logger.info(f"Lease de controle concedida a '{owner}' por {ttl_s}s.")
         return self.control_lease_status()
@@ -231,16 +231,16 @@ class PolicyEngine:
 
     def is_control_lease_active(self, session_id: Optional[str] = None) -> bool:
         """A lease pertence à sessão que a recebeu: outra sessão não herda a autoridade."""
-        if time.time() >= self._control_lease_expira_em:
+        if time.monotonic() >= self._control_lease_expira_em:
             return False
-        if session_id is not None and self._control_lease_owner != session_id:
+        if not session_id or self._control_lease_owner != session_id:
             return False
         return True
 
     def control_lease_status(self) -> Dict[str, Any]:
         """Estado da lease. 'owner' é mantido mesmo após expirar, para a sessão dona
         conseguir identificar que a autoridade dela acabou."""
-        restante = max(0.0, self._control_lease_expira_em - time.time())
+        restante = max(0.0, self._control_lease_expira_em - time.monotonic())
         return {
             "ativa": restante > 0,
             "segundos_restantes": int(restante),
@@ -251,7 +251,7 @@ class PolicyEngine:
 
     def grant_computer_lease(self, owner: str = "sessao-principal", ttl_s: int = COMPUTER_LEASE_TTL_S) -> Dict[str, Any]:
         """Concede autoridade temporária de operação do navegador (Computer Use)."""
-        self._computer_lease_expira_em = time.time() + ttl_s
+        self._computer_lease_expira_em = time.monotonic() + ttl_s
         self._computer_lease_owner = owner
         logger.info(f"Lease do Modo Computador concedida a '{owner}' por {ttl_s}s.")
         return self.computer_lease_status()
@@ -272,15 +272,15 @@ class PolicyEngine:
 
     def is_computer_lease_active(self, session_id: Optional[str] = None) -> bool:
         """A lease pertence à sessão que a recebeu: outra sessão não navega por ela."""
-        if time.time() >= self._computer_lease_expira_em:
+        if time.monotonic() >= self._computer_lease_expira_em:
             return False
-        if session_id is not None and self._computer_lease_owner != session_id:
+        if not session_id or self._computer_lease_owner != session_id:
             return False
         return True
 
     def computer_lease_status(self) -> Dict[str, Any]:
         """Estado da lease do Modo Computador."""
-        restante = max(0.0, self._computer_lease_expira_em - time.time())
+        restante = max(0.0, self._computer_lease_expira_em - time.monotonic())
         return {
             "ativa": restante > 0,
             "segundos_restantes": int(restante),
