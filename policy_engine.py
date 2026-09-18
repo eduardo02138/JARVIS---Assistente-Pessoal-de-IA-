@@ -296,7 +296,7 @@ class PolicyEngine:
         ttl_s: int = IDE_LEASE_TTL_S
     ) -> Dict[str, Any]:
         """Concede autoridade temporária ao agente Antigravity (Modo IDE)."""
-        self._ide_lease_expira_em = time.time() + ttl_s
+        self._ide_lease_expira_em = time.monotonic() + ttl_s
         self._ide_lease_owner = owner
         self._ide_lease_user_id = user_id
         logger.info(f"Lease do Modo IDE concedida a '{owner}' (user: {user_id}) por {ttl_s}s.")
@@ -326,17 +326,19 @@ class PolicyEngine:
         user_id: Optional[str] = None
     ) -> bool:
         """A lease pertence estritamente à sessão e usuário que a receberam."""
-        if time.time() >= self._ide_lease_expira_em:
+        if time.monotonic() >= self._ide_lease_expira_em:
             return False
-        if session_id is not None and self._ide_lease_owner != session_id:
-            return False
-        if user_id is not None and self._ide_lease_user_id is not None and self._ide_lease_user_id != user_id:
-            return False
+        if self._ide_lease_owner is not None:
+            if session_id != self._ide_lease_owner:
+                return False
+        if self._ide_lease_user_id is not None:
+            if user_id != self._ide_lease_user_id:
+                return False
         return True
 
     def ide_lease_status(self) -> Dict[str, Any]:
         """Estado da lease do Modo IDE."""
-        restante = max(0.0, self._ide_lease_expira_em - time.time())
+        restante = max(0.0, self._ide_lease_expira_em - time.monotonic())
         return {
             "ativa": restante > 0,
             "segundos_restantes": int(restante),

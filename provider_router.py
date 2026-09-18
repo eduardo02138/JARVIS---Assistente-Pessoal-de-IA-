@@ -15,6 +15,7 @@ import time
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger("jarvis.providers")
 
@@ -94,11 +95,17 @@ class OmniRouteProvider:
 
     @classmethod
     def check_status(cls) -> Dict[str, Any]:
-        """Verifica a disponibilidade do socket local na porta 20128 de forma não-bloqueante."""
+        """Verifica disponibilidade TCP do host/porta derivados de OMNIROUTE_URL."""
         base_url = cls.get_url()
         combo = os.environ.get("OMNIROUTE_COMBO", "jarvis")
         try:
-            with socket.create_connection(("127.0.0.1", 20128), timeout=0.3):
+            parsed = urlparse(base_url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except Exception:
+            host, port = "127.0.0.1", 20128
+        try:
+            with socket.create_connection((host, port), timeout=0.3):
                 return {
                     "online": True,
                     "url": base_url,
@@ -133,34 +140,68 @@ class OmniRouteProvider:
         try:
             status_code, body = await loop.run_in_executor(None, _ping)
             lat = round((time.time() - t0) * 1000)
-            contas = None
+            modelos = None
             try:
                 data = json.loads(body.decode("utf-8"))
                 if isinstance(data, dict) and "data" in data:
-                    contas = len(data["data"])
+                    modelos = len(data["data"])
             except Exception:
                 pass
+            ok = status_code == 200
             return {
-                "status": "online" if status_code == 200 else "erro",
+                "status": "online" if ok else "degraded",
                 "latency_ms": lat,
                 "is_secondary": True,
-                "accounts": contas,
+                "accounts": modelos,
+                "models_available": modelos,
                 "url": base_url,
                 "combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
-                "error": None
+                "error": None if ok else f"HTTP {status_code} em /models"
             }
         except Exception as exc:
             st = cls.check_status()
             lat = round((time.time() - t0) * 1000)
+            # Porta aberta sem API funcional = degradado, nunca online.
+            status = "degraded" if st["online"] else "offline"
             return {
-                "status": "online" if st["online"] else "offline",
+                "status": status,
                 "latency_ms": lat if st["online"] else 0,
                 "is_secondary": True,
                 "accounts": st.get("accounts"),
+                "models_available": st.get("accounts"),
                 "url": base_url,
                 "combo": st.get("combo"),
-                "error": str(exc) if not st["online"] else None
+                "error": str(exc)
             }
+
+    @classmethod
+    async def chat(cls, texto: str) -> str:
+        """Chat completion de contingência via OmniRoute. Implementação canônica única."""
+        base = cls.get_url().rstrip("/") + "/chat/completions"
+        key = cls.get_api_key()
+        modelo = os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash")
+        timeout = float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))
+        payload = json.dumps({
+            "model": modelo,
+            "messages": [{"role": "user", "content": texto}]
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            base,
+            data=payload,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            method="POST"
+        )
+        loop = asyncio.get_running_loop()
+
+        def _chamar():
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+
+        resp_json = await loop.run_in_executor(None, _chamar)
+        escolhas = resp_json.get("choices", [])
+        if escolhas and "message" in escolhas[0]:
+            return escolhas[0]["message"].get("content", "").strip()
+        raise RuntimeError("Resposta OmniRoute em formato inesperado.")
 
 
 class ProviderRouter:
@@ -178,6 +219,25 @@ class ProviderRouter:
             self._active_provider = pid
             return True
         return False
+
+    def get_active(self):
+        """Retorna classe do provedor ativo para chat texto."""
+        if self._active_provider == "omniroute":
+            return OmniRouteProvider
+        return GoogleStudioProvider
+
+    def live_provider(self) -> Dict[str, Any]:
+        """Live bidirecional só existe no Google. OmniRoute = chat HTTP, sem WS Live."""
+        return {
+            "provider": "google_studio",
+            "requested": self._active_provider,
+            "live_supported": self._active_provider == "google_studio",
+            "nota": (
+                "Live ativa via Google."
+                if self._active_provider == "google_studio"
+                else "OmniRoute selecionado só vale para chat texto; Live segue no Google."
+            ),
+        }
 
     async def test_all(self) -> Dict[str, Any]:
         google_res, omni_res = await asyncio.gather(

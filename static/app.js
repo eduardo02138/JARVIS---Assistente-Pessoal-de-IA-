@@ -208,6 +208,16 @@ function appendDialogue(speaker, text) {
 }
 
 let activeJarvisBubbleBody = null;
+let activeUserBubbleBody = null;
+
+function appendUserInterim(texto) {
+    if (!activeUserBubbleBody) {
+        activeUserBubbleBody = appendDialogue('user', `🎙️ ${texto}`);
+    } else {
+        activeUserBubbleBody.textContent = `🎙️ ${texto}`;
+        dom.dialogueContainer.scrollTop = dom.dialogueContainer.scrollHeight;
+    }
+}
 
 function appendJarvisText(chunk) {
     if (!activeJarvisBubbleBody) {
@@ -638,10 +648,20 @@ async function connectWebSocket() {
                 }
                 break;
 
+            case 'user_transcription_interim':
+                // Parcial em tempo real: atualiza mesma bolha enquanto fala
+                if (msg.text) appendUserInterim(msg.text);
+                break;
+
             case 'user_transcription':
-                // Transcrição da fala do usuário vinda do microfone
+                // Transcrição final: consolida bolha parcial ou cria nova
                 if (msg.text) {
-                    appendDialogue('user', msg.text);
+                    if (activeUserBubbleBody) {
+                        activeUserBubbleBody.textContent = msg.text;
+                        activeUserBubbleBody = null;
+                    } else {
+                        appendDialogue('user', msg.text);
+                    }
                 }
                 break;
 
@@ -653,6 +673,7 @@ async function connectWebSocket() {
 
             case 'turn_complete':
                 activeJarvisBubbleBody = null;
+                activeUserBubbleBody = null;
                 setTimeout(() => {
                     if (state.connected && !state.speaking) {
                         setJarvisState('active', 'ÀS SUAS ORDENS, SENHOR');

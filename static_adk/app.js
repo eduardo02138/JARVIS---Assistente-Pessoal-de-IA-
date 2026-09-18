@@ -9,7 +9,9 @@ const TAXA_SAIDA = 24000;
 
 const estado = {
   ws: null,
-  token: localStorage.getItem("jarvis_token") || "", 
+  token: localStorage.getItem("jarvis_token") || "",
+  sessao: localStorage.getItem("jarvis_sessao") || "sessao-principal",
+  usuario: localStorage.getItem("jarvis_usuario") || "local",
   gravando: false,
   ctxEntrada: null,
   ctxSaida: null,
@@ -82,9 +84,17 @@ async function resolverPendencia(idConfirmacao, aprovado, item) {
         "Content-Type": "application/json",
         "X-Jarvis-Token": estado.token,
       },
-      body: JSON.stringify({ id_confirmacao: idConfirmacao, aprovado }),
+      body: JSON.stringify({
+        id_confirmacao: idConfirmacao,
+        aprovado,
+        sessao: estado.sessao,
+        usuario: estado.usuario,
+      }),
     });
-    const dados = await resposta.json();
+    const dados = await resposta.json().catch(() => ({}));
+    if (!resposta.ok) {
+      throw new Error(dados.mensagem || `HTTP ${resposta.status}`);
+    }
     item.className = aprovado ? "ok" : "negado";
     item.textContent = aprovado ? `Autorizado: ${idConfirmacao}` : `Negado: ${idConfirmacao}`;
     registrarFerramenta(
@@ -94,6 +104,7 @@ async function resolverPendencia(idConfirmacao, aprovado, item) {
   } catch (e) {
     item.className = "negado";
     item.textContent = `Falha ao ${aprovado ? "autorizar" : "negar"}: ${e.message}`;
+    item.querySelectorAll("button").forEach((botao) => (botao.disabled = false));
   }
 }
 
@@ -220,8 +231,18 @@ async function conectar(tentativaReconexao = false) {
         estado.balaoAtual.textContent += msg.texto;
         el.conversa.scrollTop = el.conversa.scrollHeight;
         break;
+      case "transcricao_usuario_parcial":
+        if (!estado.balaoUsuarioParcial) estado.balaoUsuarioParcial = adicionarBalao("usuario", "");
+        estado.balaoUsuarioParcial.textContent = `🎙️ ${msg.texto}`;
+        el.conversa.scrollTop = el.conversa.scrollHeight;
+        break;
       case "transcricao_usuario":
-        adicionarBalao("usuario", msg.texto);
+        if (estado.balaoUsuarioParcial) {
+          estado.balaoUsuarioParcial.textContent = msg.texto;
+          estado.balaoUsuarioParcial = null;
+        } else {
+          adicionarBalao("usuario", msg.texto);
+        }
         break;
       case "ferramenta":
         registrarFerramenta(`${msg.nome}(${JSON.stringify(msg.args)})`, "executando");
@@ -240,6 +261,7 @@ async function conectar(tentativaReconexao = false) {
         break;
       case "turno_concluido":
         estado.balaoAtual = null;
+        estado.balaoUsuarioParcial = null;
         break;
       case "pronto":
         registrarFerramenta(`sessão de voz pronta — modelo ${msg.modelo}`, "ok");
@@ -309,7 +331,7 @@ el.form.addEventListener("submit", async (evento) => {
       "Content-Type": "application/json",
       "X-Jarvis-Token": estado.token
     },
-    body: JSON.stringify({ texto }),
+    body: JSON.stringify({ texto, sessao: estado.sessao, usuario: estado.usuario }),
   }).then((r) => r.json());
   adicionarBalao("agente", resposta.resposta || resposta.mensagem || "(sem resposta)");
   if (resposta.caminho) {

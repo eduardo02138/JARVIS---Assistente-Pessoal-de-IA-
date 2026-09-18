@@ -47,6 +47,10 @@ const state = {
     // Histórico & Contexto Ativo
     currentAiMsgElement: null,
     currentUserVoiceMsgElement: null,
+    currentAiCaptionElement: null,
+    currentUserVoiceCaptionElement: null,
+    currentAiBubbleElement: null,
+    currentUserVoiceBubbleElement: null,
     historyLog: [],
 
     // Configurações
@@ -103,6 +107,7 @@ const dom = {
     keyboardDrawer: document.getElementById("keyboardDrawer"),
     drawerTextForm: document.getElementById("drawerTextForm"),
     drawerInput: document.getElementById("drawerInput"),
+    btnDrawerMic: document.getElementById("btnDrawerMic"),
     widgetChatHistory: document.getElementById("widgetChatHistory"),
     btnClearHistory: document.getElementById("btnClearHistory"),
     btnCloseDrawer: document.getElementById("btnCloseDrawer"),
@@ -373,10 +378,10 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala (~0.007). Se for silencio absoluto ou ruido de fundo estatico, nao sobrecarrega a API
-            const isSpeaking = rms >= 0.015;
+            // Limiar de fala natural e sensível (~0.006). Evita cortes de voz em fones e microfones comuns
+            const isSpeaking = rms >= 0.006;
             if (isSpeaking) {
-                speechHoldover = 6; // Mantem envio por ~250ms adicionais
+                speechHoldover = 8; // Mantem envio por ~350ms adicionais
             } else if (speechHoldover > 0) {
                 speechHoldover--;
                 if (speechHoldover === 0) {
@@ -417,8 +422,11 @@ async function initAudio() {
         state.audioProcessor = processor;
 
         dom.liveStatusText.textContent = "Gemini Live Conectado";
+        dom.statusBadgeChip.classList.remove("muted");
         dom.statusBadgeChip.classList.add("active");
         dom.chipLabel.textContent = "Microfone Ativo";
+        if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
+        if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
     } catch (err) {
         console.warn("Aviso de microfone:", err);
         dom.liveStatusText.textContent = "Microfone não autorizado";
@@ -686,8 +694,76 @@ function mostrarPedidoDeAutorizacao(msg) {
     exibirBannerAcaoPendente(msg);
 }
 
+// ---------------- COORDENAÇÃO DE INSTÂNCIA ÚNICA (EVITA TELAS DUPLICADAS) ----------------
+const instanceId = Math.random().toString(36).slice(2);
+let isInstanceLeader = true;
+let instanceChannel = null;
+
+if (typeof BroadcastChannel !== "undefined") {
+    try {
+        instanceChannel = new BroadcastChannel("jarvis_desktop_channel");
+        instanceChannel.onmessage = (event) => {
+            const data = event.data || {};
+            if (data.type === "CLAIM_INSTANCE" && data.id !== instanceId) {
+                // Outra janela do JARVIS assumiu a liderança ativa
+                colocarEmModoPassivo("Outra janela do JARVIS assumiu a sessão ativa.");
+            }
+        };
+        // Notifica as demais janelas que esta agora está aberta e reivindica liderança
+        instanceChannel.postMessage({ type: "CLAIM_INSTANCE", id: instanceId });
+    } catch (e) {
+        console.warn("BroadcastChannel indisponível:", e);
+    }
+}
+
+function colocarEmModoPassivo(motivo) {
+    isInstanceLeader = false;
+    if (state.ws) {
+        try {
+            state.ws.close(1000, "Instância passiva");
+        } catch (e) {}
+    }
+    toggleMicrophonePause(true); // muta o microfone para não ter duas escutas
+    dom.liveStatusText.textContent = "Janela em espera (outra ativa)";
+    exibirBannerInstanciaPassiva(motivo);
+}
+
+function exibirBannerInstanciaPassiva(motivo) {
+    let banner = document.getElementById("instanceLockBanner");
+    if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "instanceLockBanner";
+        banner.className = "instance-lock-banner";
+        banner.innerHTML = `
+            <div class="lock-banner-content">
+                <span class="lock-icon">⚠️</span>
+                <div class="lock-text">
+                    <strong>Outra janela do JARVIS já está ativa.</strong>
+                    <span>Esta tela foi colocada em espera para evitar dois assistentes falando ao mesmo tempo.</span>
+                </div>
+                <button type="button" id="btnClaimLeadership" class="claim-leadership-btn">Assumir Esta Janela</button>
+            </div>
+        `;
+        document.body.appendChild(banner);
+        const btn = document.getElementById("btnClaimLeadership");
+        if (btn) {
+            btn.addEventListener("click", () => {
+                isInstanceLeader = true;
+                const b = document.getElementById("instanceLockBanner");
+                if (b) b.remove();
+                if (instanceChannel) {
+                    instanceChannel.postMessage({ type: "CLAIM_INSTANCE", id: instanceId });
+                }
+                toggleMicrophonePause(false);
+                connectLiveBackend();
+            });
+        }
+    }
+}
+
 // ---------------- WEBSOCKET BRIDGE COM GEMINI LIVE ----------------
 async function connectLiveBackend() {
+    if (!isInstanceLeader) return;
     // Sempre revalida: quando o servidor reinicia sem JARVIS_TOKEN fixo, ele gera um
     // token novo e o guardado em memória passa a ser recusado com código 1008.
     await initSessionToken();
@@ -713,6 +789,12 @@ async function connectLiveBackend() {
         const msg = JSON.parse(e.data);
 
         switch (msg.type) {
+            case "user_transcription_interim":
+                if (msg.text) {
+                    appendChatMessage("user", `🎙️ ${msg.text}`, { source: "voice", updateExisting: true });
+                    dom.liveStatusText.textContent = `Você: "${msg.text.slice(0, 30)}..."`;
+                }
+                break;
             case "user_transcription":
                 if (msg.text) {
                     appendChatMessage("user", msg.text, { source: "voice", updateExisting: true });
@@ -724,15 +806,21 @@ async function connectLiveBackend() {
                 const provRotulo = (msg.provider || state.provider) === "omniroute" ? "OmniRoute" : "Google Studio";
                 if (state.paused) {
                     dom.liveStatusText.textContent = "Sessão pausada";
-                    dom.chipLabel.textContent = "Em Pausa";
+                    dom.chipLabel.textContent = "Microfone Mutado";
                     dom.statusBadgeChip.classList.remove("active");
+                    dom.statusBadgeChip.classList.add("muted");
                     dom.iconPlay.classList.remove("hidden");
                     dom.iconPause.classList.add("hidden");
+                    if (dom.btnExpandedMic) dom.btnExpandedMic.classList.remove("active");
+                    if (dom.btnDrawerMic) dom.btnDrawerMic.classList.remove("active");
                     updateProviderUI();
                     break;
                 }
                 dom.liveStatusText.textContent = `Gemini Live [${provRotulo}] (${msg.model || state.model})`;
+                dom.statusBadgeChip.classList.remove("muted");
                 dom.statusBadgeChip.classList.add("active");
+                if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
+                if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
                 if (state.micMode !== "ptt") state.listening = true;
                 initAudio();
                 updateProviderUI();
@@ -771,6 +859,10 @@ async function connectLiveBackend() {
                 state.processing = false;
                 state.currentAiMsgElement = null;
                 state.currentUserVoiceMsgElement = null;
+                state.currentAiCaptionElement = null;
+                state.currentUserVoiceCaptionElement = null;
+                state.currentAiBubbleElement = null;
+                state.currentUserVoiceBubbleElement = null;
                 flushAudioQueue();
                 break;
 
@@ -780,6 +872,10 @@ async function connectLiveBackend() {
                 state.processing = false;
                 state.currentAiMsgElement = null;
                 state.currentUserVoiceMsgElement = null;
+                state.currentAiCaptionElement = null;
+                state.currentUserVoiceCaptionElement = null;
+                state.currentAiBubbleElement = null;
+                state.currentUserVoiceBubbleElement = null;
                 dom.liveStatusText.textContent = "Ouvindo você...";
                 break;
 
@@ -836,6 +932,10 @@ async function connectLiveBackend() {
                 dom.liveStatusText.textContent = detalheResultado ? detalheResultado.slice(2, 60) : "Ouvindo você...";
                 break;
 
+            case "superseded":
+                colocarEmModoPassivo(msg.message || "Outra janela do JARVIS foi aberta.");
+                break;
+
             case "error":
                 state.speaking = false;
                 state.processing = false;
@@ -846,8 +946,14 @@ async function connectLiveBackend() {
 
     state.ws.onclose = () => {
         state.connected = false;
+        if (!isInstanceLeader) {
+            dom.liveStatusText.textContent = "Janela em espera (outra ativa)";
+            return;
+        }
         dom.liveStatusText.textContent = "Reconectando em 3s...";
-        setTimeout(connectLiveBackend, 3000);
+        setTimeout(() => {
+            if (isInstanceLeader) connectLiveBackend();
+        }, 3000);
     };
 }
 
@@ -867,30 +973,51 @@ function appendChatMessage(sender, text, options = {}) {
     const cleanText = text.trim();
     const source = options.source || "system"; // voice, typed, tool, system
 
+    // Atualização em tempo real de fala do usuário (interim ou final do mesmo turno)
+    if (options.updateExisting && sender === "user" && state.currentUserVoiceMsgElement) {
+        const textEl = state.currentUserVoiceMsgElement.querySelector(".msg-text");
+        if (textEl) textEl.textContent = cleanText;
+        if (dom.widgetChatHistory) dom.widgetChatHistory.scrollTop = dom.widgetChatHistory.scrollHeight;
+
+        if (state.currentUserVoiceCaptionElement) {
+            state.currentUserVoiceCaptionElement.innerHTML = `<strong>Você:</strong> ${escapeHtml(cleanText)}`;
+            if (dom.captionsLog) dom.captionsLog.scrollTop = dom.captionsLog.scrollHeight;
+        }
+
+        if (state.currentUserVoiceBubbleElement) {
+            state.currentUserVoiceBubbleElement.textContent = cleanText;
+            if (dom.expandedChatScroll) dom.expandedChatScroll.scrollTop = dom.expandedChatScroll.scrollHeight;
+        }
+
+        return state.currentUserVoiceMsgElement;
+    }
+
+    // Continuação incremental de texto da IA
+    if (options.appendExisting && sender === "gemini" && state.currentAiMsgElement) {
+        const textEl = state.currentAiMsgElement.querySelector(".msg-text");
+        if (textEl) {
+            const prev = textEl.textContent.trim();
+            const needsSpace = prev.length > 0 && !prev.endsWith(" ") && !cleanText.startsWith(" ") && !/^[.,!?;:]/.test(cleanText);
+            const added = (needsSpace ? " " : "") + cleanText;
+            textEl.textContent += added;
+            if (dom.widgetChatHistory) dom.widgetChatHistory.scrollTop = dom.widgetChatHistory.scrollHeight;
+
+            if (state.currentAiCaptionElement) {
+                state.currentAiCaptionElement.innerHTML += (needsSpace ? " " : "") + escapeHtml(cleanText);
+                if (dom.captionsLog) dom.captionsLog.scrollTop = dom.captionsLog.scrollHeight;
+            }
+
+            if (state.currentAiBubbleElement) {
+                state.currentAiBubbleElement.textContent += added;
+                if (dom.expandedChatScroll) dom.expandedChatScroll.scrollTop = dom.expandedChatScroll.scrollHeight;
+            }
+
+            return state.currentAiMsgElement;
+        }
+    }
+
     // 1. Renderiza no Histórico Integrado do Widget Flutuante (#widgetChatHistory)
     if (dom.widgetChatHistory) {
-        // Atualização em tempo real de fala do usuário
-        if (options.updateExisting && sender === "user" && state.currentUserVoiceMsgElement) {
-            const textEl = state.currentUserVoiceMsgElement.querySelector(".msg-text");
-            if (textEl) {
-                textEl.textContent = cleanText;
-                dom.widgetChatHistory.scrollTop = dom.widgetChatHistory.scrollHeight;
-                return state.currentUserVoiceMsgElement;
-            }
-        }
-
-        // Continuação incremental de texto da IA
-        if (options.appendExisting && sender === "gemini" && state.currentAiMsgElement) {
-            const textEl = state.currentAiMsgElement.querySelector(".msg-text");
-            if (textEl) {
-                const prev = textEl.textContent.trim();
-                const needsSpace = prev.length > 0 && !prev.endsWith(" ") && !cleanText.startsWith(" ") && !/^[.,!?;:]/.test(cleanText);
-                textEl.textContent += (needsSpace ? " " : "") + cleanText;
-                dom.widgetChatHistory.scrollTop = dom.widgetChatHistory.scrollHeight;
-                return state.currentAiMsgElement;
-            }
-        }
-
         const msgDiv = document.createElement("div");
         msgDiv.className = `chat-msg ${sender === "gemini" ? "ai" : sender}`;
 
@@ -931,6 +1058,12 @@ function appendChatMessage(sender, text, options = {}) {
         item.innerHTML = `<strong>${sender === "gemini" ? "Gemini" : "Você"}:</strong> ${escapeHtml(cleanText)}`;
         dom.captionsLog.appendChild(item);
         dom.captionsLog.scrollTop = dom.captionsLog.scrollHeight;
+
+        if (sender === "user" && source === "voice") {
+            state.currentUserVoiceCaptionElement = item;
+        } else if (sender === "gemini" && !options.isFinal) {
+            state.currentAiCaptionElement = item;
+        }
     }
 
     // 3. Registra na Janela Expandida 3D se ativa
@@ -940,6 +1073,12 @@ function appendChatMessage(sender, text, options = {}) {
         chatBubble.textContent = cleanText;
         dom.expandedChatScroll.appendChild(chatBubble);
         dom.expandedChatScroll.scrollTop = dom.expandedChatScroll.scrollHeight;
+
+        if (sender === "user" && source === "voice") {
+            state.currentUserVoiceBubbleElement = chatBubble;
+        } else if (sender === "gemini" && !options.isFinal) {
+            state.currentAiBubbleElement = chatBubble;
+        }
     }
 
     return null;
@@ -1329,26 +1468,67 @@ if (dom.btnRefreshTelemetry) {
     dom.btnRefreshTelemetry.addEventListener("click", () => fetchTelemetryData());
 }
 
-// ---------------- CONTROLE DE MODOS & PAUSA ----------------
-dom.btnPauseLive.addEventListener("click", async () => {
-    state.paused = !state.paused;
+// ---------------- CONTROLE DE MODOS & MICROFONE / PAUSA ----------------
+async function toggleMicrophonePause(forceState) {
+    const nextPaused = (forceState !== undefined) ? forceState : !state.paused;
+    state.paused = nextPaused;
+
     if (state.paused) {
-        dom.iconPause.classList.add("hidden");
-        dom.iconPlay.classList.remove("hidden");
-        dom.liveStatusText.textContent = "Sessão pausada";
-        dom.chipLabel.textContent = "Em Pausa";
+        state.listening = false;
+        if (dom.iconPause) dom.iconPause.classList.add("hidden");
+        if (dom.iconPlay) dom.iconPlay.classList.remove("hidden");
+        if (dom.btnPauseLive) dom.btnPauseLive.title = "Ativar microfone (Retomar)";
+        dom.liveStatusText.textContent = "Microfone pausado";
+        dom.chipLabel.textContent = "Microfone Mutado";
         dom.statusBadgeChip.classList.remove("active");
+        dom.statusBadgeChip.classList.add("muted");
+        if (dom.btnExpandedMic) dom.btnExpandedMic.classList.remove("active");
+        if (dom.btnDrawerMic) dom.btnDrawerMic.classList.remove("active");
         flushAudioQueue();
     } else {
-        dom.iconPlay.classList.add("hidden");
-        dom.iconPause.classList.remove("hidden");
+        if (dom.iconPlay) dom.iconPlay.classList.add("hidden");
+        if (dom.iconPause) dom.iconPause.classList.remove("hidden");
+        if (dom.btnPauseLive) dom.btnPauseLive.title = "Pausar microfone";
         dom.liveStatusText.textContent = "Ouvindo você...";
         dom.chipLabel.textContent = "Microfone Ativo";
+        dom.statusBadgeChip.classList.remove("muted");
         dom.statusBadgeChip.classList.add("active");
+        if (dom.btnExpandedMic) dom.btnExpandedMic.classList.add("active");
+        if (dom.btnDrawerMic) dom.btnDrawerMic.classList.add("active");
+
         if (state.micMode !== "ptt") state.listening = true;
-        if (!state.inputAudioCtx && state.connected) await initAudio();
+
+        // Desperta AudioContext se suspenso pelo navegador
+        try {
+            if (state.inputAudioCtx && state.inputAudioCtx.state === "suspended") {
+                await state.inputAudioCtx.resume();
+            }
+            if (state.audioCtx && state.audioCtx.state === "suspended") {
+                await state.audioCtx.resume();
+            }
+        } catch (e) {
+            console.warn("Falha ao resumir AudioContext:", e);
+        }
+
+        // Se ainda não inicializou o microfone ou a stream caiu, inicializa agora
+        if (!state.mediaStream || !state.mediaStream.active || !state.inputAudioCtx) {
+            await initAudio();
+        }
     }
-});
+}
+
+if (dom.btnPauseLive) {
+    dom.btnPauseLive.addEventListener("click", () => toggleMicrophonePause());
+}
+if (dom.statusBadgeChip) {
+    dom.statusBadgeChip.addEventListener("click", () => toggleMicrophonePause());
+}
+if (dom.btnExpandedMic) {
+    dom.btnExpandedMic.addEventListener("click", () => toggleMicrophonePause());
+}
+if (dom.btnDrawerMic) {
+    dom.btnDrawerMic.addEventListener("click", () => toggleMicrophonePause());
+}
 
 // Alternar Modo de Escrita / Teclado com Expansão e Histórico (~3-4 cm)
 function toggleKeyboardDrawer(forceState) {
@@ -1505,37 +1685,54 @@ screenCanvas.height = 720;
 const screenVideo = document.createElement("video");
 screenVideo.autoplay = true;
 screenVideo.muted = true;
+screenVideo.playsInline = true;
 
 async function toggleScreenShare() {
-    if (screenStream) {
+    if (screenStream || screenCaptureInterval) {
         pararCompartilhamentoTela();
         return;
     }
 
     try {
         screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: { width: 1280, height: 720, frameRate: 1 }
+            video: {
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 1, max: 5 }
+            },
+            audio: false
         });
+
         screenVideo.srcObject = screenStream;
-        await screenVideo.play();
+        screenVideo.muted = true;
+        screenVideo.playsInline = true;
+        try {
+            await screenVideo.play();
+        } catch (playErr) {
+            console.warn("Autoplay de vídeo:", playErr);
+        }
 
         if (dom.btnToggleScreenShare) {
             dom.btnToggleScreenShare.classList.add("active-screen");
             dom.btnToggleScreenShare.title = "Parar Compartilhamento de Tela";
         }
         dom.chipLabel.textContent = "Visão de Tela Ativa";
+        dom.statusBadgeChip.classList.remove("muted");
         dom.statusBadgeChip.classList.add("active");
         appendChatMessage("tool", "Compartilhamento de tela iniciado. A IA está recebendo frames em tempo real.", { source: "tool" });
 
         // Envia frames JPEG a cada 1.5s
+        if (screenCaptureInterval) clearInterval(screenCaptureInterval);
         screenCaptureInterval = setInterval(() => {
             if (!screenStream || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
             try {
-                screenCtx.drawImage(screenVideo, 0, 0, 1280, 720);
-                const dataUrl = screenCanvas.toDataURL("image/jpeg", 0.55);
-                const b64 = dataUrl.split(",")[1];
-                if (b64) {
-                    state.ws.send(JSON.stringify({ type: "screen_frame", data: b64 }));
+                if (screenVideo.videoWidth > 0 && screenVideo.videoHeight > 0) {
+                    screenCtx.drawImage(screenVideo, 0, 0, 1280, 720);
+                    const dataUrl = screenCanvas.toDataURL("image/jpeg", 0.55);
+                    const b64 = dataUrl.split(",")[1];
+                    if (b64) {
+                        state.ws.send(JSON.stringify({ type: "screen_frame", data: b64 }));
+                    }
                 }
             } catch (e) {
                 console.warn("Erro ao capturar frame:", e);
@@ -1546,27 +1743,50 @@ async function toggleScreenShare() {
             pararCompartilhamentoTela();
         });
     } catch (err) {
-        console.warn("Compartilhamento de tela cancelado ou negado:", err);
-        pararCompartilhamentoTela();
+        if (err.name === "NotAllowedError" || err.name === "AbortError") {
+            console.info("Compartilhamento de tela cancelado pelo usuário.");
+        } else {
+            console.warn("Compartilhamento de tela cancelado ou negado:", err);
+            appendChatMessage("tool", `Aviso: não foi possível iniciar compartilhamento de tela (${err.message || 'permissão negada'}).`, { source: "tool" });
+        }
+
+        if (screenStream) {
+            pararCompartilhamentoTela();
+        } else if (dom.btnToggleScreenShare) {
+            dom.btnToggleScreenShare.classList.remove("active-screen");
+            dom.btnToggleScreenShare.title = "Compartilhar Tela com a IA (Visão em Tempo Real)";
+        }
     }
 }
 
 function pararCompartilhamentoTela() {
+    const estavaAtivo = Boolean(screenStream || screenCaptureInterval);
     if (screenCaptureInterval) {
         clearInterval(screenCaptureInterval);
         screenCaptureInterval = null;
     }
     if (screenStream) {
-        screenStream.getTracks().forEach(t => t.stop());
+        try {
+            screenStream.getTracks().forEach(t => t.stop());
+        } catch (e) {}
         screenStream = null;
     }
     screenVideo.srcObject = null;
     if (dom.btnToggleScreenShare) {
         dom.btnToggleScreenShare.classList.remove("active-screen");
-        dom.btnToggleScreenShare.title = "Compartilhar Tela com a IA (Visão ao Vivo)";
+        dom.btnToggleScreenShare.title = "Compartilhar Tela com a IA (Visão em Tempo Real)";
     }
-    dom.chipLabel.textContent = state.paused ? "Em Pausa" : "Microfone Ativo";
-    appendChatMessage("tool", "Compartilhamento de tela encerrado.", { source: "tool" });
+    dom.chipLabel.textContent = state.paused ? "Microfone Mutado" : "Microfone Ativo";
+    if (state.paused) {
+        dom.statusBadgeChip.classList.remove("active");
+        dom.statusBadgeChip.classList.add("muted");
+    } else {
+        dom.statusBadgeChip.classList.remove("muted");
+        dom.statusBadgeChip.classList.add("active");
+    }
+    if (estavaAtivo) {
+        appendChatMessage("tool", "Compartilhamento de tela encerrado.", { source: "tool" });
+    }
 }
 
 // ---------------- GESTÃO DE MEMÓRIA DE LONGO PRAZO ----------------

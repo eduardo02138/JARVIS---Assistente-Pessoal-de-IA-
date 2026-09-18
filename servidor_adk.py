@@ -41,6 +41,7 @@ except ImportError:
     pass
 
 import secrets
+import transcricao
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -391,28 +392,9 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
 
 
 async def chamar_omniroute_chat(texto: str) -> str:
-    """Executa chat completion de contingência via OmniRoute HTTP local."""
-    url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1").rstrip("/") + "/chat/completions"
-    key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
-    payload_omni = json.dumps({
-        "model": "gemini-2.5-flash",
-        "messages": [{"role": "user", "content": texto}]
-    }).encode("utf-8")
-    req_omni = urllib.request.Request(
-        url_omni,
-        data=payload_omni,
-        headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
-        method="POST"
-    )
-    loop = asyncio.get_running_loop()
-    def _chamar():
-        with urllib.request.urlopen(req_omni, timeout=30.0) as r:
-            return json.loads(r.read().decode("utf-8"))
-    resp_json = await loop.run_in_executor(None, _chamar)
-    ch = resp_json.get("choices", [])
-    if ch and "message" in ch[0]:
-        return ch[0]["message"].get("content", "").strip()
-    raise RuntimeError("Resposta OmniRoute em formato inesperado.")
+    """Wrapper fino canônico: implementação mora em OmniRouteProvider.chat()."""
+    from provider_router import OmniRouteProvider
+    return await OmniRouteProvider.chat(texto)
 
 
 @app.post("/api/chat")
@@ -580,8 +562,8 @@ def montar_run_config() -> RunConfig:
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOZ)
             ),
         ),
-        "input_audio_transcription": types.AudioTranscriptionConfig(),
-        "output_audio_transcription": types.AudioTranscriptionConfig(),
+        "input_audio_transcription": transcricao.build_input_transcription_config(),
+        "output_audio_transcription": transcricao.build_output_transcription_config(),
         # Sessão de áudio termina em ~15 min sem compressão de contexto
         "context_window_compression": types.ContextWindowCompressionConfig(
             sliding_window=types.SlidingWindow()
@@ -683,6 +665,11 @@ async def live(
             live_request_queue=fila,
             run_config=montar_run_config(),
         ):
+            parcial = getattr(evento, "interim_input_transcription", None)
+            if parcial and parcial.text:
+                await websocket.send_json(
+                    {"tipo": "transcricao_usuario_parcial", "texto": parcial.text}
+                )
             if evento.input_transcription and evento.input_transcription.text:
                 await websocket.send_json(
                     {"tipo": "transcricao_usuario", "texto": evento.input_transcription.text}
