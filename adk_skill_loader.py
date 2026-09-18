@@ -38,9 +38,32 @@ except Exception:  # PyYAML ausente
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
+SKILLS_DIR = os.path.join(BASE_DIR, "skills")
 
 # subdiretórios da camada L3
 L3_DIRS = ("references", "assets", "scripts")
+
+import re
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def validar_conformidade_spec(dir_skill: str, frontmatter: Optional[Frontmatter]) -> tuple[bool, Optional[str]]:
+    """Valida estritamente a conformidade com a especificação oficial de Agent Skills."""
+    if frontmatter is None:
+        return False, "Frontmatter ausente ou inválido."
+    dir_name = os.path.basename(os.path.abspath(dir_skill))
+    name = frontmatter.name or ""
+    desc = frontmatter.description or ""
+
+    if dir_name != name:
+        return False, f"Nome do diretório '{dir_name}' difere do name '{name}' no frontmatter."
+    if not (1 <= len(name) <= 64):
+        return False, f"Nome da skill tem tamanho inválido ({len(name)} chars; permitido 1 a 64)."
+    if not SKILL_NAME_PATTERN.match(name):
+        return False, f"Nome da skill '{name}' não é kebab-case minúsculo válido (sem --, sem underscore)."
+    if not (1 <= len(desc) <= 1024):
+        return False, f"Descrição tem tamanho inválido ({len(desc)} chars; permitido 1 a 1024)."
+    return True, None
 
 
 def _ler_recursos(dir_skill: str) -> Resources:
@@ -75,7 +98,7 @@ def _ler_recursos(dir_skill: str) -> Resources:
 
 
 def _parsear_skill_local(dir_skill: str) -> Skill:
-    """Parser fallback: SKILL.md com diretório underscore (o ADK oficial recusa)."""
+    """Parser fallback: SKILL.md de contingência."""
     caminho = os.path.join(dir_skill, "SKILL.md")
     with open(caminho, encoding="utf-8") as f:
         texto = f.read()
@@ -111,49 +134,78 @@ def _parsear_skill_local(dir_skill: str) -> Skill:
 
 
 class ADKSkillLoader:
-    """Carrega e expõe as Skills declaradas pelos plug-ins.
+    """Carrega e expõe as Skills declaradas no ecossistema J.A.R.V.I.S.
 
-    Uso:
-        from adk_skill_loader import adk_skill_loader
-        bloco = adk_skill_loader.bloco_de_instrucoes(apenas_ativas=True)
-        relatorio = adk_skill_loader.relatorio()
+    Conformidade oficial:
+    - O diretório canônico é skills/<skill-name>/ onde o nome coincide com o name: kebab-case.
+    - O carregador usa google.adk.skills.load_skill_from_dir oficial com verificação estrita.
     """
 
     def __init__(self, dir_plugin: Optional[str] = None):
-        self.dir_plugin = dir_plugin or PLUGINS_DIR
+        self.dir_plugin = dir_plugin or (SKILLS_DIR if os.path.isdir(SKILLS_DIR) else PLUGINS_DIR)
         self._skills: dict[str, Skill] = {}
+        self._dirs: dict[str, str] = {}
         self._erros: dict[str, str] = {}
         self._origem: dict[str, str] = {}
         self.carregar()
 
     def carregar(self) -> None:
         self._skills.clear()
+        self._dirs.clear()
         self._erros.clear()
         self._origem.clear()
         if not ADK_DISPONIVEL:
             logger.warning("google-adk ausente: loader de skills inativo.")
             return
-        for skill_md in sorted(glob.glob(os.path.join(self.dir_plugin, "*", "SKILL.md"))):
-            id_plugin = os.path.basename(os.path.dirname(skill_md))
+
+        padrao_busca = os.path.join(self.dir_plugin, "*", "SKILL.md")
+        arquivos_skill = sorted(glob.glob(padrao_busca))
+
+        # Se não encontrou no diretório alvo e skills/ existe, busca em skills/
+        if not arquivos_skill and os.path.isdir(SKILLS_DIR) and self.dir_plugin != SKILLS_DIR:
+            arquivos_skill = sorted(glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")))
+
+        # Fallback de busca em plugins/
+        if not arquivos_skill and os.path.isdir(PLUGINS_DIR) and self.dir_plugin != PLUGINS_DIR:
+            arquivos_skill = sorted(glob.glob(os.path.join(PLUGINS_DIR, "*", "SKILL.md")))
+
+        for skill_md in arquivos_skill:
             dir_skill = os.path.dirname(skill_md)
+            id_dir = os.path.basename(dir_skill)
             try:
                 if load_skill_from_dir is not None:
                     try:
                         skill = load_skill_from_dir(dir_skill)
-                        self._origem[id_plugin] = "adk_oficial"
+                        origem = "adk_oficial"
                     except ValueError:
                         skill = _parsear_skill_local(dir_skill)
-                        self._origem[id_plugin] = "parser_local"
+                        origem = "parser_local"
                 else:
                     skill = _parsear_skill_local(dir_skill)
-                    self._origem[id_plugin] = "parser_local"
-                self._skills[id_plugin] = skill
+                    origem = "parser_local"
+
+                # Chave canônica primária: id do diretório
+                self._skills[id_dir] = skill
+                self._dirs[id_dir] = dir_skill
+                self._origem[id_dir] = origem
+
+                # Registra alias secundário para compatibilidade entre underscore e hyphen
+                alias = id_dir.replace("-", "_") if "-" in id_dir else id_dir.replace("_", "-")
+                if alias not in self._skills:
+                    self._skills[alias] = skill
+                    self._dirs[alias] = dir_skill
+                    self._origem[alias] = origem
+
             except Exception as e:
-                self._erros[id_plugin] = str(e)
-                logger.warning("Skill '%s' não carregada: %s", id_plugin, e)
+                self._erros[id_dir] = str(e)
+                logger.warning("Skill '%s' não carregada: %s", id_dir, e)
 
     def get_skill(self, id_plugin: str) -> Optional[Skill]:
-        return self._skills.get(id_plugin)
+        return (
+            self._skills.get(id_plugin)
+            or self._skills.get(id_plugin.replace("_", "-"))
+            or self._skills.get(id_plugin.replace("-", "_"))
+        )
 
     def skills_carregadas(self) -> dict[str, Skill]:
         return dict(self._skills)
@@ -162,7 +214,7 @@ class ADKSkillLoader:
         return sorted(self._skills)
 
     def recursos(self, id_plugin: str) -> dict:
-        skill = self._skills.get(id_plugin)
+        skill = self.get_skill(id_plugin)
         if not skill:
             return {}
         return {
@@ -175,20 +227,31 @@ class ADKSkillLoader:
         try:
             from plugin_manager import plugin_manager
             ativos = [p for p in plugin_manager._plugins.values() if p.meta.enabled]
-            return [p.meta.id for p in ativos]
+            res = set()
+            for p in ativos:
+                res.add(p.meta.id)
+                res.add(p.meta.id.replace("_", "-"))
+                res.add(p.meta.id.replace("-", "_"))
+            return sorted(res)
         except Exception:
-            return list(self._skills)
+            return sorted(self._skills)
 
     def bloco_de_instrucoes(self, apenas_ativas: bool = True) -> str:
         """Instrução agregada das skills (L2), usada para injetar contexto no prompt."""
         alvo = set(self._skills)
         if apenas_ativas:
             alvo &= set(self.ids_ativos())
+        # Evita duplicações causadas por aliases
+        skills_unicas = {}
+        for k in sorted(alvo):
+            sk = self._skills[k]
+            skills_unicas[sk.frontmatter.name] = sk
+
         blocos = []
-        for id_plugin in sorted(alvo):
-            skill = self._skills[id_plugin]
+        for name in sorted(skills_unicas):
+            skill = skills_unicas[name]
             blocos.append(
-                f"--- SKILL {id_plugin} ({skill.frontmatter.name}) ---\n"
+                f"--- SKILL {name} ---\n"
                 f"{skill.instructions.strip()}"
             )
         if not blocos:
@@ -197,14 +260,25 @@ class ADKSkillLoader:
 
     def relatorio(self) -> list[dict]:
         saida = []
-        for id_plugin, skill in sorted(self._skills.items()):
+        # Exibe skills canônicas sem duplicar aliases no relatório
+        skills_unicas = {}
+        for k, skill in sorted(self._skills.items()):
+            name = skill.frontmatter.name
+            if name not in skills_unicas:
+                skills_unicas[name] = (k, skill)
+
+        for name, (id_plugin, skill) in sorted(skills_unicas.items()):
+            dir_skill = self._dirs.get(id_plugin, "")
+            is_compliant, motivo = validar_conformidade_spec(dir_skill, skill.frontmatter)
             saida.append({
-                "id": id_plugin,
+                "id": skill.frontmatter.name,
                 "skill_name": skill.frontmatter.name,
                 "descricao": skill.frontmatter.description,
                 "ativo": id_plugin in self.ids_ativos(),
                 "origem_carga": self._origem.get(id_plugin),
                 "l1_frontmatter_ok": True,
+                "spec_compliant": is_compliant,
+                "spec_compliance_error": motivo,
                 "l2_instrucoes_chars": len(skill.instructions),
                 "l3_recursos": self.recursos(id_plugin),
             })
@@ -215,6 +289,8 @@ class ADKSkillLoader:
                 "ativo": False,
                 "origem_carga": None,
                 "l1_frontmatter_ok": False,
+                "spec_compliant": False,
+                "spec_compliance_error": erro,
                 "erro": erro,
             })
         return saida
