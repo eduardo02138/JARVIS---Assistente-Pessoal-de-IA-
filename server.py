@@ -405,7 +405,14 @@ def obter_runner_adk(tipo: str) -> Runner:
 
 
 @app.get("/api/acoes_pendentes")
-async def listar_pendentes(usuario: str = "local"):
+async def listar_pendentes(
+    sessao: Optional[str] = Query(None),
+    usuario: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token)
+):
+    """Lista pendências ativas filtradas com estrito isolamento por sessão/usuário."""
+    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
+    now_m = time.monotonic()
     return {
         "pendentes": [
             {
@@ -413,38 +420,39 @@ async def listar_pendentes(usuario: str = "local"):
                 "ferramenta": a.tool_name,
                 "argumentos": a.args,
                 "status": a.status,
-                "expira_em": max(0, int(a.expires_at - time.time()))
+                "session_id": a.session_id,
+                "expira_em": max(0, int(a.expires_at - now_m))
             }
-            for a in policy_engine._pending_actions.values()
-            if a.status == "pending" and time.time() <= a.expires_at
+            for a in pendentes
         ]
     }
 
 
 @app.post("/api/confirmar_acao")
-async def confirmar_acao(payload: dict):
+async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     action_id = payload.get("id_confirmacao")
     aprovado = payload.get("aprovado", True)
-    session_id = payload.get("sessao", "sessao-principal")
+    session_id = payload.get("sessao")
+    user_id = payload.get("usuario")
 
     if not action_id:
-        pending = policy_engine.approve_latest_pending(session_id=session_id)
+        pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
         if pending:
             return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
-        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada"}, status_code=404)
+        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para esta sessão"}, status_code=404)
 
     if aprovado:
-        sucesso = policy_engine.approve_action(action_id, session_id=session_id)
+        sucesso = policy_engine.approve_action(action_id, session_id=session_id, user_id=user_id)
         if sucesso:
             return {"status": "ok", "action_id": action_id}
-        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada ou expirada"}, status_code=400)
+        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada, expirada ou pertencente a outra sessão"}, status_code=400)
     else:
-        policy_engine.reject_action(action_id)
+        policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
         return {"status": "rejeitado", "action_id": action_id}
 
 
 @app.post("/api/chat")
-async def api_chat_adk(payload: dict):
+async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     """Turno textual unificado: o roteador escolhe entre o agente rápido e o coordenador."""
     texto = (payload.get("texto") or "").strip()
     if not texto:
@@ -526,8 +534,27 @@ async def live_adk(
     usuario: str = Query("local"),
     sessao: str = Query("sessao-principal"),
 ):
-    """Sessão de voz Live bidirecional nativa do Google ADK."""
+    """Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado."""
     await websocket.accept()
+    
+    # Handshake seguro: exige token idêntico ao /ws/live
+    try:
+        init_raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        init_data = json.loads(init_raw)
+    except Exception:
+        await websocket.close(code=1008, reason="Init Timeout / Format Error")
+        return
+
+    if not init_data or init_data.get("type") != "init" or init_data.get("token") != JARVIS_SECRET_TOKEN:
+        logger.warning("Tentativa de conexão WebSocket /ws/live_adk não autorizada: token inválido ou ausente.")
+        record_event("auth_error", {"source": "ws_live_adk", "reason": "invalid_or_missing_token"})
+        try:
+            await websocket.send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+        except Exception:
+            pass
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
     runner = obter_runner_adk("voz")
     try:
         await session_service_adk.create_session(
@@ -537,7 +564,7 @@ async def live_adk(
         pass
 
     fila = LiveRequestQueue()
-    logger.info("Cliente conectou ao Live ADK nativo (modelo: %s)", runner.agent.model)
+    logger.info("Cliente autenticado no Live ADK (sessão: %s, modelo: %s)", sessao, runner.agent.model)
     await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model})
 
     async def do_cliente_para_o_agente():
@@ -552,12 +579,50 @@ async def live_adk(
                     )
                 )
             elif tipo == "texto":
+                texto_msg = msg.get("texto", "").strip()
+                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+                texto_limpo = "".join(c for c in texto_msg.lower() if c.isalnum() or c.isspace()).strip()
+                if texto_limpo in palavras_confirmacao or texto_msg.lower() in palavras_confirmacao:
+                    pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
+                    if pending:
+                        logger.info("Ação pendente %s (%s) aprovada por DIGITAÇÃO no Live ADK!", pending.action_id, pending.tool_name)
+                        await websocket.send_json({
+                            "tipo": "acao_aprovada",
+                            "origem": "texto_live",
+                            "action_id": pending.action_id,
+                            "tool_name": pending.tool_name,
+                            "mensagem": f"Ação '{pending.tool_name}' autorizada por texto no modo Live!"
+                        })
+                        fila.send_content(types.Content(
+                            role="user",
+                            parts=[types.Part(text=f"O usuário confirmou expressamente por texto: 'sim'. Execute a ferramenta '{pending.tool_name}' agora.")]
+                        ))
+                        continue
                 fila.send_content(
                     types.Content(role="user", parts=[types.Part(text=msg["texto"])])
                 )
             elif tipo == "confirmar_acao":
                 action_id = msg.get("id_confirmacao")
-                policy_engine.approve_action(action_id, session_id=sessao)
+                aprovado = msg.get("aprovado", True)
+                if aprovado:
+                    sucesso = policy_engine.approve_action(action_id, session_id=sessao, user_id=usuario)
+                    if sucesso:
+                        pending = policy_engine.get_pending_action(action_id)
+                        tool_name = pending.tool_name if pending else "ação"
+                        await websocket.send_json({
+                            "tipo": "acao_aprovada",
+                            "origem": "botao_ui",
+                            "action_id": action_id,
+                            "tool_name": tool_name,
+                            "mensagem": f"Ação '{tool_name}' autorizada pelo botão da interface!"
+                        })
+                        fila.send_content(types.Content(
+                            role="user",
+                            parts=[types.Part(text=f"O usuário confirmou via interface. Execute a ferramenta '{tool_name}' agora.")]
+                        ))
+                else:
+                    policy_engine.reject_action(action_id, session_id=sessao, user_id=usuario)
+                    await websocket.send_json({"tipo": "acao_rejeitada", "action_id": action_id})
 
     async def do_agente_para_o_cliente():
         run_cfg = RunConfig(
@@ -577,9 +642,28 @@ async def live_adk(
             run_config=run_cfg,
         ):
             if evento.input_transcription and evento.input_transcription.text:
+                transcricao_usuario = evento.input_transcription.text.strip()
                 await websocket.send_json(
-                    {"tipo": "transcricao_usuario", "texto": evento.input_transcription.text}
+                    {"tipo": "transcricao_usuario", "texto": transcricao_usuario}
                 )
+                # Hook de aprovação verbal por voz na sessão Live
+                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+                texto_limpo = "".join(c for c in transcricao_usuario.lower() if c.isalnum() or c.isspace()).strip()
+                if texto_limpo in palavras_confirmacao or transcricao_usuario.lower() in palavras_confirmacao:
+                    pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
+                    if pending:
+                        logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
+                        await websocket.send_json({
+                            "tipo": "acao_aprovada",
+                            "origem": "voz",
+                            "action_id": pending.action_id,
+                            "tool_name": pending.tool_name,
+                            "mensagem": f"Ação '{pending.tool_name}' autorizada por comando de voz!"
+                        })
+                        fila.send_content(types.Content(
+                            role="user",
+                            parts=[types.Part(text=f"O usuário confirmou expressamente por voz: 'sim'. Execute a ferramenta '{pending.tool_name}' agora.")]
+                        ))
             if evento.output_transcription and evento.output_transcription.text:
                 await websocket.send_json(
                     {"tipo": "texto", "texto": evento.output_transcription.text}
@@ -618,7 +702,7 @@ async def live_adk(
         async with asyncio.TaskGroup() as tg:
             tg.create_task(do_cliente_para_o_agente())
             tg.create_task(do_agente_para_o_cliente())
-    except* WebSocketDisconnect:
+    except* (WebSocketDisconnect, asyncio.CancelledError):
         logger.info("Cliente Live ADK desconectou.")
     except* (ServerError, ClientError) as grupo:
         logger.warning("Falha na sessão Live ADK (%s).", grupo.exceptions[0])
@@ -908,6 +992,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             "type": "user_transcription",
                                             "text": user_trans
                                         })
+                                        # Aprovação por comando de voz no WebSocket nativo
+                                        palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder"}
+                                        trans_lower = "".join(c for c in user_trans.lower() if c.isalnum() or c.isspace()).strip()
+                                        if trans_lower in palavras_sim or user_trans.lower().strip() in palavras_sim:
+                                            for cid, fut in list(pending_confirmations.items()):
+                                                if not fut.done():
+                                                    fut.set_result(True)
+                                                    logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", user_trans)
+                                                    record_event("user_confirmed_via_voice", {"text": user_trans})
+                                                    await websocket.send_json({
+                                                        "type": "policy_verbal_confirmation_approved",
+                                                        "call_id": cid,
+                                                        "text": user_trans
+                                                    })
 
                                     if server_content.turn_complete:
                                         assistant_state["busy"] = False

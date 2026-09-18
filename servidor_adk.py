@@ -177,7 +177,13 @@ async def saude():
 # ----------------------------- MODO TEXTO -----------------------------
 
 @app.get("/api/acoes_pendentes")
-async def listar_pendentes(usuario: str = "local"):
+async def listar_pendentes(
+    sessao: Optional[str] = Query(None),
+    usuario: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token)
+):
+    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
+    now_m = time.monotonic()
     return {
         "pendentes": [
             {
@@ -185,16 +191,16 @@ async def listar_pendentes(usuario: str = "local"):
                 "ferramenta": a.tool_name,
                 "argumentos": a.args,
                 "status": a.status,
-                "expira_em": max(0, int(a.expires_at - time.time()))
+                "session_id": a.session_id,
+                "expira_em": max(0, int(a.expires_at - now_m))
             }
-            for a in policy_engine._pending_actions.values()
-            if a.status == "pending" and time.time() <= a.expires_at
+            for a in pendentes
         ]
     }
 
 
 @app.post("/api/confirmar_acao")
-async def confirmar_acao(payload: dict):
+async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     action_id = payload.get("id_confirmacao")
     aprovado = payload.get("aprovado", True)
     session_id = payload.get("sessao", "sessao-principal")
@@ -216,7 +222,7 @@ async def confirmar_acao(payload: dict):
 
 
 @app.post("/api/chat")
-async def chat(payload: dict):
+async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     """Um turno de texto. O roteador escolhe o caminho; 'caminho' no payload força."""
     texto = (payload.get("texto") or "").strip()
     if not texto:
@@ -331,11 +337,29 @@ async def live(
     sessao: str = Query("sessao-principal"),
 ):
     await websocket.accept()
+    
+    # Handshake de autenticação
+    try:
+        init_raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        init_data = json.loads(init_raw)
+    except Exception:
+        await websocket.close(code=1008, reason="Init Timeout / Format Error")
+        return
+
+    if not init_data or init_data.get("token") != JARVIS_SECRET_TOKEN:
+        logger.warning("Tentativa de conexão WebSocket /ws/live não autorizada: token inválido ou ausente.")
+        try:
+            await websocket.send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+        except Exception:
+            pass
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
     runner = obter_runner("voz")
     await garantir_sessao(usuario, sessao)
 
     fila = LiveRequestQueue()
-    logger.info("Cliente entrou no modo live (modelo %s)", runner.agent.model)
+    logger.info("Cliente autenticado no modo live ADK (modelo %s)", runner.agent.model)
     await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model, "voz": VOZ})
 
     async def do_cliente_para_o_agente():
@@ -408,7 +432,7 @@ async def live(
         async with asyncio.TaskGroup() as tg:
             tg.create_task(do_cliente_para_o_agente())
             tg.create_task(do_agente_para_o_cliente())
-    except* WebSocketDisconnect:
+    except* (WebSocketDisconnect, asyncio.CancelledError):
         logger.info("Cliente saiu do modo live")
     except* (ServerError, ClientError) as grupo:
         erro_inst = grupo.exceptions[0]

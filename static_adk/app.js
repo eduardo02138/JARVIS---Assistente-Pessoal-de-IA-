@@ -9,6 +9,7 @@ const TAXA_SAIDA = 24000;
 
 const estado = {
   ws: null,
+  token: localStorage.getItem("jarvis_token") || "", 
   gravando: false,
   ctxEntrada: null,
   ctxSaida: null,
@@ -134,6 +135,11 @@ function conectar() {
   mostrarEstado("Conectando…");
 
   estado.ws.onopen = () => {
+    // Handshake autenticado obrigatório
+    estado.ws.send(JSON.stringify({
+      type: "init",
+      token: estado.token
+    }));
     mostrarEstado("Conectado — fale ou escreva", "ok");
     el.conectar.textContent = "Sair do modo live";
     el.microfone.disabled = false;
@@ -158,6 +164,12 @@ function conectar() {
         break;
       case "ferramenta_resultado":
         registrarFerramenta(`${msg.nome} → ${JSON.stringify(msg.resultado).slice(0, 120)}`, "ok");
+        if (msg.resultado && msg.resultado.status === "bloqueado_aguardando_confirmacao") {
+          renderizarBotaoAutorizacao(msg.resultado.id_confirmacao, msg.nome);
+        }
+        break;
+      case "acao_aprovada":
+        registrarFerramenta(`✅ ${msg.mensagem || 'Ação autorizada com sucesso'}`, "ok");
         break;
       case "interrompido":
         pararAudio();
@@ -214,7 +226,10 @@ el.form.addEventListener("submit", async (evento) => {
   }
   const resposta = await fetch("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Jarvis-Token": estado.token
+    },
     body: JSON.stringify({ texto }),
   }).then((r) => r.json());
   adicionarBalao("agente", resposta.resposta || resposta.mensagem || "(sem resposta)");
@@ -223,3 +238,17 @@ el.form.addEventListener("submit", async (evento) => {
   }
   (resposta.ferramentas || []).forEach((nome) => registrarFerramenta(nome, "ok"));
 });
+
+
+// Carrega o token de sessão da API se ainda não tiver
+(async function carregarToken() {
+  try {
+    const res = await fetch("/api/auth/session").then(r => r.json());
+    if (res.token) {
+      estado.token = res.token;
+      localStorage.setItem("jarvis_token", res.token);
+    }
+  } catch (e) {
+    console.warn("Não foi possível carregar token de sessão:", e);
+  }
+})();

@@ -37,6 +37,7 @@ class PendingAction:
     session_id: Optional[str]
     created_at: float
     expires_at: float
+    user_id: Optional[str] = None
     status: str = "pending"  # "pending", "approved", "consumed", "rejected"
 
 
@@ -372,7 +373,7 @@ class PolicyEngine:
             reason="Execução autorizada por política padrão."
         )
 
-    # ---------------- Autorização One-Shot com TTL (Policy Gate) ----------------
+    # ---------------- Autorização One-Shot com TTL Monotônico & SHA-256 (Policy Gate) ----------------
 
     @staticmethod
     def _compute_args_hash(args: Dict[str, Any]) -> str:
@@ -382,18 +383,31 @@ class PolicyEngine:
             canonical = json.dumps(args, sort_keys=True)
         except Exception:
             canonical = str(sorted(args.items()))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        # Digest SHA-256 completo (256 bits / 64 caracteres hexadecimais)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def cleanup_expired_actions(self) -> int:
+        """Expurga periodicamente ações expiradas ou consumidas para evitar vazamento de memória."""
+        now = time.monotonic()
+        removidas = 0
+        for action_id, action in list(self._pending_actions.items()):
+            if now > action.expires_at or action.status in ("consumed", "rejected"):
+                del self._pending_actions[action_id]
+                removidas += 1
+        return removidas
 
     def create_pending_action(
         self,
         tool_name: str,
         args: Dict[str, Any],
         session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         ttl: float = 60.0
     ) -> PendingAction:
         import secrets
-        action_id = secrets.token_hex(4)
-        now = time.time()
+        self.cleanup_expired_actions()
+        action_id = secrets.token_hex(6)
+        now = time.monotonic()
         args_hash = self._compute_args_hash(args)
         pending = PendingAction(
             action_id=action_id,
@@ -401,64 +415,116 @@ class PolicyEngine:
             args=args,
             args_hash=args_hash,
             session_id=session_id,
+            user_id=user_id,
             created_at=now,
             expires_at=now + ttl,
             status="pending"
         )
         self._pending_actions[action_id] = pending
-        logger.info(f"Ação pendente criada: {action_id} -> {tool_name} (TTL {ttl}s)")
+        logger.info(f"Ação pendente criada: {action_id} -> {tool_name} (Sessão: {session_id}, TTL {ttl}s monotônico)")
         return pending
 
-    def approve_action(self, action_id: str, session_id: Optional[str] = None) -> bool:
+    def approve_action(
+        self,
+        action_id: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> bool:
+        self.cleanup_expired_actions()
         pending = self._pending_actions.get(action_id)
         if not pending:
             return False
-        if time.time() > pending.expires_at:
+        if time.monotonic() > pending.expires_at:
             pending.status = "rejected"
             return False
         if session_id and pending.session_id and pending.session_id != session_id:
+            logger.warning(f"Tentativa de aprovação de ação por sessão alheia: {session_id} != {pending.session_id}")
+            return False
+        if user_id and pending.user_id and pending.user_id != user_id:
+            logger.warning(f"Tentativa de aprovação de ação por usuário alheio: {user_id} != {pending.user_id}")
             return False
         pending.status = "approved"
         logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name}")
         return True
 
-    def approve_latest_pending(self, session_id: Optional[str] = None) -> Optional[PendingAction]:
-        now = time.time()
+    def approve_latest_pending(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> Optional[PendingAction]:
+        now = time.monotonic()
         for action_id in reversed(list(self._pending_actions.keys())):
             action = self._pending_actions[action_id]
             if action.status == "pending" and now <= action.expires_at:
-                if session_id is None or action.session_id is None or action.session_id == session_id:
-                    action.status = "approved"
-                    logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name}")
-                    return action
+                if session_id is not None and action.session_id is not None and action.session_id != session_id:
+                    continue
+                if user_id is not None and action.user_id is not None and action.user_id != user_id:
+                    continue
+                action.status = "approved"
+                logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id})")
+                return action
         return None
 
-    def reject_action(self, action_id: str) -> bool:
-        if action_id in self._pending_actions:
-            self._pending_actions[action_id].status = "rejected"
-            return True
-        return False
+    def reject_action(
+        self,
+        action_id: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> bool:
+        pending = self._pending_actions.get(action_id)
+        if not pending:
+            return False
+        if session_id and pending.session_id and pending.session_id != session_id:
+            return False
+        if user_id and pending.user_id and pending.user_id != user_id:
+            return False
+        pending.status = "rejected"
+        del self._pending_actions[action_id]
+        return True
 
     def consume_authorization(
         self,
         tool_name: str,
         args: Dict[str, Any],
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> bool:
         """Verifica se há autorização válida, aprovada e com hash de argumentos correspondente.
         Ao encontrar, consome imediatamente (one-shot), revogando para execuções futuras.
         """
-        now = time.time()
+        now = time.monotonic()
         args_hash = self._compute_args_hash(args)
         for action_id, action in list(self._pending_actions.items()):
             if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
                 if action.args_hash == args_hash or not action.args:
-                    if session_id is None or action.session_id is None or action.session_id == session_id:
-                        action.status = "consumed"
-                        del self._pending_actions[action_id]
-                        logger.info(f"Autorização one-shot consumida com sucesso: {action_id} -> {tool_name}")
-                        return True
+                    if session_id is not None and action.session_id is not None and action.session_id != session_id:
+                        continue
+                    if user_id is not None and action.user_id is not None and action.user_id != user_id:
+                        continue
+                    # Consumo estritamente único (one-shot): revoga e apaga imediatamente
+                    action.status = "consumed"
+                    del self._pending_actions[action_id]
+                    logger.info(f"Autorização one-shot consumida com sucesso: {action_id} -> {tool_name}")
+                    return True
         return False
+
+    def list_pending_actions(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> list[PendingAction]:
+        """Retorna apenas as pendências ativas da sessão e usuário requisitantes."""
+        self.cleanup_expired_actions()
+        now = time.monotonic()
+        resultado = []
+        for action in self._pending_actions.values():
+            if action.status == "pending" and now <= action.expires_at:
+                if session_id is not None and action.session_id is not None and action.session_id != session_id:
+                    continue
+                if user_id is not None and action.user_id is not None and action.user_id != user_id:
+                    continue
+                resultado.append(action)
+        return resultado
 
     def get_pending_action(self, action_id: str) -> Optional[PendingAction]:
         return self._pending_actions.get(action_id)
