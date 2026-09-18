@@ -523,6 +523,7 @@ function pararVisaoDeTela() {
  * Sem resposta, o backend nega a execução por tempo esgotado.
  */
 function mostrarPedidoDeAutorizacao(msg) {
+    sendBridgeMessage("PYBRIDGE_RESIZE", "560,460");
     appendChatMessage("tool", `Autorização necessária (${msg.risk_level}): ${msg.name}`, { source: "tool" });
 
     const painel = document.createElement("div");
@@ -545,6 +546,7 @@ function mostrarPedidoDeAutorizacao(msg) {
         respondido = true;
         clearTimeout(temporizador);
         painel.remove();
+        if (!state.expanded) sendBridgeMessage("PYBRIDGE_RESIZE", "560,240");
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
             state.ws.send(JSON.stringify({ type: "tool_confirmation", id: msg.id, approved: aprovado }));
         }

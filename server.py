@@ -499,6 +499,28 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             user_text = msg.get("text", "").strip()
                             if user_text:
                                 logger.info(f"Comando de texto do usuário: {user_text}")
+                                # Se houver autorização pendente, palavras de confirmação/rejeição resolvem imediatamente
+                                if pending_confirmations:
+                                    txt_lower = user_text.lower().strip()
+                                    palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder", "fazer teste"}
+                                    palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "no"}
+                                    
+                                    if any(txt_lower == p or txt_lower.startswith(p + " ") or txt_lower.endswith(" " + p) for p in palavras_sim):
+                                        for cid, fut in list(pending_confirmations.items()):
+                                            if not fut.done():
+                                                fut.set_result(True)
+                                        logger.info(f"✅ [POLICY CONFIRMED BY TEXT]: '{user_text}'")
+                                        record_event("user_confirmed_via_text", {"text": user_text})
+                                        if txt_lower in palavras_sim:
+                                            continue
+                                    elif any(txt_lower == p or txt_lower.startswith(p + " ") for p in palavras_nao):
+                                        for cid, fut in list(pending_confirmations.items()):
+                                            if not fut.done():
+                                                fut.set_result(False)
+                                        logger.info(f"❌ [POLICY DENIED BY TEXT]: '{user_text}'")
+                                        record_event("user_denied_via_text", {"text": user_text})
+                                        if txt_lower in palavras_nao:
+                                            continue
                                 record_event("user_text", {"text": user_text})
                                 gemini_bridge.log_audit_event("USER", "chat_input", user_text)
                                 assistant_state["busy"] = True
