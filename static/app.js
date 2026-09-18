@@ -1,3 +1,15 @@
+const MODELO_PADRAO = 'gemini-3.8-live';
+
+/** Descarta o modelo legado gravado no navegador: ele sobrepunha o padrão do .env. */
+function modeloSalvado() {
+    const salvo = localStorage.getItem('jarvis_model');
+    if (!salvo || salvo.startsWith('gemini-2.5') || salvo.includes('exp')) {
+        localStorage.setItem('jarvis_model', MODELO_PADRAO);
+        return MODELO_PADRAO;
+    }
+    return salvo;
+}
+
 let jarvisSessionToken = "";
 async function initSessionToken() {
     try {
@@ -39,7 +51,7 @@ const state = {
     speaking: false,
     ws: null,
     voice: localStorage.getItem('jarvis_voice') || 'Charon',
-    model: localStorage.getItem('jarvis_model') || 'gemini-3.8-live',
+    model: modeloSalvado(),
     isPushToTalkActive: false,
     
     // Áudio

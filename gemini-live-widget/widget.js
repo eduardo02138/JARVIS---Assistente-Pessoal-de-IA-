@@ -51,7 +51,15 @@ const state = {
 
     // Configurações
     voice: localStorage.getItem("gemini_live_voice") || "Puck",
-    model: "gemini-3.8-live",
+    model: (function () {
+        // Descarta o modelo legado gravado no navegador do app desktop
+        const salvo = localStorage.getItem("jarvis_model");
+        if (!salvo || salvo.startsWith("gemini-2.5") || salvo.includes("exp")) {
+            localStorage.setItem("jarvis_model", "gemini-3.8-live");
+            return "gemini-3.8-live";
+        }
+        return salvo;
+    })(),
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
     micMode: localStorage.getItem("gemini_mic_mode") || "always",
     echoCancellation: localStorage.getItem("gemini_echo") !== "false",
