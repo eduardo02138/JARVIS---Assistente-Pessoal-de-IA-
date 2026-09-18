@@ -72,7 +72,14 @@
                     </div>
 
                     <div class="brand-meta">
-                        <span class="brand-title">Gemini Live</span>
+                        <div class="brand-title-row">
+                            <span class="brand-title">Gemini Live</span>
+                            <select id="selectWidgetHeaderMode" class="widget-mode-select" title="Alternar Modo de Operação">
+                                <option value="tank-3.8" selected>🛡️ Tank 3.8 Live</option>
+                                <option value="live-flash">🎙️ Live Flash</option>
+                                <option value="simples">⚡ Simples</option>
+                            </select>
+                        </div>
                         <span id="liveStatusText" class="status-micro">Pronto para conversar</span>
                     </div>
                 </div>
@@ -230,15 +237,49 @@
         <div id="settingsPanel" class="settings-panel hidden">
             <div class="settings-header">
                 <div class="settings-nav-tabs">
-                    <button class="tab-btn active" data-tab="tab-voices">🎙️ Vozes</button>
+                    <button class="tab-btn active" data-tab="tab-modes">⚡ Modos</button>
+                    <button class="tab-btn" data-tab="tab-voices">🎙️ Vozes</button>
                     <button class="tab-btn" data-tab="tab-mic">🎤 Microfone</button>
                     <button class="tab-btn" data-tab="tab-omni">⚡ OmniRoute</button>
                 </div>
                 <button id="btnCloseSettingsPanel" class="settings-close-btn" aria-label="Fechar Configurações">✕</button>
             </div>
 
+            <!-- Aba 0: Modos de Operação -->
+            <div id="tab-modes" class="tab-content active">
+                <div class="tab-desc">Escolha o modo de inteligência e capacidade do assistente:</div>
+                <div class="voice-cards-grid">
+                    <div class="voice-card mode-card" data-mode="simples">
+                        <div class="voice-icon-box">⚡</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Modo Simples <span class="voice-badge-tag">Baixa Latência</span></div>
+                            <div class="voice-style">Respostas diretas de texto via ADK Rápido, hora, status e consultas sem áudio pesado.</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card mode-card" data-mode="live-flash">
+                        <div class="voice-icon-box">🎙️</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Gemini Live Flash <span class="voice-badge-tag">Ágil</span></div>
+                            <div class="voice-style">Voz bidirecional em tempo real ultrarrápida com Gemini 2.5 Flash Native Audio.</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card mode-card active" data-mode="tank-3.8">
+                        <div class="voice-icon-box">🛡️</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Tank do Gemini 3.8 Live <span class="voice-badge-tag">Potência Máxima</span></div>
+                            <div class="voice-style">Modelo Live completo com raciocínio profundo, 55 ferramentas, visão de tela e Modo Controle.</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Aba 1: Modelos de Voz -->
-            <div id="tab-voices" class="tab-content active">
+            <div id="tab-voices" class="tab-content">
                 <div class="tab-desc">Escolha a voz que o Gemini Live utilizará para responder:</div>
                 <div class="voice-cards-grid">
                     <div class="voice-card" data-voice="Puck">
@@ -425,7 +466,11 @@
                 <div class="ask-bar-controls">
                     <button class="tool-btn" title="Anexar">+</button>
                     <button class="tool-btn" id="btnSettingsExpanded" title="Ajustes">⚙</button>
-                    <span class="model-tag">Fast ▾</span>
+                    <select id="selectExpandedMode" class="model-select-tag" title="Alternar Modo de Operação">
+                        <option value="tank-3.8" selected>🛡️ Tank 3.8 Live</option>
+                        <option value="live-flash">🎙️ Live Flash</option>
+                        <option value="simples">⚡ Simples</option>
+                    </select>
                     <button id="btnExpandedMic" class="mic-bubble-btn active" title="Microfone">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                             <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>

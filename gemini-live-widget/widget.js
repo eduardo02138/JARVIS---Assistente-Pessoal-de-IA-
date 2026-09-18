@@ -51,14 +51,12 @@ const state = {
 
     // Configurações
     voice: localStorage.getItem("gemini_live_voice") || "Puck",
+    currentMode: localStorage.getItem("jarvis_app_mode") || "tank-3.8",
     model: (function () {
-        // Descarta o modelo legado gravado no navegador do app desktop
-        const salvo = localStorage.getItem("jarvis_model");
-        if (!salvo || salvo.startsWith("gemini-2.5") || salvo.includes("exp")) {
-            localStorage.setItem("jarvis_model", "gemini-3.8-live");
-            return "gemini-3.8-live";
-        }
-        return salvo;
+        const mode = localStorage.getItem("jarvis_app_mode") || "tank-3.8";
+        if (mode === "simples") return "gemini-flash-latest";
+        if (mode === "live-flash") return "gemini-2.5-flash-native-audio-latest";
+        return "gemini-3.8-live";
     })(),
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
     micMode: localStorage.getItem("gemini_mic_mode") || "always",
@@ -125,6 +123,8 @@ const dom = {
 
     // Modos de Exibição
     btnSwitchView: document.getElementById("btnSwitchView"),
+    selectWidgetHeaderMode: document.getElementById("selectWidgetHeaderMode"),
+    selectExpandedMode: document.getElementById("selectExpandedMode"),
     btnMinimizeToWidget: document.getElementById("btnMinimizeToWidget"),
     btnToggleBackdrop: document.getElementById("btnToggleBackdrop"),
     expandedChatScroll: document.getElementById("expandedChatScroll"),
@@ -782,17 +782,83 @@ function appendCaption(speaker, text) {
     return appendChatMessage(speaker, text, { source: speaker === "user" ? "typed" : "voice" });
 }
 
-function sendTextPrompt(text) {
-    if (!text || !text.trim() || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+async function sendTextPrompt(text) {
+    if (!text || !text.trim()) return;
     const clean = text.trim();
     state.currentUserVoiceMsgElement = null;
     state.currentAiMsgElement = null;
 
     appendChatMessage("user", clean, { source: "typed" });
     state.processing = true;
-    state.pauseMicUntil = Date.now() + 4000;
-    state.ws.send(JSON.stringify({ type: "text", text: clean }));
     dom.liveStatusText.textContent = "Processando pergunta...";
+
+    if (state.currentMode === "simples") {
+        try {
+            const resp = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ texto: clean, usuario: "local", sessao: "sessao-widget" })
+            }).then(r => r.json());
+            const respostaTexto = resp.resposta || resp.mensagem || "(sem resposta)";
+            appendChatMessage("gemini", respostaTexto);
+            dom.liveStatusText.textContent = `Modo Simples (respondido via ${resp.caminho || 'ADK'})`;
+        } catch (err) {
+            appendChatMessage("gemini", "Erro ao comunicar com o servidor no modo simples.");
+            dom.liveStatusText.textContent = "Erro na resposta.";
+        }
+        state.processing = false;
+        return;
+    }
+
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.pauseMicUntil = Date.now() + 4000;
+        state.ws.send(JSON.stringify({ type: "text", text: clean }));
+    }
+}
+
+
+// ---------------- GERENCIAMENTO DE MODOS (SIMPLES, LIVE FLASH & TANK 3.8) ----------------
+function applyMode(mode, reconnect = true) {
+    state.currentMode = mode;
+    localStorage.setItem("jarvis_app_mode", mode);
+
+    if (dom.selectWidgetHeaderMode) dom.selectWidgetHeaderMode.value = mode;
+    if (dom.selectExpandedMode) dom.selectExpandedMode.value = mode;
+
+    document.querySelectorAll(".mode-card").forEach(card => {
+        card.classList.toggle("active", card.dataset.mode === mode);
+    });
+
+    if (mode === "simples") {
+        state.model = "gemini-flash-latest";
+        localStorage.setItem("jarvis_model", state.model);
+        dom.liveStatusText.textContent = "Modo Simples (Texto Rápido)";
+        dom.chipLabel.textContent = "⚡ Simples (Rápido)";
+        dom.statusBadgeChip.className = "status-chip active mode-simples";
+        appendCaption("gemini", "⚡ Modo Simples ativado. Respostas de texto diretas e ultrarrápidas via ADK.");
+    } else if (mode === "live-flash") {
+        state.model = "gemini-2.5-flash-native-audio-latest";
+        localStorage.setItem("jarvis_model", state.model);
+        dom.liveStatusText.textContent = "Gemini Live Flash (Voz Ágil)";
+        dom.chipLabel.textContent = "🎙️ Live Flash";
+        dom.statusBadgeChip.className = "status-chip active mode-flash";
+        appendCaption("gemini", "🎙️ Gemini Live Flash ativado. Voz ágil e dinâmica conectada.");
+        if (reconnect && state.ws) {
+            state.ws.close();
+            initWebSocket();
+        }
+    } else { // tank-3.8
+        state.model = "gemini-3.8-live";
+        localStorage.setItem("jarvis_model", state.model);
+        dom.liveStatusText.textContent = "Tank Gemini 3.8 Live (Potência Máxima)";
+        dom.chipLabel.textContent = "🛡️ Tank 3.8 Live";
+        dom.statusBadgeChip.className = "status-chip active mode-tank";
+        appendCaption("gemini", "🛡️ Tank do Gemini 3.8 Live ativado. Potência máxima, raciocínio profundo e visão.");
+        if (reconnect && state.ws) {
+            state.ws.close();
+            initWebSocket();
+        }
+    }
 }
 
 // ---------------- CONFIGURAÇÃO DE VOZES ----------------
