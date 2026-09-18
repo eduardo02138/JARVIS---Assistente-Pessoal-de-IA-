@@ -861,10 +861,20 @@ async def live_adk(
     await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model})
 
     async def do_cliente_para_o_agente():
+        client_muted = False
         while True:
             msg = json.loads(await websocket.receive_text())
             tipo = msg.get("tipo") or msg.get("type")
+            if tipo in ("microphone_state", "estado_microfone"):
+                client_muted = bool(msg.get("muted", msg.get("mutado", False)))
+                record_event("microphone_state_changed", {"source": "live_adk", "muted": client_muted})
+                if client_muted:
+                    fila.send_audio_stream_end()
+                continue
             if tipo == "audio":
+                if client_muted:
+                    # Fail-closed: descarta áudio residual enquanto mutado
+                    continue
                 audio_b64 = msg.get("dados") or msg.get("data")
                 if audio_b64:
                     fila.send_realtime(

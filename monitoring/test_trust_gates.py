@@ -516,3 +516,76 @@ def test_gate6_server_live_ws_drops_audio_when_muted():
         bloqueio.set()
 
 
+def test_gate6_live_adk_drops_audio_when_muted():
+    """Gate 6: O endpoint /ws/live_adk deve descartar áudio quando estado_microfone mutado for enviado."""
+    import asyncio as asyncio_mod
+    import base64
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    import server as server_mod
+
+    client = TestClient(server_mod.app)
+    runner = server_mod.obter_runner_adk("voz")
+
+    async def mock_run_live(*args, **kwargs):
+        yield SimpleNamespace(
+            interim_input_transcription=None,
+            input_transcription=None,
+            output_transcription=None,
+            content=None,
+            interrupted=False,
+            voice_activity=None,
+            turn_complete=False,
+        )
+        while True:
+            await asyncio_mod.sleep(0.1)
+            yield SimpleNamespace(
+                interim_input_transcription=None,
+                input_transcription=None,
+                output_transcription=None,
+                content=None,
+                interrupted=False,
+                voice_activity=None,
+                turn_complete=False,
+            )
+
+    with patch.object(runner, "run_live", side_effect=mock_run_live):
+        with patch.object(server_mod, "LiveRequestQueue") as mock_queue_cls:
+            mock_queue = MagicMock()
+            mock_queue_cls.return_value = mock_queue
+
+            with client.websocket_connect("/ws/live_adk?sessao=sess_mute_test&usuario=user_mute_test") as ws:
+                ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN})
+                msg_ready = ws.receive_json()
+                assert msg_ready.get("tipo") == "pronto"
+
+                # 1. Envia sinal de mute
+                ws.send_json({"tipo": "estado_microfone", "mutado": True})
+                time.sleep(0.05)
+
+                # 2. Envia chunk de áudio
+                dummy_b64 = base64.b64encode(b"\x00\x01" * 512).decode("ascii")
+                ws.send_json({"tipo": "audio", "dados": dummy_b64})
+                time.sleep(0.05)
+
+                # Verifica que a fila NÃO recebeu send_realtime com áudio
+                assert mock_queue.send_realtime.called is False, (
+                    "FALHA GATE 6: /ws/live_adk repassou áudio para fila mesmo com microfone mutado!"
+                )
+
+                # 3. Desmuta
+                ws.send_json({"tipo": "estado_microfone", "mutado": False})
+                time.sleep(0.05)
+
+                # 4. Envia chunk de áudio
+                ws.send_json({"tipo": "audio", "dados": dummy_b64})
+                time.sleep(0.05)
+
+                # Agora DEVE ter chamado send_realtime
+                assert mock_queue.send_realtime.called is True, (
+                    "FALHA GATE 6: /ws/live_adk não repassou áudio após desmutar!"
+                )
+
+
+
