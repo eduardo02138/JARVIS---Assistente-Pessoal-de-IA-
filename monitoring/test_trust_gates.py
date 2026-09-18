@@ -350,3 +350,169 @@ def test_agent_skills_spec_compliance():
         )
         assert item["l1_frontmatter_ok"] is True
 
+
+# ==============================================================================
+# GATE 6: MICROPHONE PRIVACY & MUTE FAIL-CLOSED
+# ==============================================================================
+
+def test_gate6_frontend_widget_has_hardware_and_backend_mute_signaling():
+    """Gate 6: O frontend deve conter mute em hardware (track.enabled=false), suspensão de AudioContext e sinalização backend."""
+    import pathlib
+    widget_js = pathlib.Path("gemini-live-widget/widget.js").read_text(encoding="utf-8")
+
+    # 1. Hardware Mute: desabilitar trilhas do microfone
+    assert "getAudioTracks().forEach" in widget_js and "enabled = false" in widget_js, (
+        "FALHA GATE 6: Frontend widget.js não desabilita trilhas de microfone no hardware ao mutar!"
+    )
+    # 2. Suspensão de AudioContext
+    assert "inputAudioCtx.suspend()" in widget_js, (
+        "FALHA GATE 6: Frontend widget.js não suspende o AudioContext ao mutar!"
+    )
+    # 3. Notificação via WebSocket
+    assert "microphone_state" in widget_js and "muted: true" in widget_js, (
+        "FALHA GATE 6: Frontend widget.js não envia evento microphone_state via WebSocket ao mutar!"
+    )
+    # 4. Limiar VAD calibrado contra vazamento de som
+    assert "gemini_vad_threshold" in widget_js or "0.012" in widget_js, (
+        "FALHA GATE 6: Limiar de VAD calibrado ausente em widget.js!"
+    )
+
+
+def test_gate6_server_live_ws_drops_audio_when_muted():
+    """Gate 6: Quando o microfone está mutado, o backend deve descartar compulsoriamente os chunks de áudio (fail-closed)."""
+    import asyncio as asyncio_mod
+    import base64
+    from types import SimpleNamespace
+    import server as server_mod
+
+    bloqueio = asyncio_mod.Event()
+
+    class FakeLiveSession:
+        def __init__(self):
+            self.enviados = []
+
+        async def send_client_content(self, **kwargs):
+            self.enviados.append(("client_content", kwargs))
+
+        async def send_realtime_input(self, **kwargs):
+            self.enviados.append(("realtime_input", kwargs))
+
+        async def send(self, **kwargs):
+            self.enviados.append(("send", kwargs))
+
+        async def receive(self):
+            # Mantém vivo aguardando comandos
+            await bloqueio.wait()
+            yield SimpleNamespace(
+                server_content=SimpleNamespace(
+                    model_turn=SimpleNamespace(parts=[]),
+                    turn_complete=True,
+                    output_transcription=None,
+                    interrupted=False,
+                ),
+                tool_call=None,
+            )
+
+        async def close(self):
+            pass
+
+    class GerenciadorConexao:
+        def __init__(self, sessao):
+            self._sessao = sessao
+
+        async def __aenter__(self):
+            return self._sessao
+
+        async def __aexit__(self, *exc):
+            await self._sessao.close()
+
+    class FakeLive:
+        def __init__(self, sessao):
+            self._sessao = sessao
+
+        def connect(self, model=None, config=None):
+            return GerenciadorConexao(self._sessao)
+
+    class FakeAio:
+        def __init__(self, sessao):
+            self.live = FakeLive(sessao)
+
+    class FakeClient:
+        def __init__(self, sessao, *args, **kwargs):
+            self._sessao = sessao
+            self._api_client = SimpleNamespace(_websocket_ssl_ctx={})
+            self.aio = FakeAio(sessao)
+
+    estado_teste = {"sessoes": []}
+
+    def fabrica_client(*args, **kwargs):
+        sess = FakeLiveSession()
+        estado_teste["sessoes"].append(sess)
+        return FakeClient(sess)
+
+    dummy_pcm = b"\x00\x01" * 1024
+    dummy_b64 = base64.b64encode(dummy_pcm).decode("ascii")
+
+    try:
+        with patch.object(server_mod.genai, "Client", side_effect=fabrica_client):
+            with TestClient(app) as test_client:
+                with test_client.websocket_connect("/ws/live") as ws:
+                    ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN, "voice": "Charon", "barge_in": True})
+                    # Dá tempo para o worker inicializar a sessão
+                    import time
+                    time.sleep(0.1)
+                    assert len(estado_teste["sessoes"]) > 0
+                    sessao_ativa = estado_teste["sessoes"][0]
+
+                    # 1. Envia sinal de mute: microphone_state muted = true
+                    ws.send_json({"type": "microphone_state", "muted": True})
+                    time.sleep(0.05)
+
+                    # 2. Envia chunk de áudio com microfone mutado
+                    ws.send_json({"type": "audio", "data": dummy_b64})
+                    time.sleep(0.05)
+
+                    # Verifica que nenhum chunk de áudio foi enviado à sessão
+                    audio_enviados_mutado = [
+                        item for item in sessao_ativa.enviados
+                        if item[0] == "realtime_input" and "audio" in item[1]
+                    ]
+                    assert len(audio_enviados_mutado) == 0, (
+                        f"FALHA GATE 6: Áudio foi repassado à sessão mesmo com microfone mutado! {audio_enviados_mutado}"
+                    )
+
+                    # 3. Usuário digita texto: não deve resetar o mute do microfone
+                    ws.send_json({"type": "text", "text": "oi jarvis"})
+                    time.sleep(0.05)
+
+                    # 4. Envia outro chunk de áudio: ainda deve ser descartado
+                    ws.send_json({"type": "audio", "data": dummy_b64})
+                    time.sleep(0.05)
+
+                    audio_enviados_apos_texto = [
+                        item for item in sessao_ativa.enviados
+                        if item[0] == "realtime_input" and "audio" in item[1]
+                    ]
+                    assert len(audio_enviados_apos_texto) == 0, (
+                        "FALHA GATE 6: Digitar texto reabriu indevidamente a escuta do microfone!"
+                    )
+
+                    # 5. Desmuta o microfone: microphone_state muted = false
+                    ws.send_json({"type": "microphone_state", "muted": False})
+                    time.sleep(0.05)
+
+                    # 6. Envia chunk de áudio: agora DEVE ser aceito e repassado
+                    ws.send_json({"type": "audio", "data": dummy_b64})
+                    time.sleep(0.05)
+
+                    audio_enviados_desmutado = [
+                        item for item in sessao_ativa.enviados
+                        if item[0] == "realtime_input" and "audio" in item[1]
+                    ]
+                    assert len(audio_enviados_desmutado) > 0, (
+                        "FALHA GATE 6: Áudio NÃO foi aceito após desmutar o microfone!"
+                    )
+    finally:
+        bloqueio.set()
+
+
