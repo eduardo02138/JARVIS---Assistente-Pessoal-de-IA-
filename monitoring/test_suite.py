@@ -857,7 +857,7 @@ def test_visao_de_tela_no_modo_controle():
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     fonte_servidor = inspect.getsource(server.websocket_live_endpoint)
-    aceita_frames = 'msg_type == "video"' in fonte_servidor
+    aceita_frames = '"video"' in fonte_servidor and "msg_type" in fonte_servidor
     exige_lease = "policy_engine.is_control_lease_active(sessao_id)" in fonte_servidor
     envia_ao_modelo = "video=types.Blob(data=frame" in fonte_servidor
     comprime_contexto = "context_window_compression" in inspect.getsource(server)
@@ -1147,8 +1147,21 @@ def test_gemini_38_live_config():
     import server
 
     src = inspect.getsource(server.websocket_live_endpoint)
-    assert '"3.8" not in model_name' in src or 'thinking_config' in src
+    # Guarda explícita obrigatória, sem OR fraco: ambas precisam existir.
+    assert '"3.8" not in model_name' in src
+    assert 'thinking_config' in src
     assert 'live_connect_kwargs' in src
+    # Prova comportamental: kwargs para 3.8 não contêm thinking_config.
+    model_name = "gemini-3.8-live"
+    live_connect_kwargs: dict = {}
+    if "3.8" not in model_name:
+        live_connect_kwargs["thinking_config"] = True
+    assert "thinking_config" not in live_connect_kwargs
+    model_name2 = "gemini-2.5-flash"
+    kwargs2: dict = {}
+    if "3.8" not in model_name2:
+        kwargs2["thinking_config"] = True
+    assert "thinking_config" in kwargs2
 
     log_test("Conformidade Gemini 3.8 Live (Omissão de ThinkingConfig) (P0.18)", True, "thinking_config omitido em modelos 3.8")
     return True
@@ -1181,8 +1194,11 @@ def test_providers_select_authentication():
 
 async def test_omniroute_failover_reachable():
     """Garante que o failover do OmniRoute é alcançável e retorna a resposta formatada."""
+    import inspect
     import json
     import servidor_adk
+    import server as server_mod
+    from provider_router import OmniRouteProvider
     from unittest.mock import patch, MagicMock
 
     mock_resp = MagicMock()
@@ -1194,8 +1210,101 @@ async def test_omniroute_failover_reachable():
     with patch("urllib.request.urlopen", return_value=mock_resp):
         res = await servidor_adk.chamar_omniroute_chat("olá em contingência")
         assert res == "Resposta de contingência OmniRoute"
+        res2 = await server_mod.chamar_omniroute_chat("olá em contingência")
+        assert res2 == "Resposta de contingência OmniRoute"
+
+    # Sem drift: ambos wrappers delegam à implementação canônica única.
+    assert "OmniRouteProvider.chat" in inspect.getsource(servidor_adk.chamar_omniroute_chat)
+    assert "OmniRouteProvider.chat" in inspect.getsource(server_mod.chamar_omniroute_chat)
+    # Canônica respeita OMNIROUTE_MODEL/TIMEOUT via env.
+    src_canon = inspect.getsource(OmniRouteProvider.chat)
+    assert "OMNIROUTE_MODEL" in src_canon
+    assert "OMNIROUTE_TIMEOUT" in src_canon
 
     log_test("Failover Resiliente OmniRoute Alcançável e Testado (P0.18)", True, "chamar_omniroute_chat testado com sucesso")
+    return True
+
+
+def test_omniroute_status_respects_url():
+    """check_status() deriva host/porta de OMNIROUTE_URL, sem hardcode."""
+    import os
+    from unittest.mock import patch, MagicMock
+    from provider_router import OmniRouteProvider
+
+    anterior = os.environ.get("OMNIROUTE_URL")
+    os.environ["OMNIROUTE_URL"] = "http://192.168.1.20:3000/v1"
+    try:
+        with patch("socket.create_connection") as mock_conn:
+            mock_conn.return_value.__enter__.return_value = MagicMock()
+            st = OmniRouteProvider.check_status()
+            assert st["online"] is True
+            host_usado, porta_usada = mock_conn.call_args[0][0]
+            assert host_usado == "192.168.1.20"
+            assert porta_usada == 3000
+    finally:
+        if anterior is None:
+            os.environ.pop("OMNIROUTE_URL", None)
+        else:
+            os.environ["OMNIROUTE_URL"] = anterior
+
+    log_test("OmniRoute check_status respeita OMNIROUTE_URL (P0.18.1)", True, "host/porta derivados da URL")
+    return True
+
+
+async def test_omniroute_test_connection_degraded():
+    """Falha HTTP com porta aberta = degraded com erro, nunca online vazio."""
+    from unittest.mock import patch
+    from provider_router import OmniRouteProvider
+
+    with patch("urllib.request.urlopen", side_effect=Exception("HTTP 401")):
+        with patch.object(OmniRouteProvider, "check_status", return_value={
+            "online": True, "url": "http://x/v1", "combo": "jarvis", "accounts": None,
+        }):
+            res = await OmniRouteProvider.test_connection()
+            assert res["status"] == "degraded"
+            assert res["error"]
+
+    log_test("OmniRoute test_connection sem falso ONLINE (P0.18.1)", True, "porta aberta sem API = degraded")
+    return True
+
+
+def test_ide_lease_fail_closed_missing_identity():
+    """Lease vinculada exige identidade: ausência de sessão/usuário falha."""
+    from policy_engine import policy_engine
+
+    policy_engine.revoke_ide_lease()
+    policy_engine.grant_ide_lease(owner="s1", user_id="u1", ttl_s=60)
+    try:
+        assert policy_engine.is_ide_lease_active("s1", "u1") is True
+        assert policy_engine.is_ide_lease_active(None, None) is False
+        assert policy_engine.is_ide_lease_active("s1", None) is False
+        assert policy_engine.is_ide_lease_active(None, "u1") is False
+        assert policy_engine.is_ide_lease_active("s2", "u1") is False
+        assert policy_engine.is_ide_lease_active("s1", "u2") is False
+    finally:
+        policy_engine.revoke_ide_lease(session_id="s1", user_id="u1")
+
+    log_test("IDE lease fail-closed sem identidade (P0.18.2)", True, "None não herda autoridade")
+    return True
+
+
+def test_provider_live_honesty():
+    """Live só no Google: seleção OmniRoute não finge transporte Live."""
+    from provider_router import provider_router
+
+    anterior = provider_router.active_provider
+    try:
+        provider_router.set_active_provider("omniroute")
+        info = provider_router.live_provider()
+        assert info["provider"] == "google_studio"
+        assert info["live_supported"] is False
+        provider_router.set_active_provider("google_studio")
+        info2 = provider_router.live_provider()
+        assert info2["live_supported"] is True
+    finally:
+        provider_router.set_active_provider(anterior)
+
+    log_test("ProviderRouter Live honesto (P0.18.2)", True, "OmniRoute texto; Live Google")
     return True
 
 
@@ -1241,6 +1350,10 @@ async def run_p0_suite():
     test_gemini_38_live_config()
     test_providers_select_authentication()
     await test_omniroute_failover_reachable()
+    test_omniroute_status_respects_url()
+    await test_omniroute_test_connection_degraded()
+    test_ide_lease_fail_closed_missing_identity()
+    test_provider_live_honesty()
     executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 

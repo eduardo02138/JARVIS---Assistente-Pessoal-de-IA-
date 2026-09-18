@@ -47,6 +47,7 @@ from google.genai import types
 import system_tools
 from plugin_manager import plugin_manager
 import gemini_bridge
+import transcricao
 from provider_router import provider_router, GoogleStudioProvider, OmniRouteProvider
 from monitoring.logger import (
     logger, record_event, get_recent_events,
@@ -408,7 +409,7 @@ Diretrizes fundamentais:
    - Responda EXCLUSIVAMENTE em Português do Brasil com naturalidade e refinamento.
    - NUNCA externe pensamentos, raciocínios de planejamento ou notas em inglês para o Senhor. Fale diretamente a resposta final.
 10. CANAL DE AUDITORIA & PASTA GEMINI:
-   - Sempre que o senhor pedir para abrir a pasta gemini, abrir a ponte de desenvolvimento ou consultar o canal de auditoria, chame 'antigravity_open_gemini_bridge'.
+   - SOMENTE chame 'antigravity_open_gemini_bridge' quando o senhor pedir explicitamente para abrir a pasta gemini, abrir a ponte de desenvolvimento ou a auditoria. NUNCA chame essa ferramenta por conta própria ou em conversas normais sobre outros assuntos.
    - A pasta 'gemini' (/home/edu/Documentos/assistente/gemini/) é o canal direto onde o senhor pode mandar mensagens diretamente por arquivo (gemini/input.txt) sem precisar falar no microfone, e onde todas as interações e respostas do Antigravity ficam auditadas em 'audit.jsonl' e 'latest_response.md'.
 11. MEMÓRIA PERSISTENTE E PREFERÊNCIAS DO USUÁRIO (APLICATIVOS PADRÃO & CONFIGURAÇÕES):
    - Você possui memória persistente para lembrar preferências e configurações do Senhor ('manage_user_preference', 'set_game_preference', 'open_default_app').
@@ -557,10 +558,19 @@ async def listar_pendentes(
 
 @app.post("/api/confirmar_acao")
 async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
-    action_id = payload.get("id_confirmacao")
+    action_id = payload.get("id_confirmacao") or payload.get("action_id") or payload.get("id")
     aprovado = payload.get("aprovado", True)
-    session_id = payload.get("sessao")
-    user_id = payload.get("usuario") or "local"
+    session_id = payload.get("sessao") or payload.get("session_id")
+    user_id = payload.get("usuario") or payload.get("user_id") or "local"
+
+    # Se action_id foi fornecido, resolve sessão correspondente se veio como default/vazio
+    if action_id:
+        pending_obj = policy_engine._pending_actions.get(action_id)
+        if pending_obj:
+            if not session_id or session_id in ("sessao-principal", "default"):
+                session_id = pending_obj.session_id or session_id
+            if user_id in ("local", "default") and pending_obj.user_id:
+                user_id = pending_obj.user_id
 
     if not session_id:
         return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' é obrigatório para confirmar ações."}, status_code=400)
@@ -582,30 +592,8 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
 
 
 async def chamar_omniroute_chat(texto: str) -> str:
-    """Executa chat completion de contingência via OmniRoute HTTP local (2º provedor)."""
-    url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1").rstrip("/") + "/chat/completions"
-    key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
-    payload_omni = json.dumps({
-        "model": os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash"),
-        "messages": [{"role": "user", "content": texto}]
-    }).encode("utf-8")
-    req_omni = urllib.request.Request(
-        url_omni,
-        data=payload_omni,
-        headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
-        method="POST"
-    )
-    loop = asyncio.get_running_loop()
-
-    def _chamar():
-        with urllib.request.urlopen(req_omni, timeout=float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))) as r:
-            return json.loads(r.read().decode("utf-8"))
-
-    resp_json = await loop.run_in_executor(None, _chamar)
-    escolhas = resp_json.get("choices", [])
-    if escolhas and "message" in escolhas[0]:
-        return escolhas[0]["message"].get("content", "").strip()
-    raise RuntimeError("Resposta OmniRoute em formato inesperado.")
+    """Wrapper fino canônico: implementação mora em OmniRouteProvider.chat()."""
+    return await OmniRouteProvider.chat(texto)
 
 
 @app.post("/api/computer/mode")
@@ -944,8 +932,8 @@ async def live_adk(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
                 )
             ),
-            input_audio_transcription=types.AudioTranscriptionConfig(),
-            output_audio_transcription=types.AudioTranscriptionConfig(),
+            input_audio_transcription=transcricao.build_input_transcription_config(),
+            output_audio_transcription=transcricao.build_output_transcription_config(),
         )
         async for evento in runner.run_live(
             user_id=usuario,
@@ -953,6 +941,11 @@ async def live_adk(
             live_request_queue=fila,
             run_config=run_cfg,
         ):
+            parcial = getattr(evento, "interim_input_transcription", None)
+            if parcial and parcial.text:
+                await websocket.send_json(
+                    {"tipo": "transcricao_usuario_parcial", "texto": parcial.text}
+                )
             if evento.input_transcription and evento.input_transcription.text:
                 transcricao_usuario = evento.input_transcription.text.strip()
                 await websocket.send_json(
@@ -1046,10 +1039,29 @@ async def live_adk(
             logger.warning("Falha ao salvar sessão Live na memória de longo prazo: %s", e)
 
 
+# Controle de Conexão Live Única (Single Active Live Session)
+# Impede que duas interfaces, abas ou janelas fiquem com a sessão Live aberta concorrentemente
+active_live_socket: Optional[WebSocket] = None
+
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(websocket: WebSocket):
+    global active_live_socket
     await websocket.accept()
-    logger.info("Cliente Web HUD conectado via WebSocket.")
+
+    # Encerra conexão anterior imediatamente para evitar múltiplos agentes falando juntos
+    if active_live_socket is not None and active_live_socket != websocket:
+        logger.info("Encerrando conexão WebSocket Live anterior para garantir instância única ativa.")
+        try:
+            await active_live_socket.send_json({
+                "type": "superseded",
+                "message": "Uma nova janela do JARVIS foi aberta. Esta conexão foi colocada em espera para evitar duplicações."
+            })
+            await active_live_socket.close(code=1000, reason="Superseded by new session")
+        except Exception:
+            pass
+
+    active_live_socket = websocket
+    logger.info("Cliente Web HUD conectado via WebSocket (Sessão Live Única).")
 
     # Aguarda mensagem de inicialização
     init_data = None
@@ -1106,8 +1118,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
             parts=[types.Part(text=JARVIS_SYSTEM_INSTRUCTION)]
         ),
         "tools": build_gemini_tools(),
-        "input_audio_transcription": types.AudioTranscriptionConfig(),
-        "output_audio_transcription": types.AudioTranscriptionConfig(),
+        # Dica pt-BR + interim: transcrição parcial chega enquanto fala.
+        "input_audio_transcription": transcricao.build_input_transcription_config(),
+        "output_audio_transcription": transcricao.build_output_transcription_config(),
         "realtime_input_config": types.RealtimeInputConfig(
             activity_handling=activity_handling
         ),
@@ -1159,12 +1172,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 sessao_id = secrets.token_urlsafe(12)
                 # A sessão Live nativa é a única identidade: dona E usuária das leases do Modo IDE
                 usuario_id = sessao_id
+                live_info = provider_router.live_provider()
+                provedor_efetivo = live_info["provider"]
                 await websocket.send_json({
                     "type": "connected",
-                    "message": f"Sistemas online. Conectado via {req_provider} ({model_name}) com a voz {voice_name}.",
+                    "message": f"Sistemas online. Conectado via {provedor_efetivo} ({model_name}) com a voz {voice_name}.",
                     "voice": voice_name,
                     "model": model_name,
-                    "provider": req_provider,
+                    "provider": provedor_efetivo,
+                    "requested_provider": req_provider,
+                    "live_supported": live_info["live_supported"],
+                    "nota": live_info["nota"],
                     "primary_provider": "google_studio",
                     "secondary_provider": "omniroute"
                 })
@@ -1196,6 +1214,58 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
 
+                # Transcritor dedicado em tempo real (gemini-3.5-transcribe-live)
+                ultima_transcricao_usuario = {"texto": "", "tempo": 0.0}
+
+                async def on_transcricao_interim(texto: str):
+                    if not texto:
+                        return
+                    try:
+                        await websocket.send_json({
+                            "type": "user_transcription_interim",
+                            "text": texto
+                        })
+                    except Exception:
+                        pass
+
+                async def on_transcricao_final(texto: str):
+                    if not texto:
+                        return
+                    agora = time.time()
+                    if ultima_transcricao_usuario["texto"] == texto and (agora - ultima_transcricao_usuario["tempo"] < 2.5):
+                        return
+                    ultima_transcricao_usuario["texto"] = texto
+                    ultima_transcricao_usuario["tempo"] = agora
+                    try:
+                        await websocket.send_json({
+                            "type": "user_transcription",
+                            "text": texto
+                        })
+                        # Aprovação por comando de voz no WebSocket nativo
+                        palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder"}
+                        palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
+                        trans_lower = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
+                        tokens_voz = set(trans_lower.split())
+                        if (trans_lower in palavras_sim or bool(tokens_voz & palavras_sim)) and not (tokens_voz & palavras_nao):
+                            for cid, fut in list(pending_confirmations.items()):
+                                if not fut.done():
+                                    fut.set_result(True)
+                                    logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", texto)
+                                    record_event("user_confirmed_via_voice", {"text": texto})
+                                    await websocket.send_json({
+                                        "type": "policy_verbal_confirmation_approved",
+                                        "call_id": cid,
+                                        "text": texto
+                                    })
+                    except Exception:
+                        pass
+
+                transcritor_dedicado = transcricao.LiveTranscriber(
+                    on_interim=on_transcricao_interim,
+                    on_final=on_transcricao_final
+                )
+                await transcritor_dedicado.start(api_key=try_key)
+
                 async def request_user_confirmation(call_id: str, func_name: str, args: dict, decision) -> bool:
                     """Pede autorização ao usuário no HUD e espera a resposta."""
                     future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -1207,7 +1277,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         "args": args,
                         "risk_level": decision.risk_level.value,
                         "reason": decision.reason,
-                        "timeout_s": CONFIRMATION_TIMEOUT_S
+                        "timeout_s": CONFIRMATION_TIMEOUT_S,
+                        "session_id": sessao_id,
+                        "sessao": sessao_id,
+                        "usuario": usuario_id
                     })
                     record_event("policy_confirmation_requested", {
                         "call_id": call_id,
@@ -1227,17 +1300,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     while True:
                         msg_text = await websocket.receive_text()
                         msg = json.loads(msg_text)
-                        msg_type = msg.get("type")
+                        msg_type = msg.get("type") or msg.get("tipo")
 
                         if msg_type == "audio":
                             audio_b64 = msg.get("data", "")
                             if audio_b64:
                                 pcm_data = base64.b64decode(audio_b64)
                                 record_event("user_audio_chunk", {"bytes": len(pcm_data)})
-                                # Se o assistente estiver ocupado processando ou emitindo áudio nos falantes,
-                                # não repassa o áudio ambiente do microfone para evitar falso barge-in / cancelamento.
+
+                                # Encaminha imediatamente para o transcritor de baixa latência
+                                if transcritor_dedicado.is_active:
+                                    asyncio.create_task(transcritor_dedicado.send_audio(pcm_data))
+
+                                # Repassa para a sessão do agente com controle refinado
                                 agora = time.time()
-                                esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 3.5)
+                                esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 1.2)
                                 falando_agora = (agora - assistant_state["ultimo_audio"] < MIC_GRACE_S)
                                 if allow_barge_in or (not esperando_resposta and not falando_agora):
                                     await session.send_realtime_input(
@@ -1249,6 +1326,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                         elif msg_type in ("audio_stream_end", "end_of_audio", "fim_do_audio"):
                             record_event("user_audio_stream_end")
+                            if transcritor_dedicado.is_active:
+                                asyncio.create_task(transcritor_dedicado.send_audio_stream_end())
                             await session.send_realtime_input(audio_stream_end=True)
 
                         elif msg_type == "text":
@@ -1297,22 +1376,27 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             status = system_tools.get_system_status()
                             await websocket.send_json({"type": "system_status", "data": status})
 
-                        elif msg_type == "video":
-                            # Compartilhamento de tela do cliente: só enquanto houver
-                            # autoridade de controle físico concedida a esta sessão.
-                            frame_b64 = msg.get("data", "")
-                            if frame_b64 and policy_engine.is_control_lease_active(sessao_id):
+                        elif msg_type in ("video", "screen_frame", "imagem"):
+                            # Compartilhamento de tela do cliente para visão multimodal da Live API
+                            frame_b64 = msg.get("data", "") or msg.get("dados", "")
+                            if frame_b64:
                                 frame = base64.b64decode(frame_b64)
                                 record_event("screen_frame", {"bytes": len(frame)})
                                 await session.send_realtime_input(
                                     video=types.Blob(data=frame, mime_type="image/jpeg")
                                 )
 
-                        elif msg_type == "tool_confirmation":
+                        elif msg_type in ("tool_confirmation", "confirmar_acao"):
                             # Resposta do usuário a uma ferramenta que exige autorização explícita
-                            pending = pending_confirmations.pop(msg.get("id"), None)
+                            act_id = msg.get("id") or msg.get("id_confirmacao")
+                            approved = bool(msg.get("approved") if "approved" in msg else msg.get("aprovado", True))
+                            pending = pending_confirmations.pop(act_id, None)
                             if pending is not None and not pending.done():
-                                pending.set_result(bool(msg.get("approved")))
+                                pending.set_result(approved)
+                            if approved:
+                                policy_engine.approve_action(act_id, session_id=sessao_id, user_id=usuario_id)
+                            else:
+                                policy_engine.reject_action(act_id, session_id=sessao_id, user_id=usuario_id)
 
                 # Worker 2: Lê injeções de prompt via painel web de depuração
                 async def injection_worker():
@@ -1352,8 +1436,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             if part.text:
                                                 is_thought = getattr(part, "thought", False) or False
                                                 record_event("model_text", {"text": part.text, "thought": is_thought})
-                                                # O texto exibido vem de output_transcription.
-                                                # Enviar também part.text repetia a mesma frase no HUD.
+                                                if not is_thought:
+                                                    assistant_state["texto_recebido_no_turno"] += len(part.text)
+                                                    await websocket.send_json({
+                                                        "type": "text",
+                                                        "text": part.text
+                                                    })
                                             if part.inline_data and part.inline_data.data:
                                                 record_event("model_audio_chunk", {"bytes": len(part.inline_data.data)})
                                                 assistant_state["ultimo_audio"] = time.time()
@@ -1364,41 +1452,29 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     "data": audio_b64
                                                 })
 
-                                    # Transcrição da resposta falada pelo Gemini em tempo real
+                                    # Transcrição da resposta falada pelo Gemini em tempo real (fallback)
                                     if server_content.output_transcription and server_content.output_transcription.text:
                                         transcribed = server_content.output_transcription.text
-                                        record_event("model_text", {"text": transcribed})
-                                        assistant_state["texto_recebido_no_turno"] += len(transcribed)
-                                        await websocket.send_json({
-                                            "type": "text",
-                                            "text": transcribed
-                                        })
+                                        if assistant_state["texto_recebido_no_turno"] == 0:
+                                            record_event("model_text", {"text": transcribed})
+                                            assistant_state["texto_recebido_no_turno"] += len(transcribed)
+                                            await websocket.send_json({
+                                                "type": "text",
+                                                "text": transcribed
+                                            })
+
+                                    # Parcial em tempo real: se o transcritor dedicado não estiver ativo, usa nativo
+                                    parcial = getattr(server_content, "interim_input_transcription", None)
+                                    if parcial and parcial.text and not transcritor_dedicado.is_active:
+                                        await on_transcricao_interim(parcial.text)
 
                                     # Transcrição da fala do usuário se disponível
                                     if server_content.input_transcription and server_content.input_transcription.text:
                                         user_trans = server_content.input_transcription.text
-                                        await websocket.send_json({
-                                            "type": "user_transcription",
-                                            "text": user_trans
-                                        })
-                                        # Aprovação por comando de voz no WebSocket nativo
-                                        palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder"}
-                                        palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-                                        trans_lower = "".join(c for c in user_trans.lower() if c.isalnum() or c.isspace()).strip()
-                                        tokens_voz = set(trans_lower.split())
-                                        if (trans_lower in palavras_sim or bool(tokens_voz & palavras_sim)) and not (tokens_voz & palavras_nao):
-                                            for cid, fut in list(pending_confirmations.items()):
-                                                if not fut.done():
-                                                    fut.set_result(True)
-                                                    logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", user_trans)
-                                                    record_event("user_confirmed_via_voice", {"text": user_trans})
-                                                    await websocket.send_json({
-                                                        "type": "policy_verbal_confirmation_approved",
-                                                        "call_id": cid,
-                                                        "text": user_trans
-                                                    })
+                                        await on_transcricao_final(user_trans)
 
                                     if server_content.turn_complete:
+                                        assistant_state["texto_recebido_no_turno"] = 0
                                         # Resiliência de voz: se uma ferramenta foi concluída mas o modelo fechou o turno em silêncio
                                         if (assistant_state.get("ultima_ferramenta") 
                                                 and assistant_state.get("audio_recebido_no_turno", 0) == 0 
@@ -1442,7 +1518,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         })
 
                                         # Avaliação de autorização pelo Policy Engine
-                                        decision = policy_engine.evaluate(func_name, args, session_id=sessao_id)
+                                        decision = policy_engine.evaluate(func_name, args, session_id=sessao_id, user_id=usuario_id)
                                         approved = True
                                         if decision.allowed and decision.requires_confirmation:
                                             approved = await request_user_confirmation(call_id, func_name, args, decision)
@@ -1562,6 +1638,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 except* WebSocketDisconnect:
                     logger.info("Cliente Web HUD desconectado.")
                 finally:
+                    await transcritor_dedicado.close()
                     liberar_controle_da_sessao(sessao_id)
                 record_event("client_disconnected")
                 return
@@ -1592,6 +1669,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close()
     except Exception:
         pass
+    finally:
+        if active_live_socket == websocket:
+            active_live_socket = None
 
 if __name__ == "__main__":
     import uvicorn

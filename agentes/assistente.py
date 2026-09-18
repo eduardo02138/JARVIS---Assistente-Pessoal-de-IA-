@@ -78,7 +78,7 @@ def guarda_de_ferramentas(
 
     session_id = getattr(tool_context, "session_id", None) or "local"
     user_id = getattr(tool_context, "user_id", None) or getattr(tool_context, "usuario", None) or "local"
-    decision = policy_engine.evaluate(tool.name, args, session_id=session_id)
+    decision = policy_engine.evaluate(tool.name, args, session_id=session_id, user_id=user_id)
 
     if not decision.allowed:
         return {

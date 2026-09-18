@@ -203,22 +203,44 @@ body.transparent-mode {
     font-weight: 500;
     color: #d2e3fc;
     width: fit-content;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    outline: none;
+}
+
+.status-chip:hover {
+    background: rgba(40, 68, 110, 0.85);
+    border-color: rgba(66, 133, 244, 0.6);
+    transform: translateY(-1px);
 }
 
 .chip-icon-box {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #ea4335; /* Vermelho característico de compartilhamento ou azul */
+    background: #ea4335; /* Vermelho quando mutado / desligado */
     display: flex;
     align-items: center;
     justify-content: center;
     color: #ffffff;
     flex-shrink: 0;
+    transition: background 0.2s ease;
 }
 
 .status-chip.active .chip-icon-box {
     background: #1a73e8;
+}
+
+.status-chip.muted {
+    background: rgba(60, 25, 25, 0.7);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+.status-chip.muted .chip-icon-box {
+    background: #ef4444;
 }
 
 /* Centro: Canvas de Ondas Sonoras Fluidas */
@@ -602,6 +624,33 @@ body.transparent-mode {
 .drawer-send-btn:hover {
     transform: scale(1.06);
     box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+}
+
+.drawer-mic-btn {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #94a3b8;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.drawer-mic-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    transform: scale(1.06);
+}
+
+.drawer-mic-btn.active {
+    background: rgba(26, 115, 232, 0.25);
+    border-color: #1a73e8;
+    color: #60a5fa;
+    box-shadow: 0 0 8px rgba(26, 115, 232, 0.4);
 }
 
 /* Gaveta de Legenda / Transcrição */
@@ -2053,5 +2102,65 @@ body.app-mode .gemini-live-widget {
     background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(168, 85, 247, 0.2));
     border: 1px solid rgba(168, 85, 247, 0.4);
     color: #c084fc;
+}
+
+/* Banner de Bloqueio de Instância Duplicada */
+.instance-lock-banner {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 99999;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px rgba(239, 68, 68, 0.2);
+    backdrop-filter: blur(12px);
+    padding: 10px 16px;
+    max-width: 90%;
+    animation: fadeInDown 0.3s ease;
+}
+
+.lock-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: #f1f5f9;
+}
+
+.lock-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.lock-text strong {
+    color: #f87171;
+    font-size: 12.5px;
+}
+
+.lock-text span {
+    color: #cbd5e1;
+    font-size: 11.5px;
+}
+
+.claim-leadership-btn {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb);
+    border: 1px solid #3b82f6;
+    color: #ffffff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+
+.claim-leadership-btn:hover {
+    background: #1d4ed8;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+    transform: translateY(-1px);
 }
 

@@ -34,13 +34,13 @@ SERVER_URL = f"http://localhost:{PORT}/widget/?app=1"
 IPC_NOME = "jarvis-desktop-toggle"
 
 
-def enviar_toggle_para_instancia() -> bool:
-    """Pede à instância já aberta que alterne a visibilidade. False se não houver nenhuma."""
+def enviar_comando_para_instancia(comando: bytes = b"show") -> bool:
+    """Envia um comando para a instância existente via socket local IPC. Retorna True se conectou com sucesso."""
     socket_local = QLocalSocket()
     socket_local.connectToServer(IPC_NOME)
     if not socket_local.waitForConnected(500):
         return False
-    socket_local.write(b"toggle")
+    socket_local.write(comando)
     socket_local.flush()
     socket_local.waitForBytesWritten(500)
     socket_local.disconnectFromServer()
@@ -232,7 +232,15 @@ class GeminiLiveDesktopApp(QMainWindow):
         conexao = self._ipc_server.nextPendingConnection()
         if conexao is None:
             return
-        conexao.readyRead.connect(lambda: (conexao.readAll(), self.toggle_visibility()))
+        def processar():
+            dados = bytes(conexao.readAll()).strip().lower()
+            if dados == b"toggle":
+                self.toggle_visibility()
+            else:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+        conexao.readyRead.connect(processar)
         conexao.disconnected.connect(conexao.deleteLater)
 
     def on_tray_activated(self, reason):
@@ -242,11 +250,15 @@ class GeminiLiveDesktopApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
 
-    # Modo atalho: alterna a janela da instância em execução e sai
+    # Bloqueio de Instância Única: se o JARVIS Desktop já estiver rodando, não abre outra janela
     if "--toggle" in sys.argv:
-        if enviar_toggle_para_instancia():
+        if enviar_comando_para_instancia(b"toggle"):
             return
         print("Nenhuma instância do JARVIS em execução; iniciando o aplicativo.")
+    else:
+        if enviar_comando_para_instancia(b"show"):
+            print("Instância do JARVIS Desktop já em execução. Janela trazida para o primeiro plano.")
+            return
 
     start_backend_if_needed()
 

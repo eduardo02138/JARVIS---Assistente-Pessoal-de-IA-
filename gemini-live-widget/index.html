@@ -89,8 +89,8 @@
                     </div>
                 </div>
 
-                <!-- Chip Badge inferior (ex: Compartilhamento / Microfone ativo) -->
-                <div id="statusBadgeChip" class="status-chip active">
+                <!-- Chip Badge inferior (ex: Compartilhamento / Microfone ativo - Clicável) -->
+                <button type="button" id="statusBadgeChip" class="status-chip active" title="Clique para mutar ou ativar o microfone" aria-label="Alternar Microfone">
                     <span class="chip-icon-box">
                         <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
                             <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
@@ -98,7 +98,7 @@
                         </svg>
                     </span>
                     <span id="chipLabel" class="chip-label">Microfone Ativo</span>
-                </div>
+                </button>
             </div>
 
             <!-- Centro: Animação Fluida de Ondas Sonoras -->
@@ -253,6 +253,12 @@
             <form id="drawerTextForm" class="drawer-input-container">
                 <input type="text" id="drawerInput" class="drawer-text-input" placeholder="Digite sua mensagem ou comando para o JARVIS..." autocomplete="off">
                 <div class="drawer-actions">
+                    <button type="button" id="btnDrawerMic" class="drawer-mic-btn active" title="Alternar microfone (Mutar/Ativar)" aria-label="Microfone">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                    </button>
                     <button type="submit" class="drawer-send-btn" aria-label="Enviar comando" title="Enviar (Enter)">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -696,6 +702,6 @@
         </div>
     </div>
 
-    <script src="widget.js?v=2.7"></script>
+    <script src="widget.js?v=2.9"></script>
 </body>
 </html>

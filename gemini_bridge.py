@@ -64,6 +64,20 @@ def open_gemini_bridge() -> dict:
     """Abre a pasta gemini diretamente como projeto na IDE Antigravity."""
     if not os.path.exists(GEMINI_DIR):
         os.makedirs(GEMINI_DIR, exist_ok=True)
+
+    # Se a IDE Antigravity já estiver em execução, não abre novo processo pesado
+    try:
+        check = subprocess.run(["pgrep", "-f", "antigravity"], capture_output=True, text=True)
+        if check.returncode == 0 and check.stdout.strip():
+            log_audit_event("JARVIS", "open_workspace_already_open", {"path": GEMINI_DIR})
+            return {
+                "sucesso": True,
+                "caminho": GEMINI_DIR,
+                "mensagem": "A IDE Antigravity já está aberta no seu sistema, senhor. O canal de auditoria 'gemini' está ativo."
+            }
+    except Exception:
+        pass
+
     try:
         subprocess.Popen(["/usr/bin/antigravity", GEMINI_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log_audit_event("JARVIS", "open_workspace", {"path": GEMINI_DIR})
@@ -122,7 +136,7 @@ async def gemini_file_watcher_task():
                     # Avalia a política de segurança antes de executar ação privilegiada
                     from policy_engine import policy_engine
                     args_call = {"prompt": cmd, "continue_session": True}
-                    decision = policy_engine.evaluate("antigravity_run_prompt", args_call, session_id="gemini_bridge")
+                    decision = policy_engine.evaluate("antigravity_run_prompt", args_call, session_id="gemini_bridge", user_id="gemini_bridge")
                     if not decision.allowed:
                         logger.warning(f"Execução bloqueada por política no watcher gemini/input.txt: {decision.reason}")
                         log_audit_event("POLICY", "blocked_command", decision.reason, {"input_command": cmd})
