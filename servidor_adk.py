@@ -451,6 +451,15 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
             if girar_chave():
                 runner = obter_runner(caminho)  # recriado com a chave nova
                 continue
+            if caminho == CAMINHO_COMPUTADOR:
+                # O modelo de texto reserva não entende a config computer_use:
+                # trocar quebraria o toolset. Devolve indisponibilidade explícita.
+                logger.warning("Modelo de Computer Use indisponível (%s).", erro)
+                return {
+                    "status": "erro",
+                    "caminho": caminho,
+                    "mensagem": f"Modelo de Computer Use indisponível: {ultimo_erro}",
+                }
             # Sem outra chave: espera e tenta o modelo de texto reserva
             logger.warning("Modelo de texto indisponível (%s). Tentando o reserva.", erro)
             await asyncio.sleep(2)

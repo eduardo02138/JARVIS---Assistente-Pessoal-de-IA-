@@ -41,3 +41,8 @@ watchfiles==1.2.0
 websockets>=15.0.1,<16
 google-adk[db]>=2.9.1
 aiosqlite>=0.20.0
+# Computer Use (agente que opera o navegador Chromium via Playwright)
+playwright>=1.52.0
+termcolor>=3.1.0
+browserbase>=1.3.0
+rich>=13.0.0

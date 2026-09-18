@@ -167,6 +167,44 @@ O servidor MCP (`stdio`) permite que a IDE Antigravity e agentes externos usem o
 ```
 Acesse em: `http://127.0.0.1:8100`
 
+### 🖥️ Modo Computador (Gemini Computer Use)
+
+O JARVIS inclui um agente dedicado que opera o navegador Chromium via Playwright sob o modelo
+`gemini-2.5-computer-use-preview-10-2025` (`agentes/computer_use/`). É um agente **single-tool**:
+não compartilha as 56 ferramentas do ecossistema e por isso não contamina os agentes normais.
+
+Instalação do navegador (uma vez):
+```bash
+.venv/bin/playwright install-deps chromium
+.venv/bin/playwright install chromium
+```
+
+Ativação do Modo Computador (exige confirmação do usuário, como o Modo Controle):
+```bash
+# 1) Pede a ativação: retorna id_confirmacao
+curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
+  -d '{"ativo": true, "sessao": "sessao-principal"}'
+
+# 2) Confirma a pendência
+curl -X POST localhost:8100/api/confirmar_acao -H "Authorization: Bearer $JARVIS_TOKEN" \
+  -d '{"id_confirmacao": "<id>", "sessao": "sessao-principal", "aprovado": true}'
+
+# 3) Repete a ativação: concede a lease (padrão 900s)
+curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
+  -d '{"ativo": true, "sessao": "sessao-principal"}'
+```
+
+Depois disso, um turno com `caminho: "computador"` (ou texto contendo "use o navegador") é atendido
+pelo agente de Computer Use. Sem lease ativa, `guarda_computador` bloqueia toda tool do navegador.
+Desativar fecha o Chromium compartilhado:
+```bash
+curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
+  -d '{"ativo": false, "sessao": "sessao-principal"}'
+```
+
+Variáveis: `COMPUTER_USE_MODEL`, `COMPUTER_USE_HEADLESS`, `COMPUTER_USE_SCREEN_W/H`,
+`JARVIS_COMPUTER_LEASE_TTL`.
+
 ## 🧪 Validação & Testes Automatizados
 
 O repositório inclui uma suíte de testes de integridade arquitetural e de segurança:
@@ -195,6 +233,7 @@ O repositório inclui uma suíte de testes de integridade arquitetural e de segu
 ├── monitoring/                # Logs estruturados (events.jsonl) e suíte de testes P0
 ├── servidor_adk.py            # Servidor FastAPI com Google ADK Runner e DatabaseSessionService
 ├── agentes/                   # Agentes ADK (assistente.py, roteador.py, ferramentas.py)
+├── agentes/computer_use/      # Agente Computer Use + PlaywrightComputer (navegador Chromium)
 ├── static_adk/                # Cliente web unificado para o agente ADK
 └── run_jarvis.sh              # Script utilitário para subida rápida do ambiente
 ```

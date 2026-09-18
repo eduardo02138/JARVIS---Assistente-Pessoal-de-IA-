@@ -130,7 +130,9 @@ class PlaywrightComputer(BaseComputer):
     async def navigate(self, url: str) -> ComputerState:
         page = await self._iniciar()
         destino = url.strip()
-        if not destino.startswith(("http://", "https://")):
+        if "://" not in destino and not destino.startswith(
+            ("about:", "data:", "file:", "chrome:", "view-source:")
+        ):
             destino = f"https://{destino}"
         await page.goto(destino, timeout=30000)
         return await self._estado()
