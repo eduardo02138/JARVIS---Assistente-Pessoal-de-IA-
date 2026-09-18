@@ -4,6 +4,7 @@ Implementa a interface BaseMemoryService do Google ADK com persistência local e
 Permite ingestão contínua de sessões e busca semântica/palavras-chave entre conversas passadas.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CAMINHO_PADRAO_MEMORIA = os.environ.get(
     "JARVIS_MEMORY_FILE", os.path.join(RAIZ, "memoria.json")
 )
+MAX_EVENTOS_POR_SESSAO = int(os.environ.get("JARVIS_MEMORY_MAX_EVENTS_PER_SESSION", "100"))
 
 
 class JarvisMemoryService(InMemoryMemoryService):
@@ -107,7 +109,7 @@ class JarvisMemoryService(InMemoryMemoryService):
                                         }
                                     )
                             if serializados:
-                                snapshot[key_str][sess_id] = serializados
+                                snapshot[key_str][sess_id] = serializados[-MAX_EVENTOS_POR_SESSAO:]
 
                 caminho_dir = os.path.dirname(os.path.abspath(self.caminho_arquivo))
                 os.makedirs(caminho_dir, exist_ok=True)
@@ -118,10 +120,18 @@ class JarvisMemoryService(InMemoryMemoryService):
             except Exception as err:
                 logger.error("Erro ao persistir memórias em disco: %s", err)
 
+    async def _salvar_no_disco_async(self) -> None:
+        """Executa a persistência em disco em threadpool separada para não travar o event loop."""
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._salvar_no_disco)
+        except RuntimeError:
+            self._salvar_no_disco()
+
     async def add_session_to_memory(self, session) -> None:
-        """Adiciona a sessão à memória e persiste em disco."""
+        """Adiciona a sessão à memória e persiste em disco de forma assíncrona."""
         await super().add_session_to_memory(session)
-        self._salvar_no_disco()
+        await self._salvar_no_disco_async()
 
     async def add_events_to_memory(
         self,
@@ -132,7 +142,7 @@ class JarvisMemoryService(InMemoryMemoryService):
         session_id: Optional[str] = None,
         custom_metadata: Optional[dict] = None,
     ) -> None:
-        """Adiciona eventos delta à memória e persiste em disco."""
+        """Adiciona eventos delta à memória e persiste em disco de forma assíncrona."""
         await super().add_events_to_memory(
             app_name=app_name,
             user_id=user_id,
@@ -140,7 +150,7 @@ class JarvisMemoryService(InMemoryMemoryService):
             session_id=session_id,
             custom_metadata=custom_metadata,
         )
-        self._salvar_no_disco()
+        await self._salvar_no_disco_async()
 
     async def add_memory(
         self,
@@ -150,11 +160,11 @@ class JarvisMemoryService(InMemoryMemoryService):
         memories: list,
         custom_metadata: Optional[dict] = None,
     ) -> None:
-        """Adiciona memórias avulsas e persiste em disco."""
+        """Adiciona memórias avulsas e persiste em disco de forma assíncrona."""
         await super().add_memory(
             app_name=app_name,
             user_id=user_id,
             memories=memories,
             custom_metadata=custom_metadata,
         )
-        self._salvar_no_disco()
+        await self._salvar_no_disco_async()

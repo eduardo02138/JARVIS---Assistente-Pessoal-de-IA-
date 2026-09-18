@@ -51,6 +51,8 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "consultar_preferencias": RiskLevel.READ,
     "load_memory": RiskLevel.READ,
     "preload_memory": RiskLevel.READ,
+    "especialista_sistema": RiskLevel.READ,
+    "especialista_navegador": RiskLevel.READ,
     "abrir_site": RiskLevel.EXTERNAL_WRITE,
     # READ: Informação e Consulta
     "get_system_status": RiskLevel.READ,
@@ -102,7 +104,6 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "search_web": RiskLevel.LOW_WRITE,
     "play_music": RiskLevel.LOW_WRITE,
     "take_quick_note": RiskLevel.LOW_WRITE,
-    "set_ide_mode": RiskLevel.LOW_WRITE,
     "open_default_app": RiskLevel.LOW_WRITE,
     "manage_user_preference": RiskLevel.LOW_WRITE,
     "set_game_preference": RiskLevel.LOW_WRITE,
@@ -129,6 +130,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     # PRIVILEGED: Agente autônomo e controle de sistema
     "antigravity_run_prompt": RiskLevel.PRIVILEGED,
     "set_control_mode": RiskLevel.PRIVILEGED,
+    "set_ide_mode": RiskLevel.PRIVILEGED,
 }
 
 # Ferramentas de controle físico da máquina (mouse e teclado via uinput).
@@ -403,22 +405,6 @@ class PolicyEngine:
                     requires_confirmation=False,
                     reason="Prompt privilegiado vazio ou inválido."
                 )
-
-            # Se o Modo IDE estiver ativo, a intenção de delegar tarefas ao Antigravity já foi explicitamente autorizada
-            if tool_name == "antigravity_run_prompt":
-                try:
-                    import system_tools
-                    if getattr(system_tools, "get_ide_mode", lambda: False)():
-                        return PolicyDecision(
-                            tool_name=tool_name,
-                            risk_level=RiskLevel.LOW_WRITE,
-                            allowed=True,
-                            requires_confirmation=False,
-                            reason="Modo IDE ativo: prompts delegados ao Antigravity são autorizados automaticamente sem interrupção.",
-                            metadata={"prompt_preview": prompt[:120]}
-                        )
-                except Exception:
-                    pass
 
             return PolicyDecision(
                 tool_name=tool_name,

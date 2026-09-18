@@ -365,14 +365,18 @@ def test_todas_ferramentas_conectadas_ao_agente():
     for tool_name in system_tools.BASE_TOOL_REGISTRY.keys():
         assert tool_name in nomes_coord, f"Ferramenta base '{tool_name}' não está conectada ao agente coordenador!"
 
-    # 2. Todas as 27 ferramentas dos 8 plug-ins precisam estar presentes
-    total_plugins_tools = 0
-    for plugin in plugin_manager._plugins.values():
-        for t in plugin.get_tools():
-            total_plugins_tools += 1
-            assert t.name in nomes_coord, f"Ferramenta de plug-in '{t.name}' ({plugin.meta.id}) não está conectada ao agente coordenador!"
+    # 2. As ferramentas dos plug-ins ativos precisam estar presentes e inativos não expostos
+    total_plugins_tools = sum(len(p.get_tools()) for p in plugin_manager._plugins.values())
+    assert total_plugins_tools == 27, f"Esperado 27 ferramentas de plug-ins no catálogo, encontrado {total_plugins_tools}"
 
-    assert total_plugins_tools == 27, f"Esperado 27 ferramentas de plug-ins, encontrado {total_plugins_tools}"
+    active_tools_names = {t.name for t in plugin_manager.get_active_tools()}
+    for t_name in active_tools_names:
+        assert t_name in nomes_coord, f"Ferramenta de plug-in ativo '{t_name}' não está conectada ao agente coordenador!"
+
+    inactive_plugins = [p for p in plugin_manager._plugins.values() if not p.meta.enabled]
+    for p in inactive_plugins:
+        for t in p.get_tools():
+            assert t.name not in nomes_coord, f"Ferramenta de plug-in inativo '{t.name}' ({p.meta.id}) vazou para o agente coordenador!"
 
     # 3. Valida schemas, nomes, descrições e cobertura de políticas no PolicyEngine
     for t in agente_coord.tools:

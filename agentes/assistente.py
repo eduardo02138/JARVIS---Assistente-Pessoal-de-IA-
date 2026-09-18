@@ -73,6 +73,9 @@ def guarda_de_ferramentas(
     one-shot com TTL e hash de argumentos: uma vez executada, a permissão é revogada.
     O LLM não pode se auto-autorizar.
     """
+    if isinstance(tool, AgentTool):
+        return None
+
     session_id = getattr(tool_context, "session_id", None) or "local"
     user_id = getattr(tool_context, "user_id", None) or getattr(tool_context, "usuario", None) or "local"
     decision = policy_engine.evaluate(tool.name, args, session_id=session_id)
@@ -201,6 +204,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
             "Use as ferramentas em vez de estimar valores."
         ),
         tools=tools_especialista_sistema,
+        before_tool_callback=guarda_de_ferramentas,
     )
 
     tools_especialista_navegador = [abrir_site, pesquisar_na_web]

@@ -251,7 +251,20 @@ def open_application(app_name: str) -> dict:
     Aceita nomes diretos de jogos (ex: 'Marvel Rivals', 'GTA', 'Red Dead', 'Overwatch', etc.)
     ou utilitários do sistema operacional (ex: 'steam', 'terminal', 'calculadora', 'chrome').
     """
+    if not app_name or not isinstance(app_name, str):
+        return {
+            "sucesso": False,
+            "mensagem": "Nome de aplicativo inválido."
+        }
+
     clean_name = app_name.strip().lower()
+
+    # Prevenção contra execução de binários arbitrários e path traversal
+    if "/" in clean_name or "\\" in clean_name or ".." in clean_name:
+        return {
+            "sucesso": False,
+            "mensagem": "Caminhos de arquivo não são permitidos por segurança. Especifique apenas o nome do aplicativo ou jogo."
+        }
 
     # 1. Verifica se corresponde a algum jogo instalado
     aliases_game = {
@@ -308,23 +321,38 @@ def open_application(app_name: str) -> dict:
     except Exception as exc:
         pass
 
-    # 2. Aliases e binários do sistema
-    target_exec = APP_ALIASES.get(clean_name, clean_name)
-    resolved = shutil.which(target_exec)
+    # 2. Aliases e catálogo de aplicativos conhecidos (bloqueia binários arbitrários)
+    SAFE_APP_CATALOG = {
+        "steam", "code", "firefox", "google-chrome", "chromium", "spotify",
+        "discord", "obs", "vlc", "gedit", "nautilus", "x-terminal-emulator",
+        "gnome-calculator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"
+    }
+
+    target_exec = APP_ALIASES.get(clean_name)
+    resolved = None
+
+    if target_exec:
+        resolved = shutil.which(target_exec)
+    elif clean_name in SAFE_APP_CATALOG:
+        target_exec = clean_name
+        resolved = shutil.which(target_exec)
+
     if not resolved:
         if "terminal" in clean_name:
             for term in ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]:
                 if shutil.which(term):
                     resolved = term
+                    target_exec = term
                     break
         elif "calc" in clean_name:
             for calc in ["gnome-calculator", "kcalc", "galculator"]:
                 if shutil.which(calc):
                     resolved = calc
+                    target_exec = calc
                     break
 
     if not resolved:
-        # Tenta lançar via gtk-launch se existir .desktop
+        # Tenta lançar via gtk-launch se existir .desktop seguro registrado
         for d in [os.path.expanduser("~/.local/share/applications"), "/usr/share/applications"]:
             if os.path.exists(d):
                 for df in glob.glob(os.path.join(d, "*.desktop")):
@@ -342,7 +370,7 @@ def open_application(app_name: str) -> dict:
 
         return {
             "sucesso": False,
-            "mensagem": f"Desculpe, senhor. Não localizei o executável ou jogo '{app_name}' instalado no sistema."
+            "mensagem": f"Desculpe, senhor. Não localizei o executável seguro ou jogo '{app_name}' no catálogo de aplicativos permitidos."
         }
 
     try:

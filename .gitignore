@@ -31,6 +31,9 @@ tmp/
 
 # Preferências e memórias locais do usuário (use user_preferences.example.json como modelo)
 user_preferences.json
+memoria.json
+memoria.json.tmp
+
 
 # Bancos de dados locais / Sessões ADK
 sessoes.db

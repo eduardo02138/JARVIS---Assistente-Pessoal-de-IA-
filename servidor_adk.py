@@ -240,7 +240,11 @@ async def pagina_inicial():
 
 
 @app.get("/api/auth/session")
-async def obter_token_sessao():
+async def obter_token_sessao(request: Request):
+    """Permite apenas ao cliente local no loopback obter o token da sessão ativa."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(status_code=403, detail="Acesso restrito ao localhost.")
     return {"token": JARVIS_SECRET_TOKEN}
 
 @app.get("/api/health")

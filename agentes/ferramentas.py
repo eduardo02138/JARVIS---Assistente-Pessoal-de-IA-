@@ -108,10 +108,9 @@ def obter_todas_ferramentas_adk() -> list[BaseTool]:
 
     all_specs: dict[str, tuple[Callable[..., Any], str]] = {}
 
-    # Coleta todas as ferramentas de plug-ins cadastrados (jogos, workspace, pesquisa, finanças, etc.)
-    for plugin in plugin_manager._plugins.values():
-        for t in plugin.get_tools():
-            all_specs[t.name] = (t.handler, t.description)
+    # Coleta todas as ferramentas de plug-ins ativos cadastrados (jogos, workspace, pesquisa, finanças, etc.)
+    for t in plugin_manager.get_active_tools():
+        all_specs[t.name] = (t.handler, t.description)
 
     # Coleta todas as ferramentas base do sistema (hardware, controle, áudio, janelas, antigravity)
     for name, fn in system_tools.BASE_TOOL_REGISTRY.items():

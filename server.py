@@ -300,6 +300,10 @@ async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
 async def install_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     res = plugin_manager.install_plugin(plugin_id)
+    try:
+        runners_adk.clear()
+    except NameError:
+        pass
     record_event("plugin_install", {"plugin_id": plugin_id, "result": res})
     return res
 
@@ -732,7 +736,9 @@ async def live_adk(
         return
 
     if not init_data or init_data.get("type") != "init" or init_data.get("token") != JARVIS_SECRET_TOKEN:
-        origem_teste = origem == "teste"
+        client_host = websocket.client.host if websocket.client else ""
+        is_loopback = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+        origem_teste = (origem == "teste" and is_loopback)
         if origem_teste:
             logger.info("[TESTE] Rejeição de WebSocket /ws/live_adk sem token: comportamento esperado.")
         else:
@@ -962,7 +968,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # Autenticação de Sessão no Handshake do WebSocket
     client_token = init_data.get("token") or websocket.query_params.get("token")
     if client_token != JARVIS_SECRET_TOKEN:
-        origem_teste = websocket.query_params.get("origem") == "teste"
+        client_host = websocket.client.host if websocket.client else ""
+        is_loopback = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+        origem_teste = (websocket.query_params.get("origem") == "teste" and is_loopback)
         if origem_teste:
             logger.info("[TESTE] Rejeição de WebSocket /ws/live sem token: comportamento esperado.")
         else:
