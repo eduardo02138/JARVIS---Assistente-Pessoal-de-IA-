@@ -13,8 +13,11 @@ TTL e verificação de integridade dos argumentos. O LLM não possui nenhuma fer
 de auto-autorização: a aprovação só pode vir de uma ação legítima do usuário.
 """
 
+import logging
 import os
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from google.adk.agents import Agent
 from google.adk.tools import ToolContext, load_memory
