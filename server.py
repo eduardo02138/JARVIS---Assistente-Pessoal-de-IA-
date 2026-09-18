@@ -690,6 +690,28 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     else:
         caminho, motivo = escolher_caminho(texto)
 
+    # Se o provedor ativo for OmniRoute, despacha diretamente sem invocar runner Google
+    if provider_router.active_provider == "omniroute":
+        logger.info("Provedor ativo é OmniRoute. Despachando chat diretamente...")
+        try:
+            resp_texto = await OmniRouteProvider.chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Provedor ativo: OmniRoute",
+                "provedor": "omniroute",
+                "modelo": "omniroute/gemini-2.5-flash",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
+        except Exception as omni_err:
+            logger.warning("Falha no provedor ativo OmniRoute: %s", omni_err)
+            return JSONResponse({
+                "status": "erro",
+                "caminho": caminho,
+                "mensagem": f"Provedor OmniRoute indisponível: {omni_err}"
+            }, status_code=503)
+
     if caminho == CAMINHO_RAPIDO:
         tipo_runner = "rapido"
     elif caminho == CAMINHO_COMPUTADOR:
@@ -785,6 +807,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         "status": "ok",
         "caminho": caminho,
         "motivo_do_roteamento": motivo,
+        "provedor": "google_studio",
         "modelo": runner.agent.model,
         "resposta": resposta.strip(),
         "ferramentas": ferramentas_executadas,
