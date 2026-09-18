@@ -1252,11 +1252,22 @@ async function setProvider(newProvider, reconnect = true) {
     updateProviderUI();
 
     try {
-        await fetch("/api/providers/select", {
+        if (!jarvisSessionToken) {
+            await initSessionToken();
+        }
+        const headers = { "Content-Type": "application/json" };
+        if (jarvisSessionToken) {
+            headers["Authorization"] = `Bearer ${jarvisSessionToken}`;
+            headers["X-Jarvis-Token"] = jarvisSessionToken;
+        }
+        const res = await fetch("/api/providers/select", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: headers,
             body: JSON.stringify({ provider: newProvider })
         });
+        if (!res.ok) {
+            console.warn(`[Widget] /api/providers/select retornou HTTP ${res.status}`);
+        }
     } catch (e) {
         console.warn("Falha ao sincronizar provedor com o backend:", e);
     }

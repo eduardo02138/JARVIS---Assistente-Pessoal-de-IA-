@@ -1674,6 +1674,45 @@ def test_dynamic_plugin_discovery_and_metadata():
     return True
 
 
+def test_frontend_contracts_and_client_core():
+    """Valida os contratos de frontend, envio de token em seleção de provedores e biblioteca JarvisClientCore (Fase R6)."""
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 1. Validação de widget.js: /api/providers/select passa token Bearer/X-Jarvis-Token
+    with open(os.path.join(base, "gemini-live-widget", "widget.js"), encoding="utf-8") as f:
+        src_widget = f.read()
+
+    assert "headers[\"Authorization\"]" in src_widget
+    # Encontra trecho de setProvider
+    assert "setProvider" in src_widget
+    idx_set_prov = src_widget.find("async function setProvider")
+    trecho_prov = src_widget[idx_set_prov:idx_set_prov + 1000]
+    assert "/api/providers/select" in trecho_prov
+    assert "headers" in trecho_prov and ("Authorization" in trecho_prov or "jarvisSessionToken" in trecho_prov)
+
+    # 2. Validação de dashboard.html: dashboardToken declarado e inicializado
+    with open(os.path.join(base, "monitoring", "dashboard.html"), encoding="utf-8") as f:
+        src_dash = f.read()
+
+    assert "let dashboardToken" in src_dash
+    assert "initDashboardToken" in src_dash
+
+    # 3. Validação de JarvisClientCore
+    for pasta in ["static", "static_adk"]:
+        caminho_core = os.path.join(base, pasta, "jarvis-client-core.js")
+        assert os.path.isfile(caminho_core), f"{pasta}/jarvis-client-core.js não encontrado!"
+        with open(caminho_core, encoding="utf-8") as f:
+            src_core = f.read()
+        assert "JarvisClientCore" in src_core
+        assert "getSessionToken" in src_core
+        assert "authenticatedFetch" in src_core
+        assert "float32ToInt16Base64" in src_core
+        assert "buildInitPayload" in src_core
+
+    log_test("Alinhamento de Contratos de Frontend & JarvisClientCore (Fase R6)", True, "widget.js autenticado, dashboardToken corrigido e jarvis-client-core.js operacional")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")

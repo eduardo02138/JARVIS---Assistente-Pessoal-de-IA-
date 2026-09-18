@@ -549,6 +549,26 @@
     }
 
     let cachedEvents = [];
+    let dashboardToken = (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("token")) || localStorage.getItem("jarvis_token") || "";
+
+    async function initDashboardToken() {
+        if (!dashboardToken) {
+            try {
+                const res = await fetch("/api/auth/session");
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.token) {
+                        dashboardToken = data.token;
+                        localStorage.setItem("jarvis_token", dashboardToken);
+                    }
+                }
+            } catch (e) {
+                console.warn("Não foi possível obter o token de sessão do JARVIS no dashboard:", e);
+            }
+        }
+        return dashboardToken;
+    }
+    initDashboardToken();
 
     async function fetchTelemetry() {
         try {
@@ -692,9 +712,14 @@
 
         promptInput.value = "";
         try {
+            if (!dashboardToken) await initDashboardToken();
             const res = await fetch('/api/debug/inject-prompt', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Jarvis-Token': dashboardToken },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${dashboardToken}`,
+                    'X-Jarvis-Token': dashboardToken
+                },
                 body: JSON.stringify({ prompt: text })
             });
             const data = await res.json();
@@ -767,7 +792,14 @@
 
     async function clearSystemLogs() {
         if (confirm("Deseja limpar todos os logs da memória e dos arquivos?")) {
-            await fetch('/api/debug/clear-logs', { method: 'POST', headers: { 'X-Jarvis-Token': dashboardToken } });
+            if (!dashboardToken) await initDashboardToken();
+            await fetch('/api/debug/clear-logs', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${dashboardToken}`,
+                    'X-Jarvis-Token': dashboardToken
+                }
+            });
             cachedEvents = [];
             renderLogs();
             fetchTelemetry();
