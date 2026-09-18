@@ -520,12 +520,13 @@ function playPCMResponse(base64Data) {
     state.speaking = true;
     dom.liveStatusText.textContent = "Gemini falando...";
     clearTimeout(state.speakingWatchdog);
+    const remainingSecs = Math.max(0.2, (state.scheduledEndTime - state.audioCtx.currentTime) + 0.08);
     state.speakingWatchdog = setTimeout(() => {
         state.speaking = false;
         if (dom.liveStatusText.textContent.includes("falando")) {
             dom.liveStatusText.textContent = "Ouvindo você...";
         }
-    }, Math.max(300, (audioBuffer.duration + 0.15) * 1000));
+    }, remainingSecs * 1000);
 
     source.onended = () => {
         if (state.activeAudioSources) {
@@ -1142,7 +1143,7 @@ async function sendTextPrompt(text) {
     }
 
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-        state.pauseMicUntil = Date.now() + 4000;
+        state.pauseMicUntil = Date.now() + 800;
         state.ws.send(JSON.stringify({ type: "text", text: clean }));
     }
 }

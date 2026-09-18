@@ -17,6 +17,17 @@ from monitoring.test_adk import executar_todos_testes_adk
 ENV_PATH = os.path.join(RAIZ_PROJETO, ".env")
 load_dotenv(ENV_PATH, override=True)
 
+# As suítes abrem vários TestClient(app) em sequência, e cada um cria e destrói
+# o próprio event loop. O DatabaseSessionService é um singleton de módulo criado
+# no import de server.py / servidor_adk.py, então o engine aiosqlite fica preso
+# ao primeiro loop: quando o segundo TestClient sobe, a worker thread do aiosqlite
+# chama call_soon_threadsafe num loop já fechado e o pool do SQLAlchemy despeja
+# "Event loop is closed", "no active connection" e avisos de coleta de lixo no
+# stderr. Nenhum cenário depende de persistência real em disco, e usar o banco de
+# verdade ainda faria os testes gravarem em sessoes.db. Uma URL explícita no
+# ambiente continua tendo prioridade.
+os.environ.setdefault("SESSION_DB_URL", "memoria")
+
 # Cores do terminal
 RESET = "\033[0m"
 BOLD = "\033[1m"
