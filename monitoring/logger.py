@@ -45,7 +45,7 @@ _TELEMETRY = {
     "server_start_time": time.time(),
     "client_connections": 0,
     "active_connection": False,
-    "active_model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
+    "active_model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
     "active_voice": "Charon",
     "user_audio_packets": 0,
     "user_audio_bytes": 0,

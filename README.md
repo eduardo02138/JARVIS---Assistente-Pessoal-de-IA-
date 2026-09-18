@@ -181,7 +181,7 @@ Acesse em: `http://127.0.0.1:8100`
 ### 🖥️ Modo Computador (Gemini Computer Use)
 
 O JARVIS inclui um agente dedicado que opera o navegador Chromium via Playwright sob o modelo
-`gemini-2.5-computer-use-preview-10-2025` (`agentes/computer_use/`). É um agente **single-tool**:
+`gemini-3.6-flash` (com suporte retrocompatível a `gemini-2.5-computer-use-preview-10-2025`) (`agentes/computer_use/`). É um agente **single-tool**:
 não compartilha as 56 ferramentas do ecossistema e por isso não contamina os agentes normais.
 
 Instalação do navegador (uma vez):
