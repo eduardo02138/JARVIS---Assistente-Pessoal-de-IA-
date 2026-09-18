@@ -238,6 +238,28 @@ body {
     transition: all 0.3s ease;
 }
 
+.computer-mode-badge {
+    display: inline-block;
+    margin-top: 5px;
+    margin-left: 6px;
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid #10b981;
+    padding: 3px 12px;
+    border-radius: 12px;
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.5), inset 0 0 10px rgba(16, 185, 129, 0.2);
+    animation: pulseGlow 1.2s infinite alternate;
+    transition: all 0.3s ease;
+}
+
+.computer-mode-badge.hidden {
+    display: none !important;
+}
+
 .control-mode-badge.hidden {
     display: none !important;
 }

@@ -69,6 +69,8 @@ const state = {
     isPlayingAudio: false,
     currentAudioSource: null,
     scheduledEndTime: 0,
+    activeAudioSources: new Set(),
+    bargeIn: false,
     
     // Visualizer
     animationFrameId: null,
@@ -107,6 +109,7 @@ const dom = {
     modelBadge: document.getElementById('modelBadge'),
     ideModeIndicator: document.getElementById('ideModeIndicator'),
     controlModeIndicator: document.getElementById('controlModeIndicator'),
+    computerModeIndicator: document.getElementById('computerModeIndicator'),
     
     // Modal
     settingsModal: document.getElementById('settingsModal'),
@@ -399,6 +402,9 @@ function downsampleBuffer(buffer, inputSampleRate, targetSampleRate = 16000) {
 }
 
 function stopMicrophone() {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: 'audio_stream_end' }));
+    }
     if (state.mediaStream) {
         state.mediaStream.getTracks().forEach(track => track.stop());
         state.mediaStream = null;
@@ -470,12 +476,20 @@ function playPCMChunk(base64Data) {
             state.scheduledEndTime = currentTime + JITTER_BUFFER;
         }
 
+        if (!state.activeAudioSources) {
+            state.activeAudioSources = new Set();
+        }
+        state.activeAudioSources.add(source);
+
         source.start(state.scheduledEndTime);
         state.scheduledEndTime += audioBuffer.duration;
 
         setJarvisState('speaking', 'JARVIS FALANDO...');
 
         source.onended = () => {
+            if (state.activeAudioSources) {
+                state.activeAudioSources.delete(source);
+            }
             // Se o áudio agendado já foi todo tocado, libera o estado de fala
             if (state.audioCtx && state.audioCtx.currentTime >= state.scheduledEndTime - 0.08) {
                 state.speaking = false;
@@ -487,8 +501,17 @@ function playPCMChunk(base64Data) {
     }
 }
 
-// Interrupção: para qualquer áudio pendente imediatamente
+// Interrupção: para qualquer áudio pendente imediatamente com 0ms de latência
 function flushAudioQueue() {
+    if (state.activeAudioSources && state.activeAudioSources.size > 0) {
+        state.activeAudioSources.forEach(src => {
+            try {
+                src.stop(0);
+                src.disconnect();
+            } catch (e) {}
+        });
+        state.activeAudioSources.clear();
+    }
     if (state.audioCtx) {
         state.scheduledEndTime = state.audioCtx.currentTime;
     }
@@ -518,7 +541,8 @@ async function connectWebSocket() {
             type: 'init',
             voice: state.voice,
             model: state.model,
-            token: jarvisSessionToken
+            token: jarvisSessionToken,
+            barge_in: state.bargeIn || false
         }));
     };
 
@@ -577,6 +601,18 @@ async function connectWebSocket() {
                         dom.controlModeIndicator.classList.add('hidden');
                         pararVisaoDeTela();
                         appendToolLog('MODO CONTROLE', 'idle', 'Modo Controle desativado.');
+                    }
+                }
+                break;
+
+            case 'computer_mode':
+                if (dom.computerModeIndicator) {
+                    if (msg.active) {
+                        dom.computerModeIndicator.classList.remove('hidden');
+                        appendToolLog('MODO COMPUTADOR', 'executing', 'Agente Gemini Computer Use (Playwright) ativado.');
+                    } else {
+                        dom.computerModeIndicator.classList.add('hidden');
+                        appendToolLog('MODO COMPUTADOR', 'idle', 'Modo Computador desativado.');
                     }
                 }
                 break;

@@ -77,6 +77,7 @@
                             <select id="selectWidgetHeaderMode" class="widget-mode-select" title="Alternar Modo de Operação">
                                 <option value="live-flash" selected>🎙️ Live Flash</option>
                                 <option value="tank-3.8">🛡️ Tank 3.8 Live</option>
+                                <option value="computador">🖥️ Computador</option>
                                 <option value="simples">⚡ Simples</option>
                             </select>
                             <div id="providerPill" class="provider-pill" title="1º Provedor: Google AI Studio API. Clique para alternar para OmniRoute (2º Provedor)">
@@ -137,6 +138,15 @@
                         </svg>
                     </button>
 
+                    <!-- Botão Compartilhar Tela (Visão Multimodal Live) -->
+                    <button id="btnToggleScreenShare" class="icon-action-btn" title="Compartilhar Tela com a IA (Visão em Tempo Real)" aria-label="Compartilhar Tela">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                    </button>
+
                     <!-- Botão Configurações (Aba de Vozes e Microfone) -->
                     <button id="btnSettingsModal" class="icon-action-btn" title="Aba de Configurações (Vozes & Microfone)" aria-label="Configurações">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -184,6 +194,26 @@
                             <line x1="7" y1="16" x2="17" y2="16"></line>
                         </svg>
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Banner Interativo de Confirmação de Ações Pendentes (Policy Engine) -->
+        <div id="pendingActionBanner" class="pending-action-banner hidden">
+            <div class="pending-action-inner">
+                <div class="pending-badge-row">
+                    <span class="pending-shield-icon">🛡️</span>
+                    <span class="pending-title">Autorização de Segurança</span>
+                    <span id="pendingRiskTag" class="risk-badge privileged">PRIVILEGED</span>
+                    <span id="pendingTimerVal" class="pending-timer">60s</span>
+                </div>
+                <div class="pending-desc-row">
+                    <span id="pendingToolName" class="pending-tool">antigravity_run_prompt</span>
+                    <span id="pendingArgsPreview" class="pending-args">{"prompt": "..."}</span>
+                </div>
+                <div class="pending-actions-row">
+                    <button id="btnApprovePending" class="action-btn approve">✓ Autorizar</button>
+                    <button id="btnRejectPending" class="action-btn reject">✕ Negar</button>
                 </div>
             </div>
         </div>
@@ -329,6 +359,7 @@
                     <button class="tab-btn" data-tab="tab-providers">🌐 Provedores</button>
                     <button class="tab-btn" data-tab="tab-voices">🎙️ Vozes</button>
                     <button class="tab-btn" data-tab="tab-mic">🎤 Microfone</button>
+                    <button class="tab-btn" data-tab="tab-memory">🧠 Memória</button>
                     <button class="tab-btn" data-tab="tab-omni">⚡ OmniRoute</button>
                 </div>
                 <button id="btnCloseSettingsPanel" class="settings-close-btn" aria-label="Fechar Configurações">✕</button>
@@ -356,11 +387,20 @@
                         <div class="voice-check">✓</div>
                     </div>
 
-                    <div class="voice-card mode-card active" data-mode="tank-3.8">
+                    <div class="voice-card mode-card" data-mode="tank-3.8">
                         <div class="voice-icon-box">🛡️</div>
                         <div class="voice-info">
                             <div class="voice-name">Tank do Gemini 3.8 Live <span class="voice-badge-tag">Potência Máxima</span></div>
                             <div class="voice-style">Modelo Live completo com raciocínio profundo, 55 ferramentas, visão de tela e Modo Controle.</div>
+                        </div>
+                        <div class="voice-check">✓</div>
+                    </div>
+
+                    <div class="voice-card mode-card" data-mode="computador">
+                        <div class="voice-icon-box">🖥️</div>
+                        <div class="voice-info">
+                            <div class="voice-name">Modo Computador <span class="voice-badge-tag special">Computer Use</span></div>
+                            <div class="voice-style">Agente autônomo Playwright que navega, clica e opera o navegador Chromium.</div>
                         </div>
                         <div class="voice-check">✓</div>
                     </div>
@@ -548,6 +588,32 @@
                     <button id="btnSaveConfig" class="save-config-btn">Salvar & Aplicar</button>
                 </div>
             </div>
+
+            <!-- Aba 4: Memória de Longo Prazo & Cache ADK -->
+            <div id="tab-memory" class="tab-content">
+                <div class="tab-desc">Memória de Longo Prazo do J.A.R.V.I.S. (Google ADK Memory Service & Context Caching):</div>
+                <div class="memory-stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-num" id="memSessionsCount">--</span>
+                        <span class="stat-lbl">Sessões Gravadas</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-num" id="memEventsCount">--</span>
+                        <span class="stat-lbl">Eventos Salvos</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-num green" id="memStatusVal">ATIVO</span>
+                        <span class="stat-lbl">Cache & Compaction</span>
+                    </div>
+                </div>
+                <div class="memory-search-box">
+                    <input type="text" id="memorySearchInput" class="memory-input" placeholder="Buscar nas memórias passadas...">
+                    <button id="btnSearchMemory" class="ghost-btn">Buscar</button>
+                </div>
+                <div id="memoryResultsList" class="memory-results-list">
+                    <div class="memory-empty-hint">Digite um termo para pesquisar ou explore memórias passadas.</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -616,6 +682,7 @@
                     <select id="selectExpandedMode" class="model-select-tag" title="Alternar Modo de Operação">
                         <option value="live-flash" selected>🎙️ Live Flash</option>
                         <option value="tank-3.8">🛡️ Tank 3.8 Live</option>
+                        <option value="computador">🖥️ Modo Computador</option>
                         <option value="simples">⚡ Simples</option>
                     </select>
                     <button id="btnExpandedMic" class="mic-bubble-btn active" title="Microfone">

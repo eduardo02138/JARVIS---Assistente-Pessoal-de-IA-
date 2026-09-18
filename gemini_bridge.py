@@ -82,6 +82,14 @@ async def gemini_file_watcher_task():
     diretamente no agente Antigravity e registra a resposta.
     """
     logger.info("Iniciando monitor assíncrono de arquivos da pasta gemini...")
+    if not os.path.exists(INPUT_TXT):
+        try:
+            os.makedirs(GEMINI_DIR, exist_ok=True)
+            with open(INPUT_TXT, "w", encoding="utf-8") as f:
+                f.write(PLACEHOLDER_TEXT + "\n")
+        except Exception:
+            pass
+
     last_mtime = 0
     if os.path.exists(INPUT_TXT):
         last_mtime = os.path.getmtime(INPUT_TXT)

@@ -167,6 +167,17 @@ O servidor MCP (`stdio`) permite que a IDE Antigravity e agentes externos usem o
 ```
 Acesse em: `http://127.0.0.1:8100`
 
+### Configuração da Sessão Live (env, todas opcionais/default off)
+
+| Variável | Efeito |
+| :--- | :--- |
+| `LIVE_PROATIVITY=1` | Áudio proativo: o modelo decide quando falar (específico do modelo). |
+| `LIVE_AFFECTIVE_DIALOG=1` | Diálogo afetivo: adaptação emocional ao tom (específico do modelo). |
+| `LIVE_EXPLICIT_VAD=1` | Emite eventos explícitos de voz (`event.voice_activity` → `voz_ativa` no WS). |
+| `LIVE_SAVE_BLOB=1` | Grava o áudio da sessão p/ auditoria (~1.92 MB/min, sem expiração automática). |
+| `LIVE_VAD_DISABLED=1` | Desliga VAD automático para clientes push-to-talk com sinais manuais. |
+| `LIVE_METADADOS='{"origem":"live_adk"}'` | Metadados anexados a cada evento da invocação (sem PII). |
+
 ### 🖥️ Modo Computador (Gemini Computer Use)
 
 O JARVIS inclui um agente dedicado que opera o navegador Chromium via Playwright sob o modelo

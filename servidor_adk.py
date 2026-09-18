@@ -7,6 +7,14 @@
 Observação sobre a Live API: quem seleciona a conexão bidirecional é o próprio
 run_live(). O RunConfig só descreve modalidades, voz e transcrição — em Python o
 StreamingMode não participa dessa escolha.
+
+Configuração da sessão Live via variáveis de ambiente (todas opcionais, default off):
+  LIVE_PROATIVITY=1        áudio proativo (modelo decide quando falar) — específico do modelo
+  LIVE_AFFECTIVE_DIALOG=1  adaptação emocional ao tom do usuário — específico do modelo
+  LIVE_EXPLICIT_VAD=1      emite eventos de voz explícitos (evento.voice_activity)
+  LIVE_SAVE_BLOB=1         grava o áudio da sessão (depuração/auditoria; ~1.92 MB/min)
+  LIVE_VAD_DISABLED=1      desliga VAD automático (clientes push-to-talk/VAD próprio)
+  LIVE_METADADOS='{"k":"v"}'  metadados anexados a cada evento da invocação
 """
 
 import asyncio
@@ -15,6 +23,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 # Auto-injeção do .venv local para execução transparente via python3 ou fish shell
@@ -381,6 +390,31 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
         return {"status": "rejeitado", "action_id": action_id}
 
 
+async def chamar_omniroute_chat(texto: str) -> str:
+    """Executa chat completion de contingência via OmniRoute HTTP local."""
+    url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1").rstrip("/") + "/chat/completions"
+    key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
+    payload_omni = json.dumps({
+        "model": "gemini-2.5-flash",
+        "messages": [{"role": "user", "content": texto}]
+    }).encode("utf-8")
+    req_omni = urllib.request.Request(
+        url_omni,
+        data=payload_omni,
+        headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
+        method="POST"
+    )
+    loop = asyncio.get_running_loop()
+    def _chamar():
+        with urllib.request.urlopen(req_omni, timeout=30.0) as r:
+            return json.loads(r.read().decode("utf-8"))
+    resp_json = await loop.run_in_executor(None, _chamar)
+    ch = resp_json.get("choices", [])
+    if ch and "message" in ch[0]:
+        return ch[0]["message"].get("content", "").strip()
+    raise RuntimeError("Resposta OmniRoute em formato inesperado.")
+
+
 @app.post("/api/chat")
 async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     """Um turno de texto. O roteador escolhe o caminho; 'caminho' no payload força."""
@@ -439,6 +473,8 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                     resposta += parte.text
         return resposta.strip(), ferramentas
 
+    resposta = None
+    ferramentas = []
     ultimo_erro = None
     for tentativa in range(len(CHAVES) + 1):
         try:
@@ -455,11 +491,8 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                 # O modelo de texto reserva não entende a config computer_use:
                 # trocar quebraria o toolset. Devolve indisponibilidade explícita.
                 logger.warning("Modelo de Computer Use indisponível (%s).", erro)
-                return {
-                    "status": "erro",
-                    "caminho": caminho,
-                    "mensagem": f"Modelo de Computer Use indisponível: {ultimo_erro}",
-                }
+                ultimo_erro = erro
+                break
             # Sem outra chave: espera e tenta o modelo de texto reserva
             logger.warning("Modelo de texto indisponível (%s). Tentando o reserva.", erro)
             await asyncio.sleep(2)
@@ -468,52 +501,30 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
                 resposta, ferramentas = await um_turno()
                 break
             except Exception as erro_final:
-                return {
-                    "status": "erro",
-                    "caminho": caminho,
-                    "mensagem": f"Modelos de texto indisponíveis no momento: {erro_final}",
-                }
-    else:
+                ultimo_erro = erro_final
+                break
+
+    if resposta is None:
         # Failover automático para o OmniRoute (segundo provedor)
         logger.info("Chaves Google AI Studio esgotadas no pool. Acionando OmniRoute (:20128) como segundo provedor...")
         try:
-            url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1") + "/chat/completions"
-            key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
-            payload_omni = json.dumps({
-                "model": "gemini-2.5-flash",
-                "messages": [{"role": "user", "content": texto}]
-            }).encode("utf-8")
-            req_omni = urllib.request.Request(
-                url_omni,
-                data=payload_omni,
-                headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
-                method="POST"
-            )
-            loop = asyncio.get_running_loop()
-            def _chamar_omni():
-                with urllib.request.urlopen(req_omni, timeout=8.0) as r:
-                    return json.loads(r.read().decode("utf-8"))
-            resp_json = await loop.run_in_executor(None, _chamar_omni)
-            ch = resp_json.get("choices", [])
-            if ch and "message" in ch[0]:
-                resp_texto = ch[0]["message"].get("content", "").strip()
-                return {
-                    "status": "ok",
-                    "caminho": caminho,
-                    "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
-                    "provedor": "omniroute",
-                    "modelo": "omniroute/gemini-2.5-flash",
-                    "resposta": resp_texto,
-                    "ferramentas": [],
-                }
+            resp_texto = await chamar_omniroute_chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Failover: Google AI Studio sem cota -> OmniRoute acionado como 2º provedor",
+                "provedor": "omniroute",
+                "modelo": "omniroute/gemini-2.5-flash",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
         except Exception as omni_err:
             logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
-
-        return {
-            "status": "erro",
-            "caminho": caminho,
-            "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
-        }
+            return {
+                "status": "erro",
+                "caminho": caminho,
+                "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
+            }
 
     # Ingestão assíncrona da sessão na memória de longo prazo (background task)
     async def _salvar_memoria_bg():
@@ -537,26 +548,67 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
 
 
 # ------------------------------ MODO VOZ ------------------------------
+def _env_flag(nome: str) -> bool:
+    """Lê uma flag 0/1 do ambiente; tudo desligado sem a variável."""
+    return os.environ.get(nome, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_json(nome: str, padrao=None):
+    """Lê um valor JSON do ambiente; retorna o padrão se faltar ou for inválido."""
+    bruto = os.environ.get(nome)
+    if not bruto or not bruto.strip():
+        return padrao
+    try:
+        return json.loads(bruto)
+    except Exception:
+        logger.warning("Valor inválido em %s (JSON esperado): ignorado.", nome)
+        return padrao
+
+
 def montar_run_config() -> RunConfig:
-    """Modalidades, voz e transcrição da sessão Live.
+    """Modalidades, voz, transcrição e tuning opcional da sessão Live.
 
     Não há StreamingMode aqui: em Python é o run_live() que ativa a Live API.
+    Os recursos extras (proatividade, diálogo afetivo, VAD etc.) são opcionais:
+    só entram na configuração quando as variáveis de ambiente os ativam.
     """
-    return RunConfig(
-        response_modalities=["AUDIO"],
-        speech_config=types.SpeechConfig(
+    cfg: dict = {
+        "response_modalities": ["AUDIO"],
+        "speech_config": types.SpeechConfig(
             language_code=IDIOMA,
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOZ)
             ),
         ),
-        input_audio_transcription=types.AudioTranscriptionConfig(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
+        "input_audio_transcription": types.AudioTranscriptionConfig(),
+        "output_audio_transcription": types.AudioTranscriptionConfig(),
         # Sessão de áudio termina em ~15 min sem compressão de contexto
-        context_window_compression=types.ContextWindowCompressionConfig(
+        "context_window_compression": types.ContextWindowCompressionConfig(
             sliding_window=types.SlidingWindow()
         ),
-    )
+    }
+
+    if _env_flag("LIVE_PROATIVITY"):
+        cfg["proactivity"] = types.ProactivityConfig(proactive_audio=True)
+    if _env_flag("LIVE_AFFECTIVE_DIALOG"):
+        cfg["enable_affective_dialog"] = True
+    if _env_flag("LIVE_EXPLICIT_VAD"):
+        cfg["explicit_vad_signal"] = True
+    if _env_flag("LIVE_SAVE_BLOB"):
+        cfg["save_live_blob"] = True
+    if _env_flag("LIVE_VAD_DISABLED"):
+        cfg["realtime_input_config"] = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+        )
+    elif _env_flag("JARVIS_BARGE_IN") or _env_flag("LIVE_ALLOW_BARGE_IN"):
+        cfg["realtime_input_config"] = types.RealtimeInputConfig(
+            activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        )
+    metadados = _env_json("LIVE_METADADOS")
+    if metadados:
+        cfg["custom_metadata"] = metadados
+
+    return RunConfig(**cfg)
 
 
 @app.websocket("/ws/live")
@@ -620,7 +672,7 @@ async def live(
                     fila.send_content(
                         types.Content(role="user", parts=[types.Part(text=texto)])
                     )
-            elif tipo in ("fim_do_audio", "end_of_audio"):
+            elif tipo in ("fim_do_audio", "end_of_audio", "audio_stream_end"):
                 fila.send_audio_stream_end()
 
     async def do_agente_para_o_cliente():
@@ -666,6 +718,17 @@ async def live(
                         )
             if evento.interrupted:
                 await websocket.send_json({"tipo": "interrompido"})
+            if _env_flag("LIVE_EXPLICIT_VAD") and evento.voice_activity:
+                try:
+                    va = evento.voice_activity
+                    estado = getattr(va, "is_speech", None)
+                    if estado is None:
+                        estado = getattr(va, "voice_in", None) or getattr(va, "response_in", None)
+                    await websocket.send_json(
+                        {"tipo": "voz_ativa", "ativo": bool(estado), "detalhe": str(va)}
+                    )
+                except Exception:
+                    pass
             if evento.turn_complete:
                 await websocket.send_json({"tipo": "turno_concluido"})
                 try:

@@ -27,11 +27,11 @@ jobs:
 
       - name: Static Syntax Compilation Check
         run: |
-          python -m py_compile server.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py monitoring/test_suite.py app.py servidor_adk.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
+          python -m py_compile server.py provider_router.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py monitoring/test_suite.py app.py servidor_adk.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
 
       - name: Runtime Module Import Check (Smoke Test)
         run: |
-          python -c "import servidor_adk; import server; import policy_engine; import system_tools; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
+          python -c "import servidor_adk; import server; import provider_router; import policy_engine; import system_tools; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
 
       - name: Run Architecture & Security Test Suite
         env:
@@ -39,3 +39,8 @@ jobs:
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           python monitoring/test_suite.py --p0
+
+      - name: Run Gitleaks Secret Detector
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

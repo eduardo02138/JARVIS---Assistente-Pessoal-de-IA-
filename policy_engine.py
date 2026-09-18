@@ -150,6 +150,9 @@ CONTROL_LEASE_TTL_S = int(os.environ.get("JARVIS_CONTROL_LEASE_TTL", "300"))
 # Duração padrão da lease do Modo Computador (navegador via Computer Use)
 COMPUTER_LEASE_TTL_S = int(os.environ.get("JARVIS_COMPUTER_LEASE_TTL", "900"))
 
+# Duração padrão da lease do Modo IDE (Antigravity Code Agent)
+IDE_LEASE_TTL_S = int(os.environ.get("JARVIS_IDE_LEASE_TTL", "300"))
+
 # Combinações de teclas que continuam exigindo confirmação mesmo com lease ativa
 HOTKEYS_PERIGOSAS = {
     ("alt", "f4"),
@@ -158,9 +161,19 @@ HOTKEYS_PERIGOSAS = {
     ("ctrl", "alt", "f1"),
     ("ctrl", "alt", "f2"),
     ("ctrl", "alt", "t"),
-    ("super",),
-    ("super", "l"),
+    ("ctrl", "w"),
+    ("ctrl", "q"),
 }
+
+COMMANDS_BLOQUEADOS = (
+    "rm -rf /",
+    "mkfs",
+    ":(){ :|:& };:",
+    "dd if=",
+    "> /dev/sda",
+    "chmod -R 777 /",
+    "chown -R",
+)
 
 # Padrões de texto que indicam comandos destrutivos digitados em terminal
 PADROES_TEXTO_PERIGOSO = re.compile(
@@ -178,6 +191,9 @@ class PolicyEngine:
         self._control_lease_owner: Optional[str] = None
         self._computer_lease_expira_em: float = 0.0
         self._computer_lease_owner: Optional[str] = None
+        self._ide_lease_expira_em: float = 0.0
+        self._ide_lease_owner: Optional[str] = None
+        self._ide_lease_user_id: Optional[str] = None
         self._pending_actions: Dict[str, PendingAction] = {}
 
     def register_tool_policy(self, tool_name: str, risk_level: RiskLevel):
@@ -271,6 +287,63 @@ class PolicyEngine:
             "owner": self._computer_lease_owner
         }
 
+    # ---------------- Lease do Modo IDE (Antigravity Code Agent) ----------------
+
+    def grant_ide_lease(
+        self,
+        owner: str = "sessao-principal",
+        user_id: Optional[str] = None,
+        ttl_s: int = IDE_LEASE_TTL_S
+    ) -> Dict[str, Any]:
+        """Concede autoridade temporária ao agente Antigravity (Modo IDE)."""
+        self._ide_lease_expira_em = time.time() + ttl_s
+        self._ide_lease_owner = owner
+        self._ide_lease_user_id = user_id
+        logger.info(f"Lease do Modo IDE concedida a '{owner}' (user: {user_id}) por {ttl_s}s.")
+        return self.ide_lease_status()
+
+    def revoke_ide_lease(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Revoga a autoridade do Modo IDE."""
+        if session_id is not None and self._ide_lease_owner not in (None, session_id):
+            logger.info("Revogação ignorada: a lease do Modo IDE pertence a outra sessão.")
+            return self.ide_lease_status()
+        if user_id is not None and self._ide_lease_user_id not in (None, user_id):
+            logger.info("Revogação ignorada: a lease do Modo IDE pertence a outro usuário.")
+            return self.ide_lease_status()
+        self._ide_lease_expira_em = 0.0
+        self._ide_lease_owner = None
+        self._ide_lease_user_id = None
+        logger.info("Lease do Modo IDE revogada.")
+        return self.ide_lease_status()
+
+    def is_ide_lease_active(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """A lease pertence estritamente à sessão e usuário que a receberam."""
+        if time.time() >= self._ide_lease_expira_em:
+            return False
+        if session_id is not None and self._ide_lease_owner != session_id:
+            return False
+        if user_id is not None and self._ide_lease_user_id is not None and self._ide_lease_user_id != user_id:
+            return False
+        return True
+
+    def ide_lease_status(self) -> Dict[str, Any]:
+        """Estado da lease do Modo IDE."""
+        restante = max(0.0, self._ide_lease_expira_em - time.time())
+        return {
+            "ativa": restante > 0,
+            "segundos_restantes": int(restante),
+            "owner": self._ide_lease_owner,
+            "user_id": self._ide_lease_user_id
+        }
+
     def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any],
                                  session_id: Optional[str] = None) -> PolicyDecision:
         """Aplica a lease de controle e escala ações perigosas de teclado."""
@@ -328,7 +401,8 @@ class PolicyEngine:
         )
 
     def evaluate(self, tool_name: str, args: Optional[Dict[str, Any]] = None,
-                 session_id: Optional[str] = None) -> PolicyDecision:
+                 session_id: Optional[str] = None,
+                 user_id: Optional[str] = None) -> PolicyDecision:
         """
         Avalia se a execução da ferramenta está autorizada e sob quais condições.
         """
@@ -393,7 +467,7 @@ class PolicyEngine:
                 metadata={"args": args}
             )
 
-        # PRIVILEGED: Ações delegadas ao Antigravity (com verificação de prompt)
+        # PRIVILEGED: Ações delegadas ao Antigravity (com verificação de prompt e lease de Modo IDE)
         if risk == RiskLevel.PRIVILEGED:
             prompt = args.get("prompt", "")
             # Verificação básica de sanidade no prompt (apenas para o agente do Antigravity)
@@ -404,6 +478,18 @@ class PolicyEngine:
                     allowed=False,
                     requires_confirmation=False,
                     reason="Prompt privilegiado vazio ou inválido."
+                )
+
+            # Se houver uma lease ativa do Modo IDE concedida à sessão e usuário atuais,
+            # a delegação contínua é permitida sem requerer nova confirmação individual por prompt.
+            if tool_name == "antigravity_run_prompt" and self.is_ide_lease_active(session_id, user_id):
+                return PolicyDecision(
+                    tool_name=tool_name,
+                    risk_level=risk,
+                    allowed=True,
+                    requires_confirmation=False,
+                    reason="Execução autorizada sob Lease ativa do Modo IDE.",
+                    metadata={"prompt_preview": prompt[:120], "ide_lease": self.ide_lease_status()}
                 )
 
             return PolicyDecision(
@@ -565,7 +651,7 @@ class PolicyEngine:
         args_hash = self._compute_args_hash(args)
         for action_id, action in list(self._pending_actions.items()):
             if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
-                if action.args_hash == args_hash or not action.args:
+                if action.args_hash == args_hash:
                     if action.session_id is not None:
                         if not session_id or action.session_id != session_id:
                             continue

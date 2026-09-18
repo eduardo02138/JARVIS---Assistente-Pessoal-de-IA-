@@ -56,6 +56,7 @@ const state = {
         const mode = localStorage.getItem("jarvis_app_mode") || "live-flash";
         if (mode === "simples") return "gemini-flash-latest";
         if (mode === "tank-3.8") return "gemini-3.8-live";
+        if (mode === "computador") return "gemini-2.5-computer-use-preview-10-2025";
         return "gemini-2.5-flash-native-audio-latest";
     })(),
     provider: localStorage.getItem("jarvis_provider") || "google_studio",
@@ -73,6 +74,8 @@ const state = {
     analyser: null,
     micAnalyser: null,
     scheduledEndTime: 0,
+    activeAudioSources: new Set(),
+    bargeIn: localStorage.getItem("gemini_barge_in") === "true",
     
     // Canvas
     canvas: null,
@@ -122,12 +125,18 @@ const dom = {
     toggleNoise: document.getElementById("toggleNoise"),
     toggleGain: document.getElementById("toggleGain"),
 
-    // Modos de Exibição
+    // Controles & Modos de Exibição
     btnSwitchView: document.getElementById("btnSwitchView"),
     selectWidgetHeaderMode: document.getElementById("selectWidgetHeaderMode"),
     selectExpandedMode: document.getElementById("selectExpandedMode"),
     btnMinimizeToWidget: document.getElementById("btnMinimizeToWidget"),
     btnToggleBackdrop: document.getElementById("btnToggleBackdrop"),
+    btnToggleScreenShare: document.getElementById("btnToggleScreenShare"),
+    pendingActionBanner: document.getElementById("pendingActionBanner"),
+    btnApprovePending: document.getElementById("btnApprovePending"),
+    btnRejectPending: document.getElementById("btnRejectPending"),
+    btnSearchMemory: document.getElementById("btnSearchMemory"),
+    memorySearchInput: document.getElementById("memorySearchInput"),
     expandedChatScroll: document.getElementById("expandedChatScroll"),
     expandedInput: document.getElementById("expandedInput"),
     btnExpandedMic: document.getElementById("btnExpandedMic"),
@@ -370,6 +379,12 @@ async function initAudio() {
                 speechHoldover = 6; // Mantem envio por ~250ms adicionais
             } else if (speechHoldover > 0) {
                 speechHoldover--;
+                if (speechHoldover === 0) {
+                    // VAD Híbrida da Live API: notifica término imediato de fala para reduzir latência
+                    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                        state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
+                    }
+                }
             }
 
             if (!isSpeaking && speechHoldover <= 0) return;
@@ -467,6 +482,11 @@ function playPCMResponse(base64Data) {
     const currentTime = state.audioCtx.currentTime;
     if (state.scheduledEndTime < currentTime) state.scheduledEndTime = currentTime;
 
+    if (!state.activeAudioSources) {
+        state.activeAudioSources = new Set();
+    }
+    state.activeAudioSources.add(source);
+
     source.start(state.scheduledEndTime);
     state.scheduledEndTime += audioBuffer.duration;
 
@@ -481,6 +501,9 @@ function playPCMResponse(base64Data) {
     }, Math.max(1000, (audioBuffer.duration + 0.3) * 1000));
 
     source.onended = () => {
+        if (state.activeAudioSources) {
+            state.activeAudioSources.delete(source);
+        }
         if (state.audioCtx && state.audioCtx.currentTime >= state.scheduledEndTime - 0.08) {
             state.speaking = false;
             dom.liveStatusText.textContent = "Ouvindo você...";
@@ -489,6 +512,15 @@ function playPCMResponse(base64Data) {
 }
 
 function flushAudioQueue() {
+    if (state.activeAudioSources && state.activeAudioSources.size > 0) {
+        state.activeAudioSources.forEach(src => {
+            try {
+                src.stop(0);
+                src.disconnect();
+            } catch (e) {}
+        });
+        state.activeAudioSources.clear();
+    }
     if (state.audioCtx) {
         state.scheduledEndTime = state.audioCtx.currentTime;
     }
@@ -549,44 +581,109 @@ function pararVisaoDeTela() {
     visao.video = null;
 }
 
-/**
- * Painel de autorização para ferramentas de risco (EXTERNAL_WRITE / PRIVILEGED).
- * Sem resposta, o backend nega a execução por tempo esgotado.
- */
-function mostrarPedidoDeAutorizacao(msg) {
-    sendBridgeMessage("PYBRIDGE_RESIZE", "560,460");
-    appendChatMessage("tool", `Autorização necessária (${msg.risk_level}): ${msg.name}`, { source: "tool" });
+// ---------------- BANNER DE AUTORIZAÇÃO (POLICY ENGINE) ----------------
+let pendingTimerInterval = null;
+let currentPendingAction = null;
 
-    const painel = document.createElement("div");
-    painel.className = "jarvis-confirm-panel";
-    painel.innerHTML = `
-        <h3>Autorização necessária</h3>
-        <p class="risco">${msg.risk_level}</p>
-        <p class="ferramenta">${msg.name}</p>
-        <pre>${JSON.stringify(msg.args, null, 2)}</pre>
-        <div class="acoes">
-            <button class="aprovar">Autorizar</button>
-            <button class="negar">Negar</button>
-        </div>
-    `;
-    document.body.appendChild(painel);
+function exibirBannerAcaoPendente(acao) {
+    currentPendingAction = acao;
+    const banner = dom.pendingActionBanner;
+    if (!banner) return;
 
-    let respondido = false;
-    const responder = (aprovado) => {
-        if (respondido) return;
-        respondido = true;
-        clearTimeout(temporizador);
-        painel.remove();
-        if (!state.expanded) sendBridgeMessage("PYBRIDGE_RESIZE", "560,240");
-        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-            state.ws.send(JSON.stringify({ type: "tool_confirmation", id: msg.id, approved: aprovado }));
+    const toolNameEl = document.getElementById("pendingToolName");
+    const argsEl = document.getElementById("pendingArgsPreview");
+    const riskTag = document.getElementById("pendingRiskTag");
+    const timerEl = document.getElementById("pendingTimerVal");
+
+    const toolName = acao.tool_name || acao.name || acao.acao || "ferramenta_sensivel";
+    const risk = acao.risk_level || "PRIVILEGED";
+    const args = acao.args || acao.argumentos || {};
+
+    if (toolNameEl) toolNameEl.textContent = toolName;
+    if (argsEl) argsEl.textContent = JSON.stringify(args);
+    if (riskTag) {
+        riskTag.textContent = risk;
+        riskTag.className = `risk-badge ${risk.toLowerCase()}`;
+    }
+
+    let segundosRestantes = acao.timeout_s || 60;
+    if (timerEl) timerEl.textContent = `${segundosRestantes}s`;
+
+    clearInterval(pendingTimerInterval);
+    pendingTimerInterval = setInterval(() => {
+        segundosRestantes--;
+        if (timerEl) timerEl.textContent = `${segundosRestantes}s`;
+        if (segundosRestantes <= 0) {
+            clearInterval(pendingTimerInterval);
+            ocultarBannerAcaoPendente();
         }
-        appendChatMessage("tool", aprovado ? "Autorizado pelo senhor." : "Negado pelo senhor.", { source: "tool" });
-    };
+    }, 1000);
 
-    painel.querySelector(".aprovar").addEventListener("click", () => responder(true));
-    painel.querySelector(".negar").addEventListener("click", () => responder(false));
-    const temporizador = setTimeout(() => responder(false), (msg.timeout_s || 60) * 1000);
+    banner.classList.remove("hidden");
+    sendBridgeMessage("PYBRIDGE_RESIZE", "560,340");
+}
+
+function ocultarBannerAcaoPendente() {
+    clearInterval(pendingTimerInterval);
+    currentPendingAction = null;
+    if (dom.pendingActionBanner) {
+        dom.pendingActionBanner.classList.add("hidden");
+    }
+    if (!state.expanded && dom.keyboardDrawer && dom.keyboardDrawer.classList.contains("hidden")) {
+        sendBridgeMessage("PYBRIDGE_RESIZE", "560,240");
+    }
+}
+
+async function aprovarAcaoPendente() {
+    if (!currentPendingAction) return;
+    const actionId = currentPendingAction.action_id || currentPendingAction.id || currentPendingAction.id_confirmacao;
+    const sessao = currentPendingAction.sessao || "sessao-principal";
+    const toolName = currentPendingAction.tool_name || currentPendingAction.name;
+    try {
+        const headers = { "Content-Type": "application/json" };
+        if (jarvisSessionToken) headers["Authorization"] = `Bearer ${jarvisSessionToken}`;
+        await fetch("/api/confirmar_acao", {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify({ id_confirmacao: actionId, sessao: sessao, aprovado: true })
+        });
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify({ tipo: "confirmar_acao", id_confirmacao: actionId, aprovado: true }));
+        }
+        appendChatMessage("tool", `Ação autorizada pelo senhor: ${toolName}`, { source: "tool" });
+    } catch (e) {
+        console.warn("Erro ao autorizar ação:", e);
+    }
+    ocultarBannerAcaoPendente();
+    if (toolName === "set_computer_mode") {
+        await alterarModoComputador(true);
+    }
+}
+
+async function rejeitarAcaoPendente() {
+    if (!currentPendingAction) return;
+    const actionId = currentPendingAction.action_id || currentPendingAction.id || currentPendingAction.id_confirmacao;
+    try {
+        const headers = { "Content-Type": "application/json" };
+        if (jarvisSessionToken) headers["Authorization"] = `Bearer ${jarvisSessionToken}`;
+        await fetch("/api/confirmar_acao", {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify({ id_confirmacao: actionId, sessao: "sessao-principal", aprovado: false })
+        });
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify({ tipo: "confirmar_acao", id_confirmacao: actionId, aprovado: false }));
+        }
+        appendChatMessage("tool", `Ação cancelada pelo senhor.`, { source: "tool" });
+    } catch (e) {
+        console.warn("Erro ao rejeitar ação:", e);
+    }
+    ocultarBannerAcaoPendente();
+}
+
+function mostrarPedidoDeAutorizacao(msg) {
+    appendChatMessage("tool", `Autorização necessária (${msg.risk_level || 'PRIVILEGED'}): ${msg.name || msg.tool_name}`, { source: "tool" });
+    exibirBannerAcaoPendente(msg);
 }
 
 // ---------------- WEBSOCKET BRIDGE COM GEMINI LIVE ----------------
@@ -607,7 +704,8 @@ async function connectLiveBackend() {
             voice: state.voice,
             model: state.model,
             provider: state.provider,
-            token: jarvisSessionToken
+            token: jarvisSessionToken,
+            barge_in: state.bargeIn || false
         }));
     };
 
@@ -690,7 +788,13 @@ async function connectLiveBackend() {
                 break;
 
             case "tool_confirmation_request":
+            case "acao_pendente":
                 mostrarPedidoDeAutorizacao(msg);
+                break;
+
+            case "acao_aprovada":
+            case "acao_rejeitada":
+                ocultarBannerAcaoPendente();
                 break;
 
             case "control_mode":
@@ -854,18 +958,24 @@ async function sendTextPrompt(text) {
     state.processing = true;
     dom.liveStatusText.textContent = "Processando pergunta...";
 
-    if (state.currentMode === "simples") {
+    if (state.currentMode === "simples" || state.currentMode === "computador") {
         try {
+            const headers = { "Content-Type": "application/json" };
+            if (jarvisSessionToken) headers["Authorization"] = `Bearer ${jarvisSessionToken}`;
+            const bodyPayload = { texto: clean, usuario: "local", sessao: "sessao-widget" };
+            if (state.currentMode === "computador") {
+                bodyPayload.caminho = "computador";
+            }
             const resp = await fetch("/api/chat", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ texto: clean, usuario: "local", sessao: "sessao-widget" })
+                headers: headers,
+                body: JSON.stringify(bodyPayload)
             }).then(r => r.json());
             const respostaTexto = resp.resposta || resp.mensagem || "(sem resposta)";
             appendChatMessage("gemini", respostaTexto);
-            dom.liveStatusText.textContent = `Modo Simples (respondido via ${resp.caminho || 'ADK'})`;
+            dom.liveStatusText.textContent = `Respondido via ${resp.caminho || 'ADK'}`;
         } catch (err) {
-            appendChatMessage("gemini", "Erro ao comunicar com o servidor no modo simples.");
+            appendChatMessage("gemini", "Erro ao comunicar com o servidor.");
             dom.liveStatusText.textContent = "Erro na resposta.";
         }
         state.processing = false;
@@ -879,10 +989,50 @@ async function sendTextPrompt(text) {
 }
 
 
+// ---------------- MODO COMPUTADOR (LEASE DO POLICY ENGINE) ----------------
+const COMPUTER_SESSION = "sessao-widget";
+
+async function alterarModoComputador(ativo) {
+    const headers = { "Content-Type": "application/json" };
+    if (jarvisSessionToken) headers["Authorization"] = `Bearer ${jarvisSessionToken}`;
+    try {
+        const resp = await fetch("/api/computer/mode", {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify({ ativo: ativo, sessao: COMPUTER_SESSION, usuario: "local" })
+        }).then(r => r.json());
+
+        if (!ativo) return resp;
+
+        if (resp.status === "aguardando_confirmacao") {
+            appendChatMessage("tool", resp.mensagem || "Confirme a ativação do Modo Computador.", { source: "tool" });
+            exibirBannerAcaoPendente({
+                action_id: resp.id_confirmacao,
+                tool_name: "set_computer_mode",
+                risk_level: "PRIVILEGED",
+                args: { descricao: "Ativação do Modo Computador (navegador Chromium)" },
+                timeout_s: 60,
+                sessao: COMPUTER_SESSION
+            });
+        } else if (resp.status === "ok") {
+            appendChatMessage("tool", "Modo Computador autorizado. Navegador liberado.", { source: "tool" });
+        }
+        return resp;
+    } catch (err) {
+        console.warn("Falha ao alternar Modo Computador:", err);
+        return null;
+    }
+}
+
 // ---------------- GERENCIAMENTO DE MODOS (SIMPLES, LIVE FLASH & TANK 3.8) ----------------
 function applyMode(mode, reconnect = true) {
+    const modoAnterior = state.currentMode;
     state.currentMode = mode;
     localStorage.setItem("jarvis_app_mode", mode);
+
+    if (modoAnterior === "computador" && mode !== "computador") {
+        alterarModoComputador(false);
+    }
 
     if (dom.selectWidgetHeaderMode) dom.selectWidgetHeaderMode.value = mode;
     if (dom.selectExpandedMode) dom.selectExpandedMode.value = mode;
@@ -909,6 +1059,14 @@ function applyMode(mode, reconnect = true) {
             state.ws.close();
             initWebSocket();
         }
+    } else if (mode === "computador") {
+        state.model = "gemini-2.5-computer-use-preview-10-2025";
+        localStorage.setItem("jarvis_model", state.model);
+        dom.liveStatusText.textContent = "Modo Computador (Chromium Playwright)";
+        dom.chipLabel.textContent = "🖥️ Modo Computador";
+        dom.statusBadgeChip.className = "status-chip active mode-computer";
+        appendCaption("gemini", "🖥️ Modo Computador ativado. Agente autônomo pronto para operar a web.");
+        if (reconnect) alterarModoComputador(true);
     } else { // tank-3.8
         state.model = "gemini-3.8-live";
         localStorage.setItem("jarvis_model", state.model);
@@ -1334,6 +1492,163 @@ dom.btnCloseWidget.addEventListener("click", () => {
         dom.widget.classList.add("hidden");
         sendBridgeMessage("PYBRIDGE_HIDE", "1");
     }, 200);
+});
+
+// ---------------- COMPARTILHAMENTO DE TELA EM TEMPO REAL (MULTIMODAL LIVE) ----------------
+let screenStream = null;
+let screenCaptureInterval = null;
+const screenCanvas = document.createElement("canvas");
+const screenCtx = screenCanvas.getContext("2d");
+screenCanvas.width = 1280;
+screenCanvas.height = 720;
+const screenVideo = document.createElement("video");
+screenVideo.autoplay = true;
+screenVideo.muted = true;
+
+async function toggleScreenShare() {
+    if (screenStream) {
+        pararCompartilhamentoTela();
+        return;
+    }
+
+    try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: 1280, height: 720, frameRate: 1 }
+        });
+        screenVideo.srcObject = screenStream;
+        await screenVideo.play();
+
+        if (dom.btnToggleScreenShare) {
+            dom.btnToggleScreenShare.classList.add("active-screen");
+            dom.btnToggleScreenShare.title = "Parar Compartilhamento de Tela";
+        }
+        dom.chipLabel.textContent = "Visão de Tela Ativa";
+        dom.statusBadgeChip.classList.add("active");
+        appendChatMessage("tool", "Compartilhamento de tela iniciado. A IA está recebendo frames em tempo real.", { source: "tool" });
+
+        // Envia frames JPEG a cada 1.5s
+        screenCaptureInterval = setInterval(() => {
+            if (!screenStream || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+            try {
+                screenCtx.drawImage(screenVideo, 0, 0, 1280, 720);
+                const dataUrl = screenCanvas.toDataURL("image/jpeg", 0.55);
+                const b64 = dataUrl.split(",")[1];
+                if (b64) {
+                    state.ws.send(JSON.stringify({ type: "screen_frame", data: b64 }));
+                }
+            } catch (e) {
+                console.warn("Erro ao capturar frame:", e);
+            }
+        }, 1500);
+
+        screenStream.getVideoTracks()[0].addEventListener("ended", () => {
+            pararCompartilhamentoTela();
+        });
+    } catch (err) {
+        console.warn("Compartilhamento de tela cancelado ou negado:", err);
+        pararCompartilhamentoTela();
+    }
+}
+
+function pararCompartilhamentoTela() {
+    if (screenCaptureInterval) {
+        clearInterval(screenCaptureInterval);
+        screenCaptureInterval = null;
+    }
+    if (screenStream) {
+        screenStream.getTracks().forEach(t => t.stop());
+        screenStream = null;
+    }
+    screenVideo.srcObject = null;
+    if (dom.btnToggleScreenShare) {
+        dom.btnToggleScreenShare.classList.remove("active-screen");
+        dom.btnToggleScreenShare.title = "Compartilhar Tela com a IA (Visão ao Vivo)";
+    }
+    dom.chipLabel.textContent = state.paused ? "Em Pausa" : "Microfone Ativo";
+    appendChatMessage("tool", "Compartilhamento de tela encerrado.", { source: "tool" });
+}
+
+// ---------------- GESTÃO DE MEMÓRIA DE LONGO PRAZO ----------------
+async function carregarStatsMemoria() {
+    try {
+        const res = await fetch("/api/status");
+        if (res.ok) {
+            const data = await res.json();
+            const sessoesCountEl = document.getElementById("memSessionsCount");
+            const eventsCountEl = document.getElementById("memEventsCount");
+            if (sessoesCountEl) sessoesCountEl.textContent = data.sessoes || "Ativo";
+            if (eventsCountEl) eventsCountEl.textContent = data.memoria || "ADK";
+        }
+    } catch (e) {
+        console.warn("Falha ao ler status da memória:", e);
+    }
+}
+
+function buscarMemoriaLocal() {
+    const input = document.getElementById("memorySearchInput");
+    const resultsContainer = document.getElementById("memoryResultsList");
+    if (!input || !resultsContainer) return;
+    const query = input.value.trim().toLowerCase();
+    if (!query) {
+        resultsContainer.innerHTML = '<div class="memory-empty-hint">Digite um termo para pesquisar nas conversas.</div>';
+        return;
+    }
+
+    const matches = state.historyLog.filter(item => item.text && item.text.toLowerCase().includes(query));
+    if (matches.length === 0) {
+        resultsContainer.innerHTML = `<div class="memory-empty-hint">Nenhuma menção a "${escapeHtml(query)}" encontrada nas conversas recentes.</div>`;
+        return;
+    }
+
+    resultsContainer.innerHTML = "";
+    matches.slice(-8).reverse().forEach(m => {
+        const card = document.createElement("div");
+        card.className = "memory-item";
+        card.innerHTML = `<strong>${m.sender === "user" ? "Você" : "JARVIS"}:</strong> ${escapeHtml(m.text.slice(0, 120))}`;
+        resultsContainer.appendChild(card);
+    });
+}
+
+// Listeners dos novos componentes
+if (dom.btnToggleScreenShare) {
+    dom.btnToggleScreenShare.addEventListener("click", toggleScreenShare);
+}
+if (dom.btnApprovePending) {
+    dom.btnApprovePending.addEventListener("click", aprovarAcaoPendente);
+}
+if (dom.btnRejectPending) {
+    dom.btnRejectPending.addEventListener("click", rejeitarAcaoPendente);
+}
+if (dom.btnSearchMemory) {
+    dom.btnSearchMemory.addEventListener("click", buscarMemoriaLocal);
+}
+if (dom.memorySearchInput) {
+    dom.memorySearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") buscarMemoriaLocal();
+    });
+}
+
+// Listener para troca de abas no modal de configurações
+document.querySelectorAll(".settings-nav-tabs .tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll(".settings-nav-tabs .tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".settings-panel .tab-content").forEach(tc => tc.classList.remove("active"));
+        btn.classList.add("active");
+        const tabId = btn.dataset.tab;
+        const target = document.getElementById(tabId);
+        if (target) {
+            target.classList.add("active");
+            if (tabId === "tab-memory") carregarStatsMemoria();
+        }
+    });
+});
+
+// Listener para os cards de seleção de modo
+document.querySelectorAll(".mode-card").forEach(card => {
+    card.addEventListener("click", () => {
+        const mode = card.dataset.mode;
+        if (mode) applyMode(mode, true);
+    });
 });
 
 // Inicialização

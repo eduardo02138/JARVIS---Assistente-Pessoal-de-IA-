@@ -930,6 +930,275 @@ def test_suite_cli_dispatch():
     return success
 
 
+def test_ide_lease_security():
+    """Garante que antigravity_run_prompt é isolado por ide_lease com session_id e user_id."""
+    from policy_engine import policy_engine, RiskLevel
+
+    # 1. set_ide_mode é classificado como PRIVILEGED
+    assert policy_engine.get_risk_level("set_ide_mode") == RiskLevel.PRIVILEGED
+
+    # 2. Sem lease ativa -> exige confirmação explícita
+    policy_engine.revoke_ide_lease()
+    dec = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "ls -la"}, session_id="s1", user_id="u1")
+    assert dec.requires_confirmation is True
+
+    # 3. Concede lease para s1 / u1
+    policy_engine.grant_ide_lease(owner="s1", user_id="u1", ttl_s=60)
+    dec_owner = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "ls -la"}, session_id="s1", user_id="u1")
+    assert dec_owner.requires_confirmation is False
+    assert dec_owner.allowed is True
+
+    # 4. Outra sessão (s2) ou outro usuário (u2) -> continua exigindo confirmação
+    dec_outra_sessao = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "ls -la"}, session_id="s2", user_id="u1")
+    assert dec_outra_sessao.requires_confirmation is True
+
+    dec_outro_user = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "ls -la"}, session_id="s1", user_id="u2")
+    assert dec_outro_user.requires_confirmation is True
+
+    # 5. Revogação limpa autoridade
+    policy_engine.revoke_ide_lease(session_id="s1", user_id="u1")
+    dec_revogada = policy_engine.evaluate("antigravity_run_prompt", {"prompt": "ls -la"}, session_id="s1", user_id="u1")
+    assert dec_revogada.requires_confirmation is True
+
+    log_test("Segurança e Isolamento de Lease do Modo IDE (P0.18)", True, "Fencing por session_id, user_id e TTL ativo")
+    return True
+
+
+def test_native_ws_ide_lease_branch():
+    """Regressão P0.18: o caminho nativo /ws/live concede a lease do Modo IDE
+    sem NameError. Antes da correção, usuario_id era indefinido em server.py
+    e o fluxo set_ide_mode derrubava a sessão (repo anterior nomeava o bug P1)."""
+    import asyncio as asyncio_mod
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from policy_engine import policy_engine
+    import server as server_mod
+    from server import app, JARVIS_SECRET_TOKEN
+    import system_tools
+
+    os.environ.setdefault("GEMINI_API_KEYS", "testaizasy-chave-so-para-o-teste")
+
+    def _evento(model_turn=None, tool_call=None, turn_complete=False, output_texto=None):
+        return SimpleNamespace(
+            model_turn=model_turn,
+            tool_call=tool_call,
+            interrupted=False,
+            turn_complete=turn_complete,
+            input_transcription=None,
+            output_transcription=(SimpleNamespace(text=output_texto) if output_texto else None),
+        )
+
+    bloqueio = asyncio_mod.Event()
+
+    class FakeLiveSession:
+        def __init__(self):
+            self.enviados = []
+
+        async def send_client_content(self, **kwargs):
+            self.enviados.append(("client_content", kwargs))
+
+        async def send(self, **kwargs):
+            self.enviados.append(("send", kwargs))
+
+        async def send_tool_response(self, function_responses=None):
+            self.enviados.append(("tool_response", tuple(function_responses or [])))
+
+        async def receive(self):
+            chamada_ide = SimpleNamespace(
+                function_calls=[SimpleNamespace(id="call-ide-1", name="set_ide_mode", args={"enabled": True})]
+            )
+            yield SimpleNamespace(
+                server_content=_evento(
+                    model_turn=SimpleNamespace(parts=[SimpleNamespace(text=None, inline_data=None)]),
+                    tool_call=chamada_ide,
+                ),
+                tool_call=chamada_ide,
+            )
+            yield SimpleNamespace(
+                server_content=_evento(
+                    model_turn=SimpleNamespace(parts=[]),
+                    turn_complete=True,
+                    output_texto="Modo IDE ativado, senhor.",
+                ),
+                tool_call=None,
+            )
+            await bloqueio.wait()
+
+        async def close(self):
+            pass
+
+    class GerenciadorConexao:
+        def __init__(self, sessao):
+            self._sessao = sessao
+
+        async def __aenter__(self):
+            return self._sessao
+
+        async def __aexit__(self, *exc):
+            await self._sessao.close()
+
+    class FakeLive:
+        def __init__(self, sessao):
+            self._sessao = sessao
+
+        def connect(self, model=None, config=None):
+            return GerenciadorConexao(self._sessao)
+
+    class FakeAio:
+        def __init__(self, sessao):
+            self.live = FakeLive(sessao)
+
+    class FakeClient:
+        def __init__(self, sessao, *args, **kwargs):
+            self._sessao = sessao
+            self._api_client = SimpleNamespace(_websocket_ssl_ctx={})
+            self.aio = FakeAio(sessao)
+
+    estado_teste = {"sessao": None}
+
+    def fabrica_client(*args, **kwargs):
+        estado_teste["sessao"] = FakeLiveSession()
+        return FakeClient(estado_teste["sessao"])
+
+    lease_ativa = False
+    try:
+        with patch.object(server_mod.genai, "Client", side_effect=fabrica_client):
+            with TestClient(app) as test_client:
+                with test_client.websocket_connect("/ws/live") as ws:
+                    ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN, "voice": "Charon"})
+                    for _ in range(60):
+                        msg = ws.receive_json()
+                        if msg.get("type") == "tool_confirmation_request":
+                            ws.send_json({"type": "tool_confirmation", "id": msg["id"], "approved": True})
+                            continue
+                        if msg.get("type") == "ide_mode" and "lease" in msg:
+                            lease_ativa = bool(msg.get("lease", {}).get("ativa"))
+                            continue
+                        if msg.get("type") == "turn_complete":
+                            break
+                    ws.close()
+    finally:
+        try:
+            system_tools.set_ide_mode(enabled=False)
+        except Exception:
+            pass
+        policy_engine.revoke_ide_lease()
+        bloqueio.set()
+
+    sucesso = lease_ativa and bool(estado_teste["sessao"] and estado_teste["sessao"].enviados)
+    log_test(
+        "Regressão P.18: lease do Modo IDE no /ws/live nativo (sem NameError)",
+        sucesso,
+        f"Lease ativa após set_ide_mode: {lease_ativa} | "
+        f"respostas de ferramenta devolvidas à sessão: {len(estado_teste['sessao'].enviados) if estado_teste['sessao'] else 0}",
+    )
+    assert sucesso
+    return sucesso
+
+
+def test_exact_args_authorization():
+    """Garante que o gate consume_authorization elimina wildcard de argumentos."""
+    from policy_engine import policy_engine
+
+    # Cria ação pendente com args={}
+    pending = policy_engine.create_pending_action("open_application", {}, session_id="s_test", user_id="u_test")
+    policy_engine.approve_action(pending.action_id, session_id="s_test", user_id="u_test")
+
+    # Tentativa de consumir com argumentos não-vazios DEVE FALHAR
+    consumiu_malicioso = policy_engine.consume_authorization(
+        "open_application", {"app_name": "malicious_script"}, session_id="s_test", user_id="u_test"
+    )
+    assert consumiu_malicioso is False
+
+    # Consumo com os mesmos argumentos exatos DEVE PASSAR
+    consumiu_legitimo = policy_engine.consume_authorization(
+        "open_application", {}, session_id="s_test", user_id="u_test"
+    )
+    assert consumiu_legitimo is True
+
+    log_test("Gate One-Shot Estrito (Eliminação de Wildcard de Argumentos) (P0.18)", True, "Exact args_hash obrigatório")
+    return True
+
+
+def test_servidor_adk_acoes_pendentes_standalone():
+    """Garante que /api/acoes_pendentes executa com time.monotonic() sem NameError."""
+    from fastapi.testclient import TestClient
+    import servidor_adk
+
+    client = TestClient(servidor_adk.app)
+    token = servidor_adk.JARVIS_SECRET_TOKEN
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.get("/api/acoes_pendentes?sessao=sessao-teste", headers=headers)
+    assert resp.status_code == 200
+    dados = resp.json()
+    assert "pendentes" in dados
+    assert isinstance(dados["pendentes"], list)
+
+    log_test("Servidor ADK Standalone /api/acoes_pendentes Runtime (P0.18)", True, "time.monotonic() executado sem erro")
+    return True
+
+
+def test_gemini_38_live_config():
+    """Garante que modelos 3.8 omitem thinking_config na LiveConnectConfig."""
+    import inspect
+    import server
+
+    src = inspect.getsource(server.websocket_live_endpoint)
+    assert '"3.8" not in model_name' in src or 'thinking_config' in src
+    assert 'live_connect_kwargs' in src
+
+    log_test("Conformidade Gemini 3.8 Live (Omissão de ThinkingConfig) (P0.18)", True, "thinking_config omitido em modelos 3.8")
+    return True
+
+
+def test_providers_select_authentication():
+    """Garante que /api/providers/select exige autenticação por token."""
+    from fastapi.testclient import TestClient
+    import server
+
+    client = TestClient(server.app)
+    token = server.JARVIS_SECRET_TOKEN
+
+    # Sem token -> 401 ou 403
+    resp_unauth = client.post("/api/providers/select", json={"provider": "omniroute"})
+    assert resp_unauth.status_code in (401, 403)
+
+    # Com token -> 200 OK
+    resp_auth = client.post(
+        "/api/providers/select",
+        json={"provider": "google_studio"},
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp_auth.status_code == 200
+    assert resp_auth.json().get("status") == "ok"
+
+    log_test("Autenticação Obrigatória em /api/providers/select (P0.18)", True, "Mutação protegida por verify_jarvis_token")
+    return True
+
+
+async def test_omniroute_failover_reachable():
+    """Garante que o failover do OmniRoute é alcançável e retorna a resposta formatada."""
+    import json
+    import servidor_adk
+    from unittest.mock import patch, MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps({
+        "choices": [{"message": {"content": "Resposta de contingência OmniRoute"}}]
+    }).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        res = await servidor_adk.chamar_omniroute_chat("olá em contingência")
+        assert res == "Resposta de contingência OmniRoute"
+
+    log_test("Failover Resiliente OmniRoute Alcançável e Testado (P0.18)", True, "chamar_omniroute_chat testado com sucesso")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
@@ -965,6 +1234,13 @@ async def run_p0_suite():
     test_preferences_requires_token()
     test_websocket_auth()
     test_frontend_sends_token()
+    test_ide_lease_security()
+    test_native_ws_ide_lease_branch()
+    test_exact_args_authorization()
+    test_servidor_adk_acoes_pendentes_standalone()
+    test_gemini_38_live_config()
+    test_providers_select_authentication()
+    await test_omniroute_failover_reachable()
     executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 

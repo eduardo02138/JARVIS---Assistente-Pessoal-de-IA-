@@ -1,0 +1,2 @@
+# Exemplo de arquivo de interação para a ponte Gemini Antigravity Bridge
+# Digite seu comando ou instrução para o Antigravity aqui e salve o arquivo.

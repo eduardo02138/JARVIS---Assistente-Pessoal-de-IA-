@@ -53,6 +53,50 @@ function registrarFerramenta(texto, classe = "") {
   el.ferramentas.prepend(item);
 }
 
+// ---------------- AUTORIZAÇÃO DE AÇÃO PENDENTE ----------------
+function renderizarBotaoAutorizacao(idConfirmacao, nomeFerramenta) {
+  const item = document.createElement("li");
+  item.className = "aguardando";
+  const rotulo = document.createElement("span");
+  rotulo.textContent = `Pendência: ${nomeFerramenta}`;
+
+  const btnAprovar = document.createElement("button");
+  btnAprovar.className = "primario";
+  btnAprovar.textContent = "Autorizar";
+  btnAprovar.addEventListener("click", () => resolverPendencia(idConfirmacao, true, item));
+
+  const btnNegar = document.createElement("button");
+  btnNegar.textContent = "Negar";
+  btnNegar.addEventListener("click", () => resolverPendencia(idConfirmacao, false, item));
+
+  item.append(rotulo, btnAprovar, btnNegar);
+  el.ferramentas.prepend(item);
+}
+
+async function resolverPendencia(idConfirmacao, aprovado, item) {
+  item.querySelectorAll("button").forEach((botao) => (botao.disabled = true));
+  try {
+    const resposta = await fetch("/api/confirmar_acao", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Jarvis-Token": estado.token,
+      },
+      body: JSON.stringify({ id_confirmacao: idConfirmacao, aprovado }),
+    });
+    const dados = await resposta.json();
+    item.className = aprovado ? "ok" : "negado";
+    item.textContent = aprovado ? `Autorizado: ${idConfirmacao}` : `Negado: ${idConfirmacao}`;
+    registrarFerramenta(
+      dados.mensagem || (aprovado ? "Ação autorizada" : "Ação negada"),
+      aprovado ? "ok" : "negado"
+    );
+  } catch (e) {
+    item.className = "negado";
+    item.textContent = `Falha ao ${aprovado ? "autorizar" : "negar"}: ${e.message}`;
+  }
+}
+
 // ---------------- REPRODUÇÃO DO ÁUDIO DO AGENTE ----------------
 function tocarTrecho(base64) {
   if (!estado.ctxSaida) {

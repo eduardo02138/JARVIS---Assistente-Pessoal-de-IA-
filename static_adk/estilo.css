@@ -85,3 +85,6 @@ button.ativo { border-color: var(--ok); color: var(--ok); }
 .ferramentas li { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 0.8rem; color: var(--suave); }
 .ferramentas li.ok { color: var(--ok); }
 .ferramentas li.executando { color: var(--destaque); }
+.ferramentas li.aguardando { color: var(--destaque); }
+.ferramentas li.negado { color: var(--erro); }
+.ferramentas li button { margin-left: 8px; padding: 2px 10px; font-size: 0.8rem; font-family: inherit; }

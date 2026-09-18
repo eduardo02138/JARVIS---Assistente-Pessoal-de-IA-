@@ -40,3 +40,7 @@ sessoes.db
 *.db
 *.sqlite
 *.sqlite3
+
+# Arquivos de runtime da Ponte Gemini Bridge (use .example como modelo)
+gemini/input.txt
+gemini/latest_response.md

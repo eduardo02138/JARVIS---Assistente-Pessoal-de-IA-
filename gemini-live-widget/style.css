@@ -1801,3 +1801,248 @@ body.app-mode .gemini-live-widget {
 .hud-prov-val.green {
     color: #4ade80;
 }
+
+/* ==========================================================================
+   BANNER DE AÇÕES PENDENTES (POLICY ENGINE)
+   ========================================================================== */
+.pending-action-banner {
+    margin: 8px 12px;
+    background: rgba(22, 27, 38, 0.95);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    box-shadow: 0 8px 24px rgba(239, 68, 68, 0.2), 0 0 12px rgba(239, 68, 68, 0.15) inset;
+    backdrop-filter: blur(16px);
+    border-radius: 12px;
+    padding: 12px 14px;
+    animation: slideDownBanner 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideDownBanner {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.pending-action-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pending-badge-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pending-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #f1f5f9;
+    flex: 1;
+}
+
+.risk-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 6px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.risk-badge.privileged {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    color: #fca5a5;
+}
+
+.risk-badge.external_write {
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.5);
+    color: #fcd34d;
+}
+
+.pending-timer {
+    font-size: 11px;
+    font-weight: 700;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.pending-desc-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.pending-tool {
+    font-family: monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #38bdf8;
+}
+
+.pending-args {
+    font-family: monospace;
+    font-size: 10px;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pending-actions-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.action-btn {
+    flex: 1;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+}
+
+.action-btn.approve {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.action-btn.approve:hover {
+    filter: brightness(1.15);
+    transform: translateY(-1px);
+}
+
+.action-btn.reject {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+.action-btn.reject:hover {
+    background: rgba(239, 68, 68, 0.3);
+}
+
+/* ==========================================================================
+   COMPARTILHAMENTO DE TELA & VISÃO MULTIMODAL
+   ========================================================================== */
+.icon-action-btn.active-screen {
+    background: rgba(16, 185, 129, 0.25) !important;
+    border-color: #10b981 !important;
+    color: #34d399 !important;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.4) !important;
+    animation: screenPulse 2s infinite ease-in-out;
+}
+
+@keyframes screenPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+    50% { box-shadow: 0 0 16px rgba(16, 185, 129, 0.7); }
+}
+
+/* ==========================================================================
+   ABA DE MEMÓRIA & STATS ADK
+   ========================================================================== */
+.memory-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.memory-stats-grid .stat-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.memory-stats-grid .stat-num {
+    font-size: 16px;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.memory-stats-grid .stat-num.green {
+    color: #34d399;
+}
+
+.memory-stats-grid .stat-lbl {
+    font-size: 10px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.memory-search-box {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.memory-input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: #f8fafc;
+    outline: none;
+}
+
+.memory-input:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 8px rgba(96, 165, 250, 0.3);
+}
+
+.memory-results-list {
+    max-height: 180px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.memory-empty-hint {
+    font-size: 11px;
+    color: #64748b;
+    text-align: center;
+    padding: 12px;
+}
+
+.memory-item {
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 2px solid #60a5fa;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #cbd5e1;
+}
+
+.voice-badge-tag.special {
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(168, 85, 247, 0.2));
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #c084fc;
+}
+

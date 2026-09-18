@@ -13,6 +13,8 @@ import time
 import socket
 import asyncio
 import logging
+import urllib.request
+import urllib.error
 from typing import Dict, Optional
 
 import secrets
@@ -38,12 +40,14 @@ from agentes.assistente import (
     MODELO_LIVE_RESERVA,
 )
 from agentes.roteador import escolher_caminho, CAMINHO_RAPIDO, CAMINHO_COMPLEXO
+from agentes.computer_use.agente import MODELO_COMPUTER, criar_agente_computer_use
 from google import genai
 from google.genai import types
 
 import system_tools
 from plugin_manager import plugin_manager
 import gemini_bridge
+from provider_router import provider_router, GoogleStudioProvider, OmniRouteProvider
 from monitoring.logger import (
     logger, record_event, get_recent_events,
     get_telemetry_summary, clear_logs, TEXT_LOG_FILE
@@ -61,18 +65,24 @@ CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "30")
 # Silêncio do assistente (segundos) a partir do qual o microfone volta a ser encaminhado
 MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "1.0"))
 
+# Caminho interno do agente de Computer Use (navegador Chromium via Playwright)
+CAMINHO_COMPUTADOR = "computador"
+
 
 def liberar_controle_da_sessao(session_id: str) -> None:
-    """Encerra a autoridade física ao fim da sessão dona da lease.
+    """Encerra a autoridade física e do agente ao fim da sessão dona da lease.
 
-    Sessões que não são donas da lease não mexem no Modo Controle de quem é.
+    Sessões que não são donas da lease não mexem no Modo Controle ou IDE de quem é.
     """
-    if policy_engine.control_lease_status().get("owner") != session_id:
-        return
-    if system_tools.get_control_mode():
-        system_tools.set_control_mode(False)
-    lease = policy_engine.revoke_control_lease(session_id=session_id)
-    record_event("control_lease_released", lease)
+    if policy_engine.control_lease_status().get("owner") == session_id:
+        if system_tools.get_control_mode():
+            system_tools.set_control_mode(False)
+        lease = policy_engine.revoke_control_lease(session_id=session_id)
+        record_event("control_lease_released", lease)
+
+    if policy_engine.ide_lease_status().get("owner") == session_id:
+        lease_ide = policy_engine.revoke_ide_lease(session_id=session_id)
+        record_event("ide_lease_released", lease_ide)
     logger.info("Sessão encerrada: Modo Controle desativado e lease de controle revogada.")
 
 async def verify_jarvis_token(
@@ -132,22 +142,8 @@ async def get_debug_dashboard():
 ACTIVE_AI_PROVIDER = os.environ.get("AI_PROVIDER", "google_studio")
 
 def check_omniroute_status() -> dict:
-    """Verifica se o OmniRoute (segundo provedor) está operacional em localhost:20128."""
-    try:
-        with socket.create_connection(("127.0.0.1", 20128), timeout=0.3):
-            return {
-                "online": True,
-                "url": os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1"),
-                "combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
-                "accounts": 7
-            }
-    except Exception:
-        return {
-            "online": False,
-            "url": os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1"),
-            "combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
-            "accounts": 0
-        }
+    """Verifica se o OmniRoute (segundo provedor) está operacional via OmniRouteProvider."""
+    return OmniRouteProvider.check_status()
 
 @app.get("/health")
 @app.get("/api/health")
@@ -162,9 +158,9 @@ async def health_check():
         "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
         "primary_provider": "google_studio",
         "secondary_provider": "omniroute",
-        "active_provider": ACTIVE_AI_PROVIDER,
+        "active_provider": provider_router.active_provider,
         "omniroute_online": omni["online"],
-        "omniroute_combo": os.environ.get("OMNIROUTE_COMBO", "jarvis"),
+        "omniroute_combo": omni["combo"],
         "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
     }
 
@@ -174,9 +170,10 @@ async def get_providers_endpoint():
     key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
     has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
     omni = check_omniroute_status()
+    act = provider_router.active_provider
 
     return {
-        "active": ACTIVE_AI_PROVIDER,
+        "active": act,
         "primary": "google_studio",
         "secondary": "omniroute",
         "providers": [
@@ -185,7 +182,7 @@ async def get_providers_endpoint():
                 "name": "Google AI Studio API",
                 "tier": "primary",
                 "is_primary": True,
-                "is_active": ACTIVE_AI_PROVIDER == "google_studio",
+                "is_active": act == "google_studio",
                 "status": "online" if has_key else "missing_keys",
                 "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
                 "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
@@ -197,77 +194,34 @@ async def get_providers_endpoint():
                 "name": "OmniRoute Proxy",
                 "tier": "secondary",
                 "is_secondary": True,
-                "is_active": ACTIVE_AI_PROVIDER == "omniroute",
+                "is_active": act == "omniroute",
                 "status": "online" if omni["online"] else "offline",
                 "url": omni["url"],
                 "combo": omni["combo"],
                 "accounts_count": omni["accounts"],
-                "features": ["Failover Automático (Rate Limit 429)", "Pool de 7 Contas", "Balanceamento Round-Robin", "Porta :20128"],
+                "features": ["Failover Automático (Rate Limit 429)", "Balanceamento Round-Robin", "Porta :20128"],
                 "description": "Segundo provedor local de inteligência e contingência para alta disponibilidade."
             }
         ]
     }
 
 @app.post("/api/providers/select")
-async def select_provider_endpoint(payload: dict):
+async def select_provider_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     global ACTIVE_AI_PROVIDER
     chosen = (payload.get("provider") or "").strip().lower()
-    if chosen in ("google_studio", "omniroute"):
-        ACTIVE_AI_PROVIDER = chosen
-        record_event("provider_changed", {"provider": chosen})
-        logger.info(f"Provedor ativo de IA alterado para: {chosen}")
+    if provider_router.set_active_provider(chosen):
+        ACTIVE_AI_PROVIDER = provider_router.active_provider
+        record_event("provider_changed", {"provider": ACTIVE_AI_PROVIDER})
+        logger.info(f"Provedor ativo de IA alterado para: {ACTIVE_AI_PROVIDER}")
         return {"status": "ok", "active": ACTIVE_AI_PROVIDER}
     return {"status": "erro", "mensagem": "Provedor inválido. Escolha 'google_studio' ou 'omniroute'."}
 
 @app.post("/api/providers/test")
 async def test_providers_endpoint():
-    results = {}
-    # 1. Teste Google AI Studio
-    t0 = time.time()
-    google_ok = False
-    google_err = None
-    parsed_keys = []
-    try:
-        raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-        parsed_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-        single_key = os.environ.get("GEMINI_API_KEY")
-        if single_key and single_key not in parsed_keys:
-            parsed_keys.insert(0, single_key)
-        if parsed_keys:
-            client_test = genai.Client(api_key=parsed_keys[0])
-            google_ok = bool(client_test)
-            lat_google = round((time.time() - t0) * 1000)
-        else:
-            google_err = "Nenhuma chave configurada no pool."
-            lat_google = 0
-    except Exception as exc:
-        google_err = str(exc)
-        lat_google = round((time.time() - t0) * 1000)
-
-    results["google_studio"] = {
-        "status": "online" if google_ok else "erro",
-        "latency_ms": lat_google,
-        "is_primary": True,
-        "accounts": len(parsed_keys),
-        "error": google_err
-    }
-
-    # 2. Teste OmniRoute
-    t1 = time.time()
-    omni = check_omniroute_status()
-    lat_omni = round((time.time() - t1) * 1000)
-    results["omniroute"] = {
-        "status": "online" if omni["online"] else "offline",
-        "latency_ms": lat_omni,
-        "is_secondary": True,
-        "accounts": omni["accounts"],
-        "url": omni["url"],
-        "combo": omni["combo"]
-    }
-
+    results = await provider_router.test_all()
     return {
         "status": "ok",
-        "active": ACTIVE_AI_PROVIDER,
+        "active": provider_router.active_provider,
         "results": results
     }
 
@@ -355,7 +309,9 @@ async def test_all_accounts():
                 cl._api_client._websocket_ssl_ctx["ping_timeout"] = None
 
             test_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
-            test_config = types.LiveConnectConfig(response_modalities=[types.Modality.TEXT])
+            # Modelos native-audio só aceitam áudio; exigir TEXT gera falso "chave inválida".
+            modalidades = [types.Modality.AUDIO] if "native-audio" in test_model else [types.Modality.TEXT]
+            test_config = types.LiveConnectConfig(response_modalities=modalidades)
             async with cl.aio.live.connect(model=test_model, config=test_config) as s:
                 await s.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text="ping")]),
@@ -542,6 +498,8 @@ def obter_runner_adk(tipo: str) -> Runner:
             agente = criar_agente_coordenador()
         elif tipo == "voz":
             agente = criar_agente_de_voz()
+        elif tipo == CAMINHO_COMPUTADOR:
+            agente = criar_agente_computer_use(MODELO_COMPUTER)
         else:
             raise ValueError(f"Tipo de runner desconhecido: {tipo}")
 
@@ -623,6 +581,96 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
         return {"status": "rejeitado", "action_id": action_id}
 
 
+async def chamar_omniroute_chat(texto: str) -> str:
+    """Executa chat completion de contingência via OmniRoute HTTP local (2º provedor)."""
+    url_omni = os.environ.get("OMNIROUTE_URL", "http://127.0.0.1:20128/v1").rstrip("/") + "/chat/completions"
+    key_omni = os.environ.get("OMNIROUTE_API_KEY", "")
+    payload_omni = json.dumps({
+        "model": os.environ.get("OMNIROUTE_MODEL", "gemini-2.5-flash"),
+        "messages": [{"role": "user", "content": texto}]
+    }).encode("utf-8")
+    req_omni = urllib.request.Request(
+        url_omni,
+        data=payload_omni,
+        headers={"Authorization": f"Bearer {key_omni}", "Content-Type": "application/json"},
+        method="POST"
+    )
+    loop = asyncio.get_running_loop()
+
+    def _chamar():
+        with urllib.request.urlopen(req_omni, timeout=float(os.environ.get("OMNIROUTE_TIMEOUT", "30.0"))) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    resp_json = await loop.run_in_executor(None, _chamar)
+    escolhas = resp_json.get("choices", [])
+    if escolhas and "message" in escolhas[0]:
+        return escolhas[0]["message"].get("content", "").strip()
+    raise RuntimeError("Resposta OmniRoute em formato inesperado.")
+
+
+@app.post("/api/computer/mode")
+async def alternar_modo_computador(payload: dict, _=Depends(verify_jarvis_token)):
+    """Ativa/desativa a lease do Modo Computador (navegador via Computer Use).
+
+    Ativar exige confirmação prévia registrada (fluxo de pendências do PolicyEngine).
+    Desativar revoga a lease e fecha o Chromium compartilhado do runner.
+    """
+    ativo = bool(payload.get("ativo"))
+    sessao = payload.get("sessao") or "sessao-principal"
+    usuario = payload.get("usuario") or "local"
+
+    if not ativo:
+        lease = policy_engine.revoke_computer_lease(session_id=sessao)
+        runner = runners_adk.get(CAMINHO_COMPUTADOR)
+        if runner is not None:
+            for ferramenta in getattr(runner.agent, "tools", []):
+                fechar = getattr(ferramenta, "close", None)
+                if callable(fechar):
+                    try:
+                        await fechar()
+                    except Exception as erro:
+                        logger.warning("Falha ao fechar navegador: %s", erro)
+        return {"status": "ok", "modo_computador": lease, "navegador": "fechado"}
+
+    if policy_engine.is_computer_lease_active(sessao):
+        return {"status": "ok", "modo_computador": policy_engine.computer_lease_status()}
+
+    args_modo = {"enabled": True, "descricao": "Ativação do Modo Computador (navegação em Chromium)"}
+    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
+    modo_pendente = next((p for p in pendentes if p.tool_name == "set_computer_mode"), None)
+    if modo_pendente is not None and modo_pendente.status == "pending":
+        return {
+            "status": "aguardando_confirmacao",
+            "id_confirmacao": modo_pendente.action_id,
+            "sessao": sessao,
+            "mensagem": f"Confirme a ativação do Modo Computador (id {modo_pendente.action_id[:8]}).",
+        }
+
+    if policy_engine.consume_authorization(
+        tool_name="set_computer_mode",
+        args=args_modo,
+        session_id=sessao,
+        user_id=usuario,
+    ):
+        lease = policy_engine.grant_computer_lease(owner=sessao)
+        logger.info("Modo Computador concedido à sessão '%s' por %ss.", sessao, lease["segundos_restantes"])
+        return {"status": "ok", "modo_computador": lease}
+
+    modo_pendente = policy_engine.create_pending_action(
+        tool_name="set_computer_mode",
+        args=args_modo,
+        session_id=sessao,
+        user_id=usuario,
+        ttl=60.0,
+    )
+    return {
+        "status": "aguardando_confirmacao",
+        "id_confirmacao": modo_pendente.action_id,
+        "sessao": sessao,
+        "mensagem": f"Confirme a ativação do Modo Computador (id {modo_pendente.action_id[:8]}).",
+    }
+
+
 @app.post("/api/chat")
 async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     """Turno textual unificado: o roteador escolhe entre o agente rápido e o coordenador."""
@@ -633,6 +681,13 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     usuario = payload.get("usuario", "local")
     sessao = payload.get("sessao", "sessao-principal")
     caminho_forcado = payload.get("caminho")
+    marcas_navegador = (
+        "modo computador",
+        "use o navegador",
+        "controle o navegador",
+        "controlar o navegador",
+        "navegação automática",
+    )
 
     # Verifica palavras de confirmação verbal ou digitada do usuário
     palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
@@ -648,12 +703,20 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
             texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
             caminho_forcado = "complexo"
 
-    if caminho_forcado in ("rapido", "complexo"):
+    texto_min = texto.lower()
+    if caminho_forcado in ("rapido", "complexo", CAMINHO_COMPUTADOR):
         caminho, motivo = caminho_forcado, "escolha explícita"
+    elif any(marca in texto_min for marca in marcas_navegador):
+        caminho, motivo = CAMINHO_COMPUTADOR, "solicitação de operação do navegador (Computer Use)"
     else:
         caminho, motivo = escolher_caminho(texto)
 
-    tipo_runner = "rapido" if caminho == CAMINHO_RAPIDO else "coordenador"
+    if caminho == CAMINHO_RAPIDO:
+        tipo_runner = "rapido"
+    elif caminho == CAMINHO_COMPUTADOR:
+        tipo_runner = CAMINHO_COMPUTADOR
+    else:
+        tipo_runner = "coordenador"
     runner = obter_runner_adk(tipo_runner)
 
     try:
@@ -665,7 +728,9 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
 
     resposta = ""
     ferramentas_executadas = []
-    
+    resposta_ok = False
+    ultimo_erro = None
+
     for tentativa in range(4):
         runner = obter_runner_adk(tipo_runner)
         try:
@@ -681,18 +746,48 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
                         ferramentas_executadas.append(parte.function_call.name)
                     if parte.text and evento.is_final_response():
                         resposta += parte.text
+            resposta_ok = True
             break
         except Exception as err:
             err_str = str(err)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            if any(marca in err_str for marca in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE")):
+                ultimo_erro = err
                 if girar_chave_adk():
                     continue
+                if tipo_runner == CAMINHO_COMPUTADOR:
+                    # O modelo de texto reserva não entende a config computer_use.
+                    logger.warning("Modelo de Computer Use indisponível (%s).", err)
+                    break
+                logger.warning("Modelo de texto indisponível (%s). Acionando segundo provedor.", err)
+                break
             logger.warning("Falha na execução do ADK run_async (%s).", err)
             return JSONResponse({
                 "status": "erro",
                 "mensagem": f"Erro na execução do agente: {err}",
                 "caminho": caminho
             }, status_code=500)
+
+    if not resposta_ok:
+        # Failover automático para o segundo provedor (OmniRoute)
+        logger.info("Google AI Studio indisponível. Acionando OmniRoute (:20128) como segundo provedor...")
+        try:
+            resp_texto = await chamar_omniroute_chat(texto)
+            return {
+                "status": "ok",
+                "caminho": caminho,
+                "motivo_do_roteamento": "Failover: Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
+                "provedor": "omniroute",
+                "modelo": "omniroute/gemini-2.5-flash",
+                "resposta": resp_texto,
+                "ferramentas": [],
+            }
+        except Exception as omni_err:
+            logger.warning("Falha também no segundo provedor OmniRoute: %s", omni_err)
+            return JSONResponse({
+                "status": "erro",
+                "caminho": caminho,
+                "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}"
+            }, status_code=503)
 
     # Ingestão assíncrona da sessão na memória de longo prazo (background task)
     async def _salvar_memoria_bg():
@@ -789,6 +884,8 @@ async def live_adk(
                             mime_type="image/jpeg",
                         )
                     )
+            elif tipo in ("fim_do_audio", "end_of_audio", "audio_stream_end"):
+                fila.send_audio_stream_end()
             elif tipo in ("texto", "text"):
                 texto_msg = msg.get("texto", "").strip()
                 palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
@@ -990,30 +1087,41 @@ async def websocket_live_endpoint(websocket: WebSocket):
     req_model = (init_data.get("model") or "").strip()
     model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
     req_provider = (init_data.get("provider") or "").strip() or ACTIVE_AI_PROVIDER
+    allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
+    activity_handling = (
+        types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        if allow_barge_in
+        else types.ActivityHandling.NO_INTERRUPTION
+    )
 
-    config = types.LiveConnectConfig(
-        response_modalities=[types.Modality.AUDIO],
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-        speech_config=types.SpeechConfig(
+    live_connect_kwargs = {
+        "response_modalities": [types.Modality.AUDIO],
+        "speech_config": types.SpeechConfig(
             language_code=os.environ.get("JARVIS_LANGUAGE", "pt-BR"),
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
             )
         ),
-        system_instruction=types.Content(
+        "system_instruction": types.Content(
             parts=[types.Part(text=JARVIS_SYSTEM_INSTRUCTION)]
         ),
-        tools=build_gemini_tools(),
-        input_audio_transcription=types.AudioTranscriptionConfig(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        realtime_input_config=types.RealtimeInputConfig(
-            activity_handling=types.ActivityHandling.NO_INTERRUPTION
+        "tools": build_gemini_tools(),
+        "input_audio_transcription": types.AudioTranscriptionConfig(),
+        "output_audio_transcription": types.AudioTranscriptionConfig(),
+        "realtime_input_config": types.RealtimeInputConfig(
+            activity_handling=activity_handling
         ),
         # Sessões com vídeo duram ~2 min sem compressão; a janela deslizante evita o corte
-        context_window_compression=types.ContextWindowCompressionConfig(
+        "context_window_compression": types.ContextWindowCompressionConfig(
             sliding_window=types.SlidingWindow()
         )
-    )
+    }
+
+    # Modelos como gemini-3.8-live instruem explicitamente a omitir thinking_config
+    if "3.8" not in model_name:
+        live_connect_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+
+    config = types.LiveConnectConfig(**live_connect_kwargs)
 
     # Isolamento de Segredos: Pool de contas lidas estritamente do backend (.env)
     raw_keys = os.environ.get("GEMINI_API_KEYS", "")
@@ -1049,6 +1157,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 })
                 # Identidade desta sessão: a lease de controle físico pertence a ela
                 sessao_id = secrets.token_urlsafe(12)
+                # A sessão Live nativa é a única identidade: dona E usuária das leases do Modo IDE
+                usuario_id = sessao_id
                 await websocket.send_json({
                     "type": "connected",
                     "message": f"Sistemas online. Conectado via {req_provider} ({model_name}) com a voz {voice_name}.",
@@ -1067,6 +1177,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "type": "control_mode",
                     "active": system_tools.get_control_mode() and policy_engine.is_control_lease_active(sessao_id),
                     "lease": policy_engine.control_lease_status()
+                })
+                await websocket.send_json({
+                    "type": "computer_mode",
+                    "active": policy_engine.is_computer_lease_active(sessao_id),
+                    "lease": policy_engine.computer_lease_status()
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
                 assistant_state = {
@@ -1124,13 +1239,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 agora = time.time()
                                 esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 3.5)
                                 falando_agora = (agora - assistant_state["ultimo_audio"] < MIC_GRACE_S)
-                                if not esperando_resposta and not falando_agora:
+                                if allow_barge_in or (not esperando_resposta and not falando_agora):
                                     await session.send_realtime_input(
                                         audio=types.Blob(
                                             data=pcm_data,
                                             mime_type="audio/pcm;rate=16000"
                                         )
                                     )
+
+                        elif msg_type in ("audio_stream_end", "end_of_audio", "fim_do_audio"):
+                            record_event("user_audio_stream_end")
+                            await session.send_realtime_input(audio_stream_end=True)
 
                         elif msg_type == "text":
                             user_text = msg.get("text", "").strip()
@@ -1378,6 +1497,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             await websocket.send_json({
                                                 "type": "control_mode",
                                                 "active": res.get("control_mode", False),
+                                                "lease": lease,
+                                                "data": res
+                                            })
+
+                                        if func_name == "set_ide_mode":
+                                            # A lease dá autoridade temporária ao agente Antigravity
+                                            if res.get("sucesso") and res.get("ide_mode"):
+                                                lease = policy_engine.grant_ide_lease(owner=sessao_id, user_id=usuario_id)
+                                                record_event("ide_lease_granted", lease)
+                                            else:
+                                                lease = policy_engine.revoke_ide_lease(session_id=sessao_id, user_id=usuario_id)
+                                                record_event("ide_lease_revoked", lease)
+                                            await websocket.send_json({
+                                                "type": "ide_mode",
+                                                "active": res.get("ide_mode", False),
                                                 "lease": lease,
                                                 "data": res
                                             })
