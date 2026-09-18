@@ -1,0 +1,34 @@
+[
+  {
+    "ticker": "NVDA",
+    "nome": "NVIDIA Corporation",
+    "setor": "Tecnologia / Semicondutores",
+    "quantidade": 25,
+    "preco_medio": 115.50,
+    "cotacao_atual": 138.20
+  },
+  {
+    "ticker": "BTC",
+    "nome": "Bitcoin",
+    "setor": "Criptoativos",
+    "quantidade": 0.45,
+    "preco_medio": 58000.0,
+    "cotacao_atual": 64200.0
+  },
+  {
+    "ticker": "PETR4",
+    "nome": "Petrobras PN",
+    "setor": "Energia / Petróleo",
+    "quantidade": 300,
+    "preco_medio": 36.20,
+    "cotacao_atual": 39.10
+  },
+  {
+    "ticker": "IVVB11",
+    "nome": "iShares S&P 500 ETF",
+    "setor": "Índice Global",
+    "quantidade": 50,
+    "preco_medio": 290.0,
+    "cotacao_atual": 325.40
+  }
+]

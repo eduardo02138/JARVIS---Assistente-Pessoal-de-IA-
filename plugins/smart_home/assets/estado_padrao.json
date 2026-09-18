@@ -1,0 +1,13 @@
+{
+  "lights": {
+    "escritorio": {"ligado": true, "cor": "Ciano Holográfico", "brilho": 80},
+    "quarto": {"ligado": false, "cor": "Branco Quente", "brilho": 40},
+    "sala": {"ligado": true, "cor": "Branco Neutro", "brilho": 60}
+  },
+  "clima": {"temperatura": "22°C", "modo": "Refrigeração Nominal", "umidade": "55%"},
+  "cenas": {
+    "foco": {"escritorio": {"ligado": true, "cor": "Ciano Stark", "brilho": 90}},
+    "cinema": {"sala": {"ligado": true, "cor": "Âmbar Suave", "brilho": 20}, "escritorio": {"ligado": false, "cor": "Apagado", "brilho": 0}},
+    "descanso": {"apagar_todas": true}
+  }
+}

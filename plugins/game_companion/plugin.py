@@ -5,13 +5,37 @@ localização e inicialização de jogos instalados (Steam, Lutris, Heroic, etc.
 Inclui worker assíncrono para monitoramento e notificação de timers expirados.
 """
 
+import json
 import time
 import asyncio
 import logging
+import os
 from typing import Optional, Dict, List
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.game_companion")
+
+ASSETS_ESTRATEGIAS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "estrategias.json")
+
+# Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
+DICAS_FALLBACK = [
+    "Mantenha a vantagem de terreno elevado e explore a mobilidade contra {alvo}.",
+    "Foque no controle de grupo (crowd control) e não engaje sem suporte da equipe contra {alvo}.",
+    "Monitore as recargas das habilidades chave de {alvo} antes de avançar.",
+]
+
+
+def _carregar_dicas() -> List[str]:
+    """Lê as dicas táticas da camada L3 (assets/) com fallback embutido."""
+    try:
+        with open(ASSETS_ESTRATEGIAS, encoding="utf-8") as f:
+            dados = json.load(f)
+        dicas = dados.get("dicas", []) if isinstance(dados, dict) else dados
+        if isinstance(dicas, list) and dicas:
+            return dicas
+    except Exception as e:
+        logger.warning("Estratégias (assets) indisponíveis; usando fallback embutido: %s", e)
+    return DICAS_FALLBACK
 
 class GameCompanionPlugin(JarvisPlugin):
     def __init__(self):
@@ -191,11 +215,7 @@ class GameCompanionPlugin(JarvisPlugin):
         }
 
     def get_strategy(self, target_character_or_boss: str) -> dict:
-        dicas = [
-            f"Mantenha a vantagem de terreno elevado e explore a mobilidade contra {target_character_or_boss}.",
-            f"Foque no controle de grupo (crowd control) e não engaje sem suporte da equipe contra {target_character_or_boss}.",
-            f"Monitore as recargas das habilidades chave de {target_character_or_boss} antes de avançar."
-        ]
+        dicas = [_dica.format(alvo=target_character_or_boss) for _dica in _carregar_dicas()]
         return {
             "sucesso": True,
             "alvo": target_character_or_boss,

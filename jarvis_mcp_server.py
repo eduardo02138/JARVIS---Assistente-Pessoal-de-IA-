@@ -146,6 +146,92 @@ def jarvis_read_bridge_audit(limit: int = 20) -> str:
     except Exception as e:
         return json.dumps({"erro": f"Falha ao ler audit.jsonl: {str(e)}"}, ensure_ascii=False)
 
+
+# ---------------- FERRAMENTAS DE PLUG-INS (Habilidades ADK) ----------------
+# Expõe as ferramentas de todos os plug-ins ativos pelo protocolo MCP, com os
+# mesmos nomes, descrições e parâmetros declarados no Plugin SDK e no Policy Engine.
+
+_MCP_TIPO_PARA_PYTHON = {
+    "STRING": str,
+    "INTEGER": int,
+    "NUMBER": float,
+    "BOOLEAN": bool,
+    "OBJECT": dict,
+    "ARRAY": list,
+}
+
+
+def _registrar_ferramentas_de_plugins():
+    """Registra dinamicamente cada ferramenta ativa dos plug-ins como tool do MCP."""
+    import inspect
+    from plugin_manager import plugin_manager
+
+    registradas = set()
+    for plugin in plugin_manager._plugins.values():
+        if not plugin.meta.enabled:
+            continue
+        for spec in plugin.get_tools():
+            nome_mcp = f"jarvis_plugin_{spec.name}"
+
+            parametros: list[inspect.Parameter] = []
+            schema = spec.parameters or {}
+            properties = schema.get("properties", {})
+            obrigatorios = set(schema.get("required", []))
+
+            for campo, descricao in properties.items():
+                tipo_py = _MCP_TIPO_PARA_PYTHON.get(
+                    (descricao or {}).get("type", "STRING"), str
+                )
+                if campo in obrigatorios:
+                    parametros.append(
+                        inspect.Parameter(
+                            campo, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            annotation=tipo_py,
+                        )
+                    )
+                else:
+                    parametros.append(
+                        inspect.Parameter(
+                            campo, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            annotation=tipo_py, default=None,
+                        )
+                    )
+
+            def _criar_wrapper(plugin_inst, tool_spec):
+                def _wrapper(**kwargs):
+                    try:
+                        resultado = tool_spec.handler(**kwargs)
+                        return json.dumps(resultado, indent=2, ensure_ascii=False, default=str)
+                    except Exception as e:
+                        return json.dumps({
+                            "sucesso": False,
+                            "ferramenta": tool_spec.name,
+                            "erro": str(e),
+                        }, indent=2, ensure_ascii=False)
+
+                _wrapper.__name__ = nome_mcp
+                _wrapper.__qualname__ = nome_mcp
+                _wrapper.__doc__ = tool_spec.description
+                _wrapper.__signature__ = inspect.Signature(parametros)
+                return _wrapper
+
+            wrapper = _criar_wrapper(plugin, spec)
+            if nome_mcp in registradas:
+                continue
+            try:
+                server.tool()(wrapper)
+                registradas.add(nome_mcp)
+            except Exception as e:
+                print(f"[MCP] Falha ao registrar '{nome_mcp}': {e}")
+
+
+# Registra as ferramentas de plug-ins no boot do servidor MCP
+try:
+    _registrar_ferramentas_de_plugins()
+except Exception as e:
+    print(f"[MCP] Falha ao registrar ferramentas de plug-ins: {e}")
+
+
 if __name__ == "__main__":
     server.run(transport="stdio")
 

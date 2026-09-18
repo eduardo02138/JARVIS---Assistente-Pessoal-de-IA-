@@ -20,11 +20,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HT
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from policy_engine import policy_engine
+from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.adk.agents import LiveRequestQueue
 from google.adk.agents.run_config import RunConfig
 from google.genai.errors import ClientError, ServerError
+from agentes.memoria import JarvisMemoryService
 from agentes.assistente import (
     criar_agente_rapido,
     criar_agente_coordenador,
@@ -286,6 +289,10 @@ async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     enabled = payload.get("enabled")
     res = plugin_manager.toggle_plugin(plugin_id, enabled)
+    try:
+        runners_adk.clear()
+    except NameError:
+        pass
     record_event("plugin_toggle", {"plugin_id": plugin_id, "result": res})
     return res
 
@@ -500,6 +507,7 @@ def _criar_session_service_adk() -> BaseSessionService:
         return InMemorySessionService()
 
 session_service_adk = _criar_session_service_adk()
+memory_service_adk = JarvisMemoryService()
 runners_adk: dict[str, Runner] = {}
 
 _indice_chave_adk = 0
@@ -532,10 +540,28 @@ def obter_runner_adk(tipo: str) -> Runner:
             agente = criar_agente_de_voz()
         else:
             raise ValueError(f"Tipo de runner desconhecido: {tipo}")
+
+        compaction_config = EventsCompactionConfig(
+            token_threshold=int(os.environ.get("COMPACTION_TOKEN_THRESHOLD", 4000)),
+            event_retention_size=int(os.environ.get("COMPACTION_RETENTION_SIZE", 5)),
+            compaction_interval=int(os.environ.get("COMPACTION_INTERVAL", 10)),
+            overlap_size=int(os.environ.get("COMPACTION_OVERLAP_SIZE", 2)),
+        )
+        cache_config = ContextCacheConfig(
+            min_tokens=int(os.environ.get("CONTEXT_CACHE_MIN_TOKENS", 2048)),
+            ttl_seconds=int(os.environ.get("CONTEXT_CACHE_TTL_SECONDS", 600)),
+            cache_intervals=int(os.environ.get("CONTEXT_CACHE_INTERVALS", 5)),
+        )
+        app_obj = App(
+            name="assistente",
+            root_agent=agente,
+            events_compaction_config=compaction_config,
+            context_cache_config=cache_config,
+        )
         runners_adk[tipo] = Runner(
-            agent=agente,
+            app=app_obj,
             session_service=session_service_adk,
-            app_name="assistente",
+            memory_service=memory_service_adk,
         )
     return runners_adk[tipo]
 
@@ -664,6 +690,19 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho
             }, status_code=500)
 
+    # Ingestão assíncrona da sessão na memória de longo prazo (background task)
+    async def _salvar_memoria_bg():
+        try:
+            sess_obj = await session_service_adk.get_session(
+                app_name="assistente", user_id=usuario, session_id=sessao
+            )
+            if sess_obj:
+                await memory_service_adk.add_session_to_memory(sess_obj)
+        except Exception as e:
+            logger.warning("Falha ao salvar sessão na memória de longo prazo: %s", e)
+
+    asyncio.create_task(_salvar_memoria_bg())
+
     return {
         "status": "ok",
         "caminho": caminho,
@@ -679,6 +718,7 @@ async def live_adk(
     websocket: WebSocket,
     usuario: str = Query("local"),
     sessao: str = Query("sessao-principal"),
+    origem: str = Query(""),
 ):
     """Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado."""
     await websocket.accept()
@@ -692,8 +732,16 @@ async def live_adk(
         return
 
     if not init_data or init_data.get("type") != "init" or init_data.get("token") != JARVIS_SECRET_TOKEN:
-        logger.warning("Tentativa de conexão WebSocket /ws/live_adk não autorizada: token inválido ou ausente.")
-        record_event("auth_error", {"source": "ws_live_adk", "reason": "invalid_or_missing_token"})
+        origem_teste = origem == "teste"
+        if origem_teste:
+            logger.info("[TESTE] Rejeição de WebSocket /ws/live_adk sem token: comportamento esperado.")
+        else:
+            logger.warning("Tentativa de conexão WebSocket /ws/live_adk não autorizada: token inválido ou ausente.")
+        record_event("auth_error", {
+            "source": "ws_live_adk",
+            "reason": "invalid_or_missing_token",
+            "origem": origem_teste and "teste" or "real",
+        })
         try:
             await websocket.send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
         except Exception:
@@ -716,15 +764,26 @@ async def live_adk(
     async def do_cliente_para_o_agente():
         while True:
             msg = json.loads(await websocket.receive_text())
-            tipo = msg.get("tipo")
+            tipo = msg.get("tipo") or msg.get("type")
             if tipo == "audio":
-                fila.send_realtime(
-                    types.Blob(
-                        data=base64.b64decode(msg["dados"]),
-                        mime_type="audio/pcm;rate=16000",
+                audio_b64 = msg.get("dados") or msg.get("data")
+                if audio_b64:
+                    fila.send_realtime(
+                        types.Blob(
+                            data=base64.b64decode(audio_b64),
+                            mime_type="audio/pcm;rate=16000",
+                        )
                     )
-                )
-            elif tipo == "texto":
+            elif tipo in ("video", "imagem", "screen_frame"):
+                frame_b64 = msg.get("dados") or msg.get("data")
+                if frame_b64:
+                    fila.send_realtime(
+                        types.Blob(
+                            data=base64.b64decode(frame_b64),
+                            mime_type="image/jpeg",
+                        )
+                    )
+            elif tipo in ("texto", "text"):
                 texto_msg = msg.get("texto", "").strip()
                 palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
                 palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
@@ -851,6 +910,14 @@ async def live_adk(
                 await websocket.send_json({"tipo": "interrompido"})
             if evento.turn_complete:
                 await websocket.send_json({"tipo": "turno_concluido"})
+                try:
+                    sess_obj = await session_service_adk.get_session(
+                        app_name="assistente", user_id=usuario, session_id=sessao
+                    )
+                    if sess_obj:
+                        asyncio.create_task(memory_service_adk.add_session_to_memory(sess_obj))
+                except Exception:
+                    pass
 
     try:
         async with asyncio.TaskGroup() as tg:
@@ -866,6 +933,14 @@ async def live_adk(
             pass
     finally:
         fila.close()
+        try:
+            sess_obj = await session_service_adk.get_session(
+                app_name="assistente", user_id=usuario, session_id=sessao
+            )
+            if sess_obj:
+                await memory_service_adk.add_session_to_memory(sess_obj)
+        except Exception as e:
+            logger.warning("Falha ao salvar sessão Live na memória de longo prazo: %s", e)
 
 
 @app.websocket("/ws/live")
@@ -887,8 +962,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # Autenticação de Sessão no Handshake do WebSocket
     client_token = init_data.get("token") or websocket.query_params.get("token")
     if client_token != JARVIS_SECRET_TOKEN:
-        logger.warning("Tentativa de conexão WebSocket não autorizada: token inválido ou ausente.")
-        record_event("auth_error", {"source": "ws_live", "reason": "invalid_or_missing_token"})
+        origem_teste = websocket.query_params.get("origem") == "teste"
+        if origem_teste:
+            logger.info("[TESTE] Rejeição de WebSocket /ws/live sem token: comportamento esperado.")
+        else:
+            logger.warning("Tentativa de conexão WebSocket não autorizada: token inválido ou ausente.")
+        record_event("auth_error", {
+            "source": "ws_live",
+            "reason": "invalid_or_missing_token",
+            "origem": origem_teste and "teste" or "real",
+        })
         await websocket.send_json({"type": "error", "message": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
         await websocket.close(code=1008, reason="Unauthorized")
         return

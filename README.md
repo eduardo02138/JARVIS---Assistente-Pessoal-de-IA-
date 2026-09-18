@@ -146,6 +146,20 @@ Além da bridge customizada do JARVIS, o projeto conta com um módulo nativo bas
   - **Texto & Sub-agentes**: `gemini-flash-latest` com failover automático em caso de 503 para `gemini-2.5-flash`.
 - **Rotação Automática de Chaves**: Caso uma chave atinja a cota (HTTP 429), o sistema faz o failover transparente para a próxima chave configurada em `GEMINI_API_KEYS`.
 
+### 🧩 Habilidades ADK (`adk_skill_loader.py`)
+
+Cada plug-in traz uma **Skill ADK** no padrão oficial (L1 frontmatter, L2 corpo, L3 recursos):
+- **L1/L2**: `plugins/<id>/SKILL.md` — frontmatter YAML validado e instruções de uso para o modelo.
+- **L3**: `plugins/<id>/assets/*.json` — dados de referência (carteira padrão, estado da casa, dicas táticas) carregados com fallback embutido.
+- **`ADKSkillLoader`**: usa `load_skill_from_dir` do ADK quando o diretório segue o padrão kebab-case; caso contrário faz *parser* local com os mesmos modelos (`Skill`, `Frontmatter`, `Resources`) do SDK.
+- **`SkillToolset`**: as skills **ativas** são injetadas nos agentes ADK (`criar_agente_rapido`, `criar_agente_coordenador`) como `SkillToolset`, mantendo o contexto enxuto (apenas skills habilitadas). Configurando `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (com ADC autenticado), o mesmo toolset passa a usar **Google Cloud Skill Registry** para descoberta e carregamento sob demanda (`search_skills`/`load_skill`). Sem a configuração GCP, tudo segue local, sem custo de API.
+
+### 🔌 Servidor MCP (`jarvis_mcp_server.py`)
+
+O servidor MCP (`stdio`) permite que a IDE Antigravity e agentes externos usem o JARVIS:
+- Ferramentas nativas: telemetria, notificação por voz, health-check, jogos e bridge Gemini.
+- **Plug-ins via MCP**: cada ferramenta de plug-in **ativo** é exposta automaticamente como `jarvis_plugin_<nome>`, com nomes, descrições e parâmetros vindos do Plugin SDK/Policy Engine.
+
 ### Como Iniciar o Servidor ADK
 ```bash
 # Executar o servidor de voz ADK (porta 8100)
@@ -172,7 +186,10 @@ O repositório inclui uma suíte de testes de integridade arquitetural e de segu
 ├── system_tools.py            # Habilidades centrais do SO e integração Antigravity IDE
 ├── plugin_sdk.py              # SDK para criação e padronização de plug-ins
 ├── plugin_manager.py          # Carregamento dinâmico e catálogo da loja de habilidades
+├── adk_skill_loader.py        # Carregador de Skills ADK (SKILL.md L1/L2/L3 + SkillToolset)
+├── jarvis_mcp_server.py       # Servidor MCP (stdio) p/ IDE e agentes externos + plug-ins
 ├── plugins/                   # Módulos de expansão (Workspace, Finance, Research, Jogos, etc.)
+│   └── <plug-in>/SKILL.md     # Skill ADK: frontmatter L1, corpo L2, assets/ L3
 ├── gemini-live-widget/        # Frontend do widget flutuante e modo expandido "Ask Gemini"
 ├── static/                    # Frontend do HUD Holográfico Sci-Fi (Reator Arc)
 ├── monitoring/                # Logs estruturados (events.jsonl) e suíte de testes P0

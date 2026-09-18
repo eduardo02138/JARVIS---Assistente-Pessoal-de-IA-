@@ -73,6 +73,9 @@ from google.adk.agents import LiveRequestQueue  # noqa: E402
 from google.adk.agents.run_config import RunConfig  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
 from google.adk.sessions import BaseSessionService, InMemorySessionService  # noqa: E402
+from google.adk.apps.app import App, EventsCompactionConfig  # noqa: E402
+from google.adk.agents.context_cache_config import ContextCacheConfig  # noqa: E402
+from agentes.memoria import JarvisMemoryService  # noqa: E402
 from google.genai import types  # noqa: E402
 from google.genai.errors import ServerError, ClientError
 from policy_engine import policy_engine  # noqa: E402
@@ -83,6 +86,13 @@ from agentes.assistente import (  # noqa: E402
     criar_agente_rapido,
 )
 from agentes.roteador import CAMINHO_RAPIDO, escolher_caminho  # noqa: E402
+from agentes.computer_use.agente import (
+    MODELO_COMPUTER,
+    criar_agente_computer_use,
+)  # noqa: E402
+
+CAMINHO_COMPUTADOR = "computador"
+CAMINHO_VOZ = "voz"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("assistente")
@@ -158,22 +168,45 @@ def criar_servico_de_sessao() -> BaseSessionService:
 
 
 sessoes = criar_servico_de_sessao()
+memory_service_adk = JarvisMemoryService()
 
 # Um Runner por caminho interno; o usuário enxerga um assistente só.
 _runners: dict[str, Runner] = {}
 
 
 def obter_runner(caminho: str) -> Runner:
-    """caminho: 'rapido', 'complexo' (texto) ou 'voz' (sessão Live)."""
+    """caminho: 'rapido', 'complexo' (texto), 'computador' (Computer Use) ou 'voz'."""
     if caminho not in _runners:
-        if caminho == "voz":
+        if caminho == CAMINHO_VOZ:
             agente = criar_agente_de_voz(MODELO_LIVE)
+        elif caminho == CAMINHO_COMPUTADOR:
+            agente = criar_agente_computer_use(MODELO_COMPUTER)
         elif caminho == CAMINHO_RAPIDO:
             agente = criar_agente_rapido(MODELO_TEXTO)
         else:
             agente = criar_agente_coordenador(MODELO_TEXTO)
+
+        compaction_config = EventsCompactionConfig(
+            token_threshold=int(os.environ.get("COMPACTION_TOKEN_THRESHOLD", 4000)),
+            event_retention_size=int(os.environ.get("COMPACTION_RETENTION_SIZE", 5)),
+            compaction_interval=int(os.environ.get("COMPACTION_INTERVAL", 10)),
+            overlap_size=int(os.environ.get("COMPACTION_OVERLAP_SIZE", 2)),
+        )
+        cache_config = ContextCacheConfig(
+            min_tokens=int(os.environ.get("CONTEXT_CACHE_MIN_TOKENS", 2048)),
+            ttl_seconds=int(os.environ.get("CONTEXT_CACHE_TTL_SECONDS", 600)),
+            cache_intervals=int(os.environ.get("CONTEXT_CACHE_INTERVALS", 5)),
+        )
+        app_obj = App(
+            name=APP_NOME,
+            root_agent=agente,
+            events_compaction_config=compaction_config,
+            context_cache_config=cache_config,
+        )
         _runners[caminho] = Runner(
-            app_name=APP_NOME, agent=agente, session_service=sessoes
+            app=app_obj,
+            session_service=sessoes,
+            memory_service=memory_service_adk,
         )
     return _runners[caminho]
 
@@ -217,14 +250,83 @@ async def saude():
         "modelo_live": MODELO_LIVE,
         "modelo_live_reserva": MODELO_LIVE_RESERVA,
         "modelo_texto": MODELO_TEXTO,
+        "modelo_computador": MODELO_COMPUTER,
         "chave_configurada": bool(os.environ.get("GOOGLE_API_KEY")),
         "chaves_no_pool": len(CHAVES),
         "sessoes": type(sessoes).__name__,
         "voz": VOZ,
+        "modo_computador": policy_engine.computer_lease_status(),
     }
 
 
 # ----------------------------- MODO TEXTO -----------------------------
+
+@app.post("/api/computer/mode")
+async def alternar_modo_computador(payload: dict, _=Depends(verify_jarvis_token)):
+    """Ativa/desativa a lease do Modo Computador (navegador via Computer Use).
+
+    Ativar: concede autoridade temporária de operação do navegador à sessão.
+    Desativar: revoga a lease e fecha o Chromium compartilhado do runner.
+    """
+    ativo = bool(payload.get("ativo"))
+    sessao = payload.get("sessao") or "sessao-principal"
+    usuario = payload.get("usuario") or "local"
+    if not ativo:
+        lease = policy_engine.revoke_computer_lease(session_id=sessao)
+        runner = _runners.get(CAMINHO_COMPUTADOR)
+        if runner is not None:
+            for ferramenta in getattr(runner.agent, "tools", []):
+                fechar = getattr(ferramenta, "close", None)
+                if callable(fechar):
+                    try:
+                        await fechar()
+                    except Exception as erro:
+                        logger.warning("Falha ao fechar navegador: %s", erro)
+        return {"status": "ok", "modo_computador": lease, "navegador": "fechado"}
+
+    if policy_engine.is_computer_lease_active(sessao):
+        return {"status": "ok", "modo_computador": policy_engine.computer_lease_status()}
+
+    # Ativação exige confirmação prévia registrada (reutiliza o fluxo de pendências).
+    args_modo = {"enabled": True, "descricao": "Ativação do Modo Computador (navegação em Chromium)"}
+    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
+    modo_pendente = next(
+        (p for p in pendentes if p.tool_name == "set_computer_mode"), None
+    )
+    if modo_pendente is not None and modo_pendente.status == "pending":
+        return {
+            "status": "aguardando_confirmacao",
+            "id_confirmacao": modo_pendente.action_id,
+            "mensagem": f"Confirme a ativação do Modo Computador (id {modo_pendente.action_id[:8]}).",
+        }
+
+    if policy_engine.consume_authorization(
+        tool_name="set_computer_mode",
+        args=args_modo,
+        session_id=sessao,
+        user_id=usuario,
+    ):
+        lease = policy_engine.grant_computer_lease(owner=sessao)
+        logger.info(
+            "Modo Computador concedido à sessão '%s' por %ss.",
+            sessao,
+            lease["segundos_restantes"],
+        )
+        return {"status": "ok", "modo_computador": lease}
+
+    modo_pendente = policy_engine.create_pending_action(
+        tool_name="set_computer_mode",
+        args=args_modo,
+        session_id=sessao,
+        user_id=usuario,
+        ttl=60.0,
+    )
+    return {
+        "status": "aguardando_confirmacao",
+        "id_confirmacao": modo_pendente.action_id,
+        "mensagem": f"Confirme a ativação do Modo Computador (id {modo_pendente.action_id[:8]}).",
+    }
+
 
 @app.get("/api/acoes_pendentes")
 async def listar_pendentes(
@@ -285,8 +387,18 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     usuario = payload.get("usuario", "local")
     sessao = payload.get("sessao", "sessao-principal")
     forcado = payload.get("caminho")
+    texto_min = texto.lower()
+    marcas_navegador = (
+        "modo computador",
+        "use o navegador",
+        "controle o navegador",
+        "controlar o navegador",
+        "navegação automática",
+    )
     if forcado:
         caminho, motivo = forcado, "escolha manual"
+    elif any(marca in texto_min for marca in marcas_navegador):
+        caminho, motivo = CAMINHO_COMPUTADOR, "solicitação de operação do navegador (Computer Use)"
     else:
         caminho, motivo = escolher_caminho(texto)
     # Verifica palavras de confirmacao emitidas pelo usuario
@@ -390,6 +502,17 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
             "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}",
         }
 
+    # Ingestão assíncrona da sessão na memória de longo prazo (background task)
+    async def _salvar_memoria_bg():
+        try:
+            sess_obj = await sessoes.get_session(app_name=APP_NOME, user_id=usuario, session_id=sessao)
+            if sess_obj:
+                await memory_service_adk.add_session_to_memory(sess_obj)
+        except Exception as e:
+            logger.warning("Falha ao salvar sessão na memória: %s", e)
+
+    asyncio.create_task(_salvar_memoria_bg())
+
     return {
         "status": "ok",
         "caminho": caminho,
@@ -459,19 +582,32 @@ async def live(
         """Áudio e texto do navegador entram na fila do ADK."""
         while True:
             msg = json.loads(await websocket.receive_text())
-            tipo = msg.get("tipo")
+            tipo = msg.get("tipo") or msg.get("type")
             if tipo == "audio":
-                fila.send_realtime(
-                    types.Blob(
-                        data=base64.b64decode(msg["dados"]),
-                        mime_type="audio/pcm;rate=16000",
+                audio_b64 = msg.get("dados") or msg.get("data")
+                if audio_b64:
+                    fila.send_realtime(
+                        types.Blob(
+                            data=base64.b64decode(audio_b64),
+                            mime_type="audio/pcm;rate=16000",
+                        )
                     )
-                )
-            elif tipo == "texto":
-                fila.send_content(
-                    types.Content(role="user", parts=[types.Part(text=msg["texto"])])
-                )
-            elif tipo == "fim_do_audio":
+            elif tipo in ("video", "imagem", "screen_frame"):
+                frame_b64 = msg.get("dados") or msg.get("data")
+                if frame_b64:
+                    fila.send_realtime(
+                        types.Blob(
+                            data=base64.b64decode(frame_b64),
+                            mime_type="image/jpeg",
+                        )
+                    )
+            elif tipo in ("texto", "text"):
+                texto = msg.get("texto") or msg.get("text")
+                if texto:
+                    fila.send_content(
+                        types.Content(role="user", parts=[types.Part(text=texto)])
+                    )
+            elif tipo in ("fim_do_audio", "end_of_audio"):
                 fila.send_audio_stream_end()
 
     async def do_agente_para_o_cliente():
@@ -519,6 +655,12 @@ async def live(
                 await websocket.send_json({"tipo": "interrompido"})
             if evento.turn_complete:
                 await websocket.send_json({"tipo": "turno_concluido"})
+                try:
+                    sess_obj = await sessoes.get_session(app_name=APP_NOME, user_id=usuario, session_id=sessao)
+                    if sess_obj:
+                        asyncio.create_task(memory_service_adk.add_session_to_memory(sess_obj))
+                except Exception:
+                    pass
 
     try:
         # TaskGroup: se um lado cair, o outro é cancelado junto
@@ -539,6 +681,12 @@ async def live(
             pass
     finally:
         fila.close()
+        try:
+            sess_obj = await sessoes.get_session(app_name=APP_NOME, user_id=usuario, session_id=sessao)
+            if sess_obj:
+                await memory_service_adk.add_session_to_memory(sess_obj)
+        except Exception as e:
+            logger.warning("Falha ao persistir sessão Live na memória: %s", e)
 
 
 if __name__ == "__main__":

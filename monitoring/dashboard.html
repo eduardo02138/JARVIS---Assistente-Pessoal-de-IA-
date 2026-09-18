@@ -637,6 +637,14 @@
             } else if (ev.type === 'account_failover') {
                 tag = `<span class="log-tag-error">🔄 [FAILOVER]</span>`;
                 content = `Conta ${ev.data.from_index} falhou -> Conta ${ev.data.to_index}`;
+            } else if (ev.type === 'auth_error') {
+                if (ev.data.origem === 'teste') {
+                    tag = `<span class="log-tag-ok">🧪 [AUTH-TESTE]</span>`;
+                    content = `${ev.data.source}: rejeição esperada no handshake`;
+                } else {
+                    tag = `<span class="log-tag-error">🔑 [AUTH-ERROR]</span>`;
+                    content = `${ev.data.source}: ${ev.data.reason}`;
+                }
             }
 
             div.innerHTML = `<span class="log-time">[${time}]</span> ${tag} ${content}`;

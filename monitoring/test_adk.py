@@ -174,7 +174,7 @@ def test_autenticacao_e_confirmacao_live_adk_por_texto():
     assert pending.status == "pending"
 
     # Conexão não autorizada ao WebSocket -> Rejeitada com 1008
-    with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario={user_id}") as ws_unauth:
+    with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario={user_id}&origem=teste") as ws_unauth:
         ws_unauth.send_json({"type": "init", "token": "token-falso-invalido"})
         msg_err = ws_unauth.receive_json()
         assert msg_err.get("tipo") == "erro"
@@ -342,8 +342,198 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     print(" [✔ PASS] Confirmação via POST /api/chat ('sim') em server.py e servidor_adk.py com user_id (P0.17.1)")
 
 
+def test_todas_ferramentas_conectadas_ao_agente():
+    """Garante que todas as 56 ferramentas do ecossistema estão conectadas ao agente ADK."""
+    import system_tools
+    from plugin_manager import plugin_manager
+    from agentes.assistente import criar_agente_coordenador, criar_agente_de_voz, criar_agente_rapido
+    from google.adk.tools import FunctionTool
+
+    agente_coord = criar_agente_coordenador()
+    agente_voz = criar_agente_de_voz()
+    agente_rapido = criar_agente_rapido()
+
+    # Extrai nomes das ferramentas registradas no coordenador
+    nomes_coord = set()
+    for t in agente_coord.tools:
+        if isinstance(t, FunctionTool):
+            nomes_coord.add(t.name)
+        else:
+            nomes_coord.add(getattr(t, "name", getattr(t, "__name__", t.__class__.__name__)))
+
+    # 1. Todas as 29 ferramentas base do sistema precisam estar presentes
+    for tool_name in system_tools.BASE_TOOL_REGISTRY.keys():
+        assert tool_name in nomes_coord, f"Ferramenta base '{tool_name}' não está conectada ao agente coordenador!"
+
+    # 2. Todas as 27 ferramentas dos 8 plug-ins precisam estar presentes
+    total_plugins_tools = 0
+    for plugin in plugin_manager._plugins.values():
+        for t in plugin.get_tools():
+            total_plugins_tools += 1
+            assert t.name in nomes_coord, f"Ferramenta de plug-in '{t.name}' ({plugin.meta.id}) não está conectada ao agente coordenador!"
+
+    assert total_plugins_tools == 27, f"Esperado 27 ferramentas de plug-ins, encontrado {total_plugins_tools}"
+
+    # 3. Valida schemas, nomes, descrições e cobertura de políticas no PolicyEngine
+    for t in agente_coord.tools:
+        if isinstance(t, FunctionTool):
+            decl = t._get_declaration()
+            assert decl is not None, f"Declaração nula para {t.name}"
+            assert decl.name == t.name, f"Inconsistência de nome no schema ADK: {decl.name} != {t.name}"
+            assert decl.description, f"Ferramenta '{t.name}' conectada sem descrição no schema ADK!"
+            # Cobertura no PolicyEngine
+            risk = policy_engine.get_risk_level(t.name)
+            assert risk is not None, f"Ferramenta '{t.name}' conectada sem registro no PolicyEngine!"
+
+    # 4. Agente de voz deve ter paridade total com o coordenador
+    nomes_voz = {getattr(t, "name", getattr(t, "__name__", t.__class__.__name__)) for t in agente_voz.tools}
+    assert nomes_coord == nomes_voz, "Divergência de ferramentas entre agente de voz e coordenador!"
+
+    # 5. Agente rápido deve possuir ferramentas diretas essenciais
+    nomes_rapido = {getattr(t, "name", getattr(t, "__name__", str(t))) for t in agente_rapido.tools}
+    for essencial in ("get_system_status", "get_gpu_status", "adjust_volume", "list_installed_games"):
+        assert essencial in nomes_rapido, f"Ferramenta essencial '{essencial}' ausente no agente rápido!"
+
+    print(f" [✔ PASS] Conexão Total de Ferramentas: {len(nomes_coord)} ferramentas conectadas ao Agente (56 do ecossistema + especialistas)")
+
+
+def test_compaction_config_e_app():
+    """Valida que os Runners do server.py e servidor_adk.py utilizam App com EventsCompactionConfig e MemoryService."""
+    from server import obter_runner_adk
+    from servidor_adk import obter_runner
+
+    r_srv = obter_runner_adk("coordenador")
+    assert r_srv.app is not None, "Runner server.py deve ser instanciado via App"
+    assert r_srv.app.events_compaction_config is not None, "App deve possuir EventsCompactionConfig"
+    assert r_srv.app.events_compaction_config.token_threshold == 4000
+    assert r_srv.app.events_compaction_config.event_retention_size == 5
+    assert r_srv.app.context_cache_config is not None, "App server.py deve possuir ContextCacheConfig"
+    assert r_srv.app.context_cache_config.min_tokens == 2048
+    assert r_srv.app.context_cache_config.ttl_seconds == 600
+    assert r_srv.app.context_cache_config.cache_intervals == 5
+    assert r_srv.memory_service is not None, "Runner server.py deve possuir memory_service injetado"
+
+    r_adk = obter_runner("complexo")
+    assert r_adk.app is not None, "Runner servidor_adk.py deve ser instanciado via App"
+    assert r_adk.app.events_compaction_config is not None, "App deve possuir EventsCompactionConfig"
+    assert r_adk.app.events_compaction_config.token_threshold == 4000
+    assert r_adk.app.events_compaction_config.event_retention_size == 5
+    assert r_adk.app.context_cache_config is not None, "App servidor_adk.py deve possuir ContextCacheConfig"
+    assert r_adk.app.context_cache_config.min_tokens == 2048
+    assert r_adk.app.context_cache_config.ttl_seconds == 600
+    assert r_adk.app.context_cache_config.cache_intervals == 5
+    assert r_adk.memory_service is not None, "Runner servidor_adk.py deve possuir memory_service injetado"
+    print(" [✔ PASS] Compactação de Contexto (EventsCompactionConfig), Cache (ContextCacheConfig) & Injeção de App nos Runners")
+
+
+def _executar_coro(coro):
+    """Executa corrotina tanto fora quanto dentro de um loop de eventos já ativo."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(coro)).result()
+    else:
+        return asyncio.run(coro)
+
+
+def test_memoria_longo_prazo_persistente():
+    """Valida persistência em disco (JSON), recuperação e ranking de relevância no JarvisMemoryService."""
+    import tempfile
+    from agentes.memoria import JarvisMemoryService
+    from google.adk.sessions import Session
+    from google.adk.events import Event
+    from google.genai.types import Content, Part
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        # 1. Instância A: adiciona sessão e persiste em disco
+        ms_escrita = JarvisMemoryService(tmp_path)
+        sess = Session(app_name="assistente", user_id="usuario_teste_mem", id="sess_mem_001")
+        ev_u = Event(author="user", content=Content(parts=[Part(text="Meu autor preferido é Isaac Asimov")]))
+        ev_m = Event(author="model", content=Content(parts=[Part(text="Registrado com sucesso: Isaac Asimov")]))
+        sess.events.extend([ev_u, ev_m])
+
+        _executar_coro(ms_escrita.add_session_to_memory(sess))
+        assert os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0, "Arquivo de memória não foi criado no disco"
+
+        # 2. Instância B: recarrega do disco de forma independente
+        ms_leitura = JarvisMemoryService(tmp_path)
+        res = _executar_coro(ms_leitura.search_memory(
+            app_name="assistente",
+            user_id="usuario_teste_mem",
+            query="quem é meu autor preferido?"
+        ))
+        assert len(res.memories) > 0, "Nenhuma memória encontrada na busca semântica/palavras-chave"
+        textos = [p.text for m in res.memories for p in m.content.parts if p.text]
+        assert any("Isaac Asimov" in t for t in textos), f"Isaac Asimov não recuperado: {textos}"
+        print(" [✔ PASS] Memória de Longo Prazo Persistente (JarvisMemoryService + busca entre sessões)")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def test_load_memory_tool_execution():
+    """Valida execução assíncrona da ferramenta nativa load_memory conectada ao ToolContext."""
+    import tempfile
+    from agentes.memoria import JarvisMemoryService
+    from google.adk.sessions import Session, InMemorySessionService
+    from google.adk.events import Event
+    from google.genai.types import Content, Part
+    from google.adk.tools import load_memory
+    from google.adk.tools.tool_context import ToolContext
+    from google.adk.agents.invocation_context import InvocationContext
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        ms = JarvisMemoryService(tmp_path)
+        sess = Session(app_name="assistente", user_id="usuario_tool_test", id="sess_tool_001")
+        sess.events.append(Event(author="user", content=Content(parts=[Part(text="Minha linguagem favorita é Rust")])))
+        _executar_coro(ms.add_session_to_memory(sess))
+
+        inv_ctx = InvocationContext(
+            invocation_id="inv_tool_test",
+            session_service=InMemorySessionService(),
+            session=sess,
+            memory_service=ms,
+        )
+        tool_ctx = ToolContext(invocation_context=inv_ctx)
+        resp = _executar_coro(load_memory.run_async(args={"query": "Rust"}, tool_context=tool_ctx))
+        assert resp is not None, "Resposta da ferramenta load_memory não pode ser nula"
+        assert len(resp.memories) > 0, "Deveria recuperar memórias sobre Rust"
+        partes_texto = [p.text for m in resp.memories for p in m.content.parts if p.text]
+        assert any("Rust" in t for t in partes_texto)
+        print(" [✔ PASS] Ferramenta load_memory: Execução via ToolContext e recuperação de memórias passadas")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def test_politica_e_governanca_de_memoria():
+    """Valida que load_memory e preload_memory são tratadas como READ seguro no PolicyEngine."""
+    from policy_engine import RiskLevel
+
+    decisao_load = policy_engine.evaluate("load_memory", {"query": "teste"})
+    assert decisao_load.allowed is True, "load_memory deve ser permitida"
+    assert decisao_load.requires_confirmation is False, "load_memory não exige confirmação"
+    assert decisao_load.risk_level == RiskLevel.READ
+
+    decisao_preload = policy_engine.evaluate("preload_memory", {})
+    assert decisao_preload.allowed is True
+    assert decisao_preload.requires_confirmation is False
+    assert decisao_preload.risk_level == RiskLevel.READ
+    print(" [✔ PASS] Governança de Memória: load_memory e preload_memory classificadas como READ automático")
+
+
 def executar_todos_testes_adk():
-    print("=== EXECUTANDO TESTES DO GOOGLE ADK & POLICY GATE (FASE P0.17.1) ===")
+    print("=== EXECUTANDO TESTES DO GOOGLE ADK & POLICY GATE (FASE P0.17.2) ===")
     test_roteador_inteligente()
     test_ausencia_de_auto_autorizacao_no_llm()
     test_policy_engine_bloqueio_e_one_shot()
@@ -353,7 +543,12 @@ def executar_todos_testes_adk():
     test_confirmacao_comportamental_voz_live_adk()
     test_confirmacao_chat_http_texto_com_isolamento_user_id()
     test_smoke_servidor_adk_standalone()
-    print("Todos os 9 cenários do módulo ADK P0.17.1 passaram com 100% de conformidade!")
+    test_todas_ferramentas_conectadas_ao_agente()
+    test_compaction_config_e_app()
+    test_memoria_longo_prazo_persistente()
+    test_load_memory_tool_execution()
+    test_politica_e_governanca_de_memoria()
+    print("Todos os 14 cenários do módulo ADK P0.17.2 passaram com 100% de conformidade!")
 
 if __name__ == "__main__":
     executar_todos_testes_adk()

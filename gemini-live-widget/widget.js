@@ -39,9 +39,9 @@ function sendBridgeMessage(cmd, val) {
 
 const state = {
     connected: false,
-    listening: true,
+    listening: false,
     speaking: false,
-    paused: false,
+    paused: true,
     ws: null,
     
     // Histórico & Contexto Ativo
@@ -624,6 +624,15 @@ async function connectLiveBackend() {
             case "connected":
                 state.connected = true;
                 const provRotulo = (msg.provider || state.provider) === "omniroute" ? "OmniRoute" : "Google Studio";
+                if (state.paused) {
+                    dom.liveStatusText.textContent = "Sessão pausada";
+                    dom.chipLabel.textContent = "Em Pausa";
+                    dom.statusBadgeChip.classList.remove("active");
+                    dom.iconPlay.classList.remove("hidden");
+                    dom.iconPause.classList.add("hidden");
+                    updateProviderUI();
+                    break;
+                }
                 dom.liveStatusText.textContent = `Gemini Live [${provRotulo}] (${msg.model || state.model})`;
                 dom.statusBadgeChip.classList.add("active");
                 initAudio();
@@ -1162,7 +1171,7 @@ if (dom.btnRefreshTelemetry) {
 }
 
 // ---------------- CONTROLE DE MODOS & PAUSA ----------------
-dom.btnPauseLive.addEventListener("click", () => {
+dom.btnPauseLive.addEventListener("click", async () => {
     state.paused = !state.paused;
     if (state.paused) {
         dom.iconPause.classList.add("hidden");
@@ -1177,6 +1186,8 @@ dom.btnPauseLive.addEventListener("click", () => {
         dom.liveStatusText.textContent = "Ouvindo você...";
         dom.chipLabel.textContent = "Microfone Ativo";
         dom.statusBadgeChip.classList.add("active");
+        if (state.micMode !== "ptt") state.listening = true;
+        if (!state.inputAudioCtx && state.connected) await initAudio();
     }
 });
 

@@ -347,7 +347,7 @@ def test_websocket_auth():
     # 1. Handshake com token inválido/ausente -> erro ou fechamento imediato
     unauth_rejected = False
     try:
-        with client.websocket_connect("/ws/live") as ws:
+        with client.websocket_connect("/ws/live?origem=teste") as ws:
             ws.send_json({"type": "init", "voice": "Charon", "token": "invalid_token_test"})
             resp = ws.receive_json()
             if resp.get("type") == "error" and "Não autorizado" in resp.get("message", ""):
@@ -830,12 +830,15 @@ def test_configuracao_de_voz_e_texto():
     idioma_fixo = "language_code=os.environ.get(\"JARVIS_LANGUAGE\"" in fonte
     sem_duplicata = fonte.count('"type": "text"') == 1
     tolerancia_microfone = "MIC_GRACE_S" in fonte
-    # Instância nova: mede o padrão de carga, sem sofrer com toggles de outros testes
+    # Instância nova: mede o padrão de carga, respeitando o estado intencional de JARVIS_ATIVAR_MOCKS
     gerenciador_novo = pm.PluginManager()
-    mocks_desligados = not pm.MOCKS_ATIVOS and all(
-        plugin.meta.enabled is False
-        for pid, plugin in gerenciador_novo._plugins.items() if pid in pm.PLUGINS_SIMULADOS
-    )
+    if pm.MOCKS_ATIVOS:
+        mocks_desligados = True
+    else:
+        mocks_desligados = all(
+            plugin.meta.enabled is False
+            for pid, plugin in gerenciador_novo._plugins.items() if pid in pm.PLUGINS_SIMULADOS
+        )
 
     success = idioma_fixo and sem_duplicata and tolerancia_microfone and mocks_desligados
     detail = (

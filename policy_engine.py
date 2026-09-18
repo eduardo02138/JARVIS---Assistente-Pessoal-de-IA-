@@ -49,6 +49,8 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "pesquisar_na_web": RiskLevel.LOW_WRITE,
     "lembrar_preferencia": RiskLevel.LOW_WRITE,
     "consultar_preferencias": RiskLevel.READ,
+    "load_memory": RiskLevel.READ,
+    "preload_memory": RiskLevel.READ,
     "abrir_site": RiskLevel.EXTERNAL_WRITE,
     # READ: Informação e Consulta
     "get_system_status": RiskLevel.READ,
@@ -143,6 +145,9 @@ CONTROL_TOOLS = {
 # Duração padrão da lease de controle, em segundos
 CONTROL_LEASE_TTL_S = int(os.environ.get("JARVIS_CONTROL_LEASE_TTL", "300"))
 
+# Duração padrão da lease do Modo Computador (navegador via Computer Use)
+COMPUTER_LEASE_TTL_S = int(os.environ.get("JARVIS_COMPUTER_LEASE_TTL", "900"))
+
 # Combinações de teclas que continuam exigindo confirmação mesmo com lease ativa
 HOTKEYS_PERIGOSAS = {
     ("alt", "f4"),
@@ -169,6 +174,8 @@ class PolicyEngine:
         self._custom_policies: Dict[str, RiskLevel] = {}
         self._control_lease_expira_em: float = 0.0
         self._control_lease_owner: Optional[str] = None
+        self._computer_lease_expira_em: float = 0.0
+        self._computer_lease_owner: Optional[str] = None
         self._pending_actions: Dict[str, PendingAction] = {}
 
     def register_tool_policy(self, tool_name: str, risk_level: RiskLevel):
@@ -220,6 +227,46 @@ class PolicyEngine:
             "ativa": restante > 0,
             "segundos_restantes": int(restante),
             "owner": self._control_lease_owner
+        }
+
+    # ---------------- Lease do Modo Computador (navegador via Computer Use) ----------------
+
+    def grant_computer_lease(self, owner: str = "sessao-principal", ttl_s: int = COMPUTER_LEASE_TTL_S) -> Dict[str, Any]:
+        """Concede autoridade temporária de operação do navegador (Computer Use)."""
+        self._computer_lease_expira_em = time.time() + ttl_s
+        self._computer_lease_owner = owner
+        logger.info(f"Lease do Modo Computador concedida a '{owner}' por {ttl_s}s.")
+        return self.computer_lease_status()
+
+    def revoke_computer_lease(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Revoga a autoridade do Modo Computador.
+
+        Com session_id, só a sessão dona da lease pode revogá-la, igual ao
+        Modo Controle: outra conexão não derruba o navegador de quem opera.
+        """
+        if session_id is not None and self._computer_lease_owner not in (None, session_id):
+            logger.info("Revogação ignorada: a lease do computador pertence a outra sessão.")
+            return self.computer_lease_status()
+        self._computer_lease_expira_em = 0.0
+        self._computer_lease_owner = None
+        logger.info("Lease do Modo Computador revogada.")
+        return self.computer_lease_status()
+
+    def is_computer_lease_active(self, session_id: Optional[str] = None) -> bool:
+        """A lease pertence à sessão que a recebeu: outra sessão não navega por ela."""
+        if time.time() >= self._computer_lease_expira_em:
+            return False
+        if session_id is not None and self._computer_lease_owner != session_id:
+            return False
+        return True
+
+    def computer_lease_status(self) -> Dict[str, Any]:
+        """Estado da lease do Modo Computador."""
+        restante = max(0.0, self._computer_lease_expira_em - time.time())
+        return {
+            "ativa": restante > 0,
+            "segundos_restantes": int(restante),
+            "owner": self._computer_lease_owner
         }
 
     def _avaliar_controle_fisico(self, tool_name: str, args: Dict[str, Any],

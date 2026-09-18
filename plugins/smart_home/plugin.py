@@ -3,7 +3,36 @@ Plug-in: Casa Inteligente & Automação Residencial (Smart Home / LifeKit)
 Permite controlar luzes, climatização e acionar cenas no laboratório e residência.
 """
 
+import json
+import logging
+import os
 from plugin_sdk import JarvisPlugin, PluginMeta
+
+logger = logging.getLogger("jarvis.plugins.smart_home")
+
+ASSETS_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "estado_padrao.json")
+
+# Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
+ESTADO_FALLBACK = {
+    "lights": {
+        "escritorio": {"ligado": True, "cor": "Ciano Holográfico", "brilho": 80},
+        "quarto": {"ligado": False, "cor": "Branco Quente", "brilho": 40},
+        "sala": {"ligado": True, "cor": "Branco Neutro", "brilho": 60},
+    },
+    "clima": {"temperatura": "22°C", "modo": "Refrigeração Nominal", "umidade": "55%"},
+}
+
+
+def _carregar_estado_padrao() -> dict:
+    """Lê estado inicial da camada L3 (assets/) com fallback embutido."""
+    try:
+        with open(ASSETS_PADRAO, encoding="utf-8") as f:
+            dados = json.load(f)
+        if isinstance(dados, dict) and "lights" in dados:
+            return dados
+    except Exception as e:
+        logger.warning("Estado padrão (assets) indisponível; usando fallback embutido: %s", e)
+    return ESTADO_FALLBACK
 
 class SmartHomePlugin(JarvisPlugin):
     def __init__(self):
@@ -15,12 +44,10 @@ class SmartHomePlugin(JarvisPlugin):
             icon="🏠",
             description="Controle de iluminação inteligente, climatização, cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso') e automação IoT."
         ))
-        self.lights = {
-            "escritorio": {"ligado": True, "cor": "Ciano Holográfico", "brilho": 80},
-            "quarto": {"ligado": False, "cor": "Branco Quente", "brilho": 40},
-            "sala": {"ligado": True, "cor": "Branco Neutro", "brilho": 60}
-        }
-        self.clima = {"temperatura": "22°C", "modo": "Refrigeração Nominal", "umidade": "55%"}
+        estado = _carregar_estado_padrao()
+        self.lights = estado.get("lights", ESTADO_FALLBACK["lights"])
+        self.clima = estado.get("clima", ESTADO_FALLBACK["clima"])
+        self.cenas = estado.get("cenas", {})
 
     def on_load(self):
         self.register_tool(

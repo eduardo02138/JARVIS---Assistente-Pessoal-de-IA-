@@ -4,11 +4,35 @@ Plug-in em modo demonstração: as cotações e o portfólio são simulados loca
 analisar alocação de ativos e gerar insights financeiros por comando de voz.
 """
 
+import json
 import logging
+import os
 from typing import Optional, List, Dict
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.google_finance")
+
+ASSETS_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "portfolio_default.json")
+
+# Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
+PORTFOLIO_FALLBACK: List[Dict] = [
+    {"ticker": "NVDA", "nome": "NVIDIA Corporation", "setor": "Tecnologia / Semicondutores", "quantidade": 25, "preco_medio": 115.50, "cotacao_atual": 138.20},
+    {"ticker": "BTC", "nome": "Bitcoin", "setor": "Criptoativos", "quantidade": 0.45, "preco_medio": 58000.0, "cotacao_atual": 64200.0},
+    {"ticker": "PETR4", "nome": "Petrobras PN", "setor": "Energia / Petróleo", "quantidade": 300, "preco_medio": 36.20, "cotacao_atual": 39.10},
+    {"ticker": "IVVB11", "nome": "iShares S&P 500 ETF", "setor": "Índice Global", "quantidade": 50, "preco_medio": 290.0, "cotacao_atual": 325.40},
+]
+
+
+def _carregar_portfolio_padrao() -> List[Dict]:
+    """Lê a carteira inicial da camada L3 (assets/) com fallback embutido."""
+    try:
+        with open(ASSETS_PADRAO, encoding="utf-8") as f:
+            dados = json.load(f)
+        if isinstance(dados, list) and dados:
+            return dados
+    except Exception as e:
+        logger.warning("Carteira padrão (assets) indisponível; usando fallback embutido: %s", e)
+    return PORTFOLIO_FALLBACK
 
 class GoogleFinancePlugin(JarvisPlugin):
     def __init__(self):
@@ -21,12 +45,7 @@ class GoogleFinancePlugin(JarvisPlugin):
             description="SIMULADO: cotações de demonstração (B3, S&P 500, Cripto), carteira fictícia, análise de alocação e insights. Não consulta o Google Finance real."
         ))
         # Carteira padrão inicial do investidor
-        self.portfolio: List[Dict] = [
-            {"ticker": "NVDA", "nome": "NVIDIA Corporation", "setor": "Tecnologia / Semicondutores", "quantidade": 25, "preco_medio": 115.50, "cotacao_atual": 138.20},
-            {"ticker": "BTC", "nome": "Bitcoin", "setor": "Criptoativos", "quantidade": 0.45, "preco_medio": 58000.0, "cotacao_atual": 64200.0},
-            {"ticker": "PETR4", "nome": "Petrobras PN", "setor": "Energia / Petróleo", "quantidade": 300, "preco_medio": 36.20, "cotacao_atual": 39.10},
-            {"ticker": "IVVB11", "nome": "iShares S&P 500 ETF", "setor": "Índice Global", "quantidade": 50, "preco_medio": 290.0, "cotacao_atual": 325.40}
-        ]
+        self.portfolio: List[Dict] = _carregar_portfolio_padrao()
 
     def on_load(self):
         self.register_tool(

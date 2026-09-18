@@ -84,3 +84,63 @@ def consultar_preferencias(tool_context: ToolContext) -> dict:
         if chave.startswith("user:")
     }
     return {"status": "ok", "preferencias": guardadas, "total": len(guardadas)}
+
+
+import functools
+import inspect
+from typing import Callable, Any
+from google.adk.tools import FunctionTool, BaseTool
+
+
+def obter_todas_ferramentas_adk() -> list[BaseTool]:
+    """Retorna todas as 56 ferramentas do ecossistema JARVIS convertidas para o Google ADK.
+
+    Garante que cada ferramenta preserve seu nome oficial, descrição completa
+    e assinatura de parâmetros tipada, integrando-se perfeitamente ao Policy Engine.
+    """
+    import system_tools
+    from plugin_manager import plugin_manager
+
+    desc_map = {
+        d["name"]: d.get("description", "")
+        for d in getattr(system_tools, "GEMINI_FUNCTION_DECLARATIONS", [])
+    }
+
+    all_specs: dict[str, tuple[Callable[..., Any], str]] = {}
+
+    # Coleta todas as ferramentas de plug-ins cadastrados (jogos, workspace, pesquisa, finanças, etc.)
+    for plugin in plugin_manager._plugins.values():
+        for t in plugin.get_tools():
+            all_specs[t.name] = (t.handler, t.description)
+
+    # Coleta todas as ferramentas base do sistema (hardware, controle, áudio, janelas, antigravity)
+    for name, fn in system_tools.BASE_TOOL_REGISTRY.items():
+        if name not in all_specs:
+            doc = desc_map.get(name, getattr(fn, "__doc__", "") or f"Ferramenta de sistema {name}.")
+            all_specs[name] = (fn, doc)
+
+    adk_tools: list[BaseTool] = []
+
+    def _criar_wrapper(handler_fn: Callable[..., Any], tool_name: str, docstring: str, signature: inspect.Signature):
+        @functools.wraps(handler_fn)
+        def _tool_wrapper(*args, **kwargs):
+            return handler_fn(*args, **kwargs)
+
+        _tool_wrapper.__name__ = tool_name
+        _tool_wrapper.__doc__ = docstring
+        _tool_wrapper.__signature__ = signature
+        return _tool_wrapper
+
+    for name, (handler, description) in all_specs.items():
+        sig = inspect.signature(handler)
+        doc = description or getattr(handler, "__doc__", "") or f"Ferramenta {name}."
+        wrapped = _criar_wrapper(handler, name, doc, sig)
+        tool_obj = FunctionTool(wrapped)
+        adk_tools.append(tool_obj)
+
+    return adk_tools
+
+
+def obter_dicionario_ferramentas_adk() -> dict[str, BaseTool]:
+    """Retorna um dicionário mapeando nome -> BaseTool para rápida indexação."""
+    return {getattr(t, "name", ""): t for t in obter_todas_ferramentas_adk()}
