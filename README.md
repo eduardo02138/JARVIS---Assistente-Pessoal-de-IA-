@@ -1,6 +1,14 @@
-# J.A.R.V.I.S. // Stark Industries Voice Assistant & System Automator
+# J.A.R.V.I.S. — Gemini 3.8 Live Personal AI Assistant & Linux Automation
 
-Assistente pessoal de voz, automação de sistema operacional e hub de inteligência em tempo real inspirado no **JARVIS (Homem de Ferro)**. Desenvolvido com a **Gemini Multimodal Live API**, backend assíncrono em **FastAPI**, ecossistema modular de **Plug-ins**, **Motor de Políticas de Segurança (Policy Engine)** e duas interfaces: um **HUD Web Holográfico** futurista e um **Aplicativo Desktop Flutuante Transparente** (PySide6 / QtWebEngine).
+**J.A.R.V.I.S.** é um assistente pessoal multimodal inspirado no conceito de um copiloto estilo Jarvis, construído para conversação por voz em tempo real, automação segura do Linux, visão de tela, execução de ferramentas e orquestração de agentes.
+
+O projeto combina **Gemini 3.8 Live**, **Google Agent Development Kit (ADK)**, **FastAPI**, **WebSockets**, **Python**, **PySide6**, um ecossistema modular de **plug-ins** e um **Policy Engine fail-closed** para controlar ações sensíveis. A experiência pode ser usada pelo HUD web holográfico, pelo widget desktop flutuante ou pelos endpoints ADK de texto e voz.
+
+### 🔎 Tecnologias e palavras-chave
+
+`Gemini 3.8 Live` · `Gemini Live API` · `Google ADK` · `JARVIS` · `Personal AI Assistant` · `Voice Assistant` · `AI Agent` · `Multimodal AI` · `Linux Automation` · `FastAPI` · `WebSocket` · `PySide6` · `Tool Calling` · `Policy Engine` · `Screen Vision` · `Open Source AI`
+
+> O modelo Live principal atualmente suportado pelo projeto é **`gemini-3.8-live`**. O runtime foi estruturado para permitir troca de modelos por configuração, sem afirmar suporte a modelos ainda não disponibilizados oficialmente.
 
 ---
 
