@@ -1535,11 +1535,10 @@ async function toggleMicrophonePause(forceState) {
             try { state.inputAudioCtx.suspend(); } catch (_) {}
         }
 
-        // 3. Notifica o backend para fail-closed e corte do buffer da Live API
+        // 3. Notifica o backend para fail-closed (backend é a autoridade única do audio_stream_end)
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
             try {
                 state.ws.send(JSON.stringify({ type: "microphone_state", muted: true }));
-                state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
             } catch (e) {
                 console.warn("Falha ao notificar estado de microfone mutado via WebSocket:", e);
             }

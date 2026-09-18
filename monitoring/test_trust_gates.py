@@ -356,26 +356,165 @@ def test_agent_skills_spec_compliance():
 # ==============================================================================
 
 def test_gate6_frontend_widget_has_hardware_and_backend_mute_signaling():
-    """Gate 6: O frontend deve conter mute em hardware (track.enabled=false), suspensão de AudioContext e sinalização backend."""
+    """Gate 6: Validação estática E comportamental (runtime) do mute físico de mídia, suspensão de AudioContext e ausência de stream-end redundante."""
+    import json
     import pathlib
+    import subprocess
+
     widget_js = pathlib.Path("gemini-live-widget/widget.js").read_text(encoding="utf-8")
 
-    # 1. Hardware Mute: desabilitar trilhas do microfone
+    # 1. Verificações contratuais estáticas
     assert "getAudioTracks().forEach" in widget_js and "enabled = false" in widget_js, (
         "FALHA GATE 6: Frontend widget.js não desabilita trilhas de microfone no hardware ao mutar!"
     )
-    # 2. Suspensão de AudioContext
     assert "inputAudioCtx.suspend()" in widget_js, (
         "FALHA GATE 6: Frontend widget.js não suspende o AudioContext ao mutar!"
     )
-    # 3. Notificação via WebSocket
     assert "microphone_state" in widget_js and "muted: true" in widget_js, (
         "FALHA GATE 6: Frontend widget.js não envia evento microphone_state via WebSocket ao mutar!"
     )
-    # 4. Limiar VAD calibrado contra vazamento de som
     assert "gemini_vad_threshold" in widget_js or "0.012" in widget_js, (
         "FALHA GATE 6: Limiar de VAD calibrado ausente em widget.js!"
     )
+
+    # 2. Validação Comportamental Executável em Runtime (Node.js VM com mocks de MediaStream, AudioContext e WebSocket)
+    node_test_script = """
+    const fs = require('fs');
+    const vm = require('vm');
+
+    const dummyFn = () => {};
+    const dummyProxy = new Proxy({}, { get: () => () => dummyProxy });
+
+    function createMockDomElement() {
+        return {
+            addEventListener: dummyFn,
+            removeEventListener: dummyFn,
+            classList: { add: dummyFn, remove: dummyFn, contains: () => false, toggle: dummyFn },
+            textContent: '',
+            title: '',
+            value: '',
+            style: {},
+            appendChild: dummyFn,
+            remove: dummyFn,
+            querySelectorAll: () => [],
+            getContext: () => dummyProxy,
+        };
+    }
+
+    class MockWebSocket {
+        static OPEN = 1;
+        constructor(url) {
+            this.url = url;
+            this.readyState = MockWebSocket.OPEN;
+            this.sent = [];
+        }
+        send(data) {
+            this.sent.push(data);
+        }
+        close() {}
+    }
+
+    const sandbox = {
+        window: { location: { search: '' }, addEventListener: dummyFn, removeEventListener: dummyFn },
+        document: {
+            body: createMockDomElement(),
+            getElementById: () => createMockDomElement(),
+            querySelectorAll: () => [],
+            querySelector: () => null,
+            createElement: () => createMockDomElement(),
+            addEventListener: dummyFn,
+            removeEventListener: dummyFn,
+            title: '',
+        },
+        localStorage: { getItem: () => null, setItem: dummyFn },
+        navigator: { mediaDevices: { enumerateDevices: async () => [], getUserMedia: async () => {} } },
+        fetch: async () => ({ ok: true, json: async () => ({ token: 'test-token' }) }),
+        WebSocket: MockWebSocket,
+        console: { log: dummyFn, warn: dummyFn, error: dummyFn },
+        setTimeout: dummyFn,
+        clearTimeout: dummyFn,
+        setInterval: dummyFn,
+        clearInterval: dummyFn,
+        requestAnimationFrame: dummyFn,
+        cancelAnimationFrame: dummyFn,
+    };
+
+    vm.createContext(sandbox);
+    const code = fs.readFileSync('gemini-live-widget/widget.js', 'utf-8');
+    vm.runInContext(code, sandbox);
+
+    async function run() {
+        const track1 = { kind: 'audio', enabled: true };
+        const track2 = { kind: 'audio', enabled: true };
+        const mediaStream = { getAudioTracks: () => [track1, track2], active: true };
+        let suspendCalled = false;
+        let resumeCalled = false;
+        const inputAudioCtx = {
+            state: 'running',
+            suspend: async () => { suspendCalled = true; inputAudioCtx.state = 'suspended'; },
+            resume: async () => { resumeCalled = true; inputAudioCtx.state = 'running'; }
+        };
+        const mockWs = new MockWebSocket('ws://127.0.0.1:8000/ws/live');
+
+        vm.runInContext(`
+            state.mediaStream = mediaStream;
+            state.inputAudioCtx = inputAudioCtx;
+            state.ws = mockWs;
+        `, Object.assign(sandbox, { mediaStream, inputAudioCtx, mockWs }));
+
+        // 1. Executa Mute
+        await vm.runInContext('toggleMicrophonePause(true)', sandbox);
+
+        if (track1.enabled !== false || track2.enabled !== false) {
+            throw new Error('Tracks não foram desabilitadas no mute!');
+        }
+        if (!suspendCalled) {
+            throw new Error('inputAudioCtx.suspend não foi chamado no mute!');
+        }
+        const hasMutedMsg = mockWs.sent.some(s => {
+            try { const m = JSON.parse(s); return m.type === 'microphone_state' && m.muted === true; } catch(_) { return false; }
+        });
+        if (!hasMutedMsg) {
+            throw new Error('Mensagem microphone_state muted:true ausente!');
+        }
+        const hasDuplicateStreamEnd = mockWs.sent.some(s => {
+            try { const m = JSON.parse(s); return m.type === 'audio_stream_end'; } catch(_) { return false; }
+        });
+        if (hasDuplicateStreamEnd) {
+            throw new Error('audio_stream_end duplicado encontrado! Backend deve ser a autoridade única de stream-end.');
+        }
+
+        // 2. Executa Unmute
+        await vm.runInContext('toggleMicrophonePause(false)', sandbox);
+
+        if (track1.enabled !== true || track2.enabled !== true) {
+            throw new Error('Tracks não foram reabilitadas no unmute!');
+        }
+        if (!resumeCalled) {
+            throw new Error('inputAudioCtx.resume não foi chamado no unmute!');
+        }
+        const hasUnmutedMsg = mockWs.sent.some(s => {
+            try { const m = JSON.parse(s); return m.type === 'microphone_state' && m.muted === false; } catch(_) { return false; }
+        });
+        if (!hasUnmutedMsg) {
+            throw new Error('Mensagem microphone_state muted:false ausente!');
+        }
+
+        process.stdout.write(JSON.stringify({ status: 'ok', messages: mockWs.sent }));
+    }
+
+    run().catch(err => {
+        process.stderr.write(err.message || String(err));
+        process.exit(1);
+    });
+    """
+
+    res = subprocess.run(["node", "-e", node_test_script], capture_output=True, text=True)
+    assert res.returncode == 0, f"FALHA COMPORTAMENTAL GATE 6 FRONTEND:\nSTDOUT: {res.stdout}\nSTDERR: {res.stderr}"
+    dados = json.loads(res.stdout)
+    assert dados.get("status") == "ok"
+    assert len(dados.get("messages", [])) == 2
+
 
 
 def test_gate6_server_live_ws_drops_audio_when_muted():

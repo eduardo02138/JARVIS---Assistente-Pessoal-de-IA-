@@ -187,7 +187,6 @@ function desligarMicrofone() {
   estado.gravando = false;
   if (estado.ws && estado.ws.readyState === WebSocket.OPEN) {
     estado.ws.send(JSON.stringify({ tipo: "estado_microfone", mutado: true }));
-    estado.ws.send(JSON.stringify({ tipo: "fim_do_audio" }));
   }
   if (estado.processador) estado.processador.disconnect();
   if (estado.ctxEntrada) estado.ctxEntrada.close();
