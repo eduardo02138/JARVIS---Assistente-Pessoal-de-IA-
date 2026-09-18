@@ -475,7 +475,10 @@ def test_frontend_sends_token():
         "apiFetch('/api/plugins/install'" in source
     )
     ws_autenticado = "token: jarvisSessionToken" in source
-    trata_confirmacao = "tool_confirmation_request" in source
+    with open(os.path.join(base, "gemini-live-widget", "widget.js"), encoding="utf-8") as f:
+        widget = f.read()
+    # O app desktop usa o widget: sem o painel lá, a ferramenta ficava presa até o timeout
+    trata_confirmacao = "tool_confirmation_request" in source and "tool_confirmation_request" in widget
 
     success = usa_helper and plugins_autenticados and ws_autenticado and trata_confirmacao
     detail = (

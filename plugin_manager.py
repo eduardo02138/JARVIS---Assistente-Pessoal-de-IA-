@@ -56,7 +56,7 @@ STORE_CATALOG = [
         "version": "1.0.0",
         "category": "general",
         "icon": "📈",
-        "description": "Cotações em tempo real (B3, S&P 500, Cripto), consolidação de portfólio, alocação de ativos e insights táticos.",
+        "description": "SIMULADO: cotações de demonstração… não consulta o Google Finance real. Demonstração de carteira e alocação de ativos.",
         "author": "Google Finance & Stark Holdings",
         "installed": True,
         "enabled": True

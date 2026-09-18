@@ -457,6 +457,44 @@ function flushAudioQueue() {
     dom.liveStatusText.textContent = "Ouvindo você...";
 }
 
+/**
+ * Painel de autorização para ferramentas de risco (EXTERNAL_WRITE / PRIVILEGED).
+ * Sem resposta, o backend nega a execução por tempo esgotado.
+ */
+function mostrarPedidoDeAutorizacao(msg) {
+    appendChatMessage("tool", `Autorização necessária (${msg.risk_level}): ${msg.name}`, { source: "tool" });
+
+    const painel = document.createElement("div");
+    painel.className = "jarvis-confirm-panel";
+    painel.innerHTML = `
+        <h3>Autorização necessária</h3>
+        <p class="risco">${msg.risk_level}</p>
+        <p class="ferramenta">${msg.name}</p>
+        <pre>${JSON.stringify(msg.args, null, 2)}</pre>
+        <div class="acoes">
+            <button class="aprovar">Autorizar</button>
+            <button class="negar">Negar</button>
+        </div>
+    `;
+    document.body.appendChild(painel);
+
+    let respondido = false;
+    const responder = (aprovado) => {
+        if (respondido) return;
+        respondido = true;
+        clearTimeout(temporizador);
+        painel.remove();
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify({ type: "tool_confirmation", id: msg.id, approved: aprovado }));
+        }
+        appendChatMessage("tool", aprovado ? "Autorizado pelo senhor." : "Negado pelo senhor.", { source: "tool" });
+    };
+
+    painel.querySelector(".aprovar").addEventListener("click", () => responder(true));
+    painel.querySelector(".negar").addEventListener("click", () => responder(false));
+    const temporizador = setTimeout(() => responder(false), (msg.timeout_s || 60) * 1000);
+}
+
 // ---------------- WEBSOCKET BRIDGE COM GEMINI LIVE ----------------
 async function connectLiveBackend() {
     // Sempre revalida: quando o servidor reinicia sem JARVIS_TOKEN fixo, ele gera um
@@ -543,6 +581,10 @@ async function connectLiveBackend() {
             case "tool_call":
                 dom.liveStatusText.textContent = `Executando: ${msg.name}...`;
                 appendChatMessage("tool", `Executando: ${msg.name}...`, { source: "tool" });
+                break;
+
+            case "tool_confirmation_request":
+                mostrarPedidoDeAutorizacao(msg);
                 break;
 
             case "tool_result":

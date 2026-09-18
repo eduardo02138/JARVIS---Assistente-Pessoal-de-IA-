@@ -75,6 +75,8 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "adjust_volume": RiskLevel.LOW_WRITE,
     "open_application": RiskLevel.LOW_WRITE,
     "open_website": RiskLevel.LOW_WRITE,
+    # Apenas abre o navegador com a URL de busca; não escreve em serviço nenhum
+    "search_web": RiskLevel.LOW_WRITE,
     "play_music": RiskLevel.LOW_WRITE,
     "take_quick_note": RiskLevel.LOW_WRITE,
     "set_ide_mode": RiskLevel.LOW_WRITE,
@@ -99,7 +101,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     # EXTERNAL_WRITE: Comunicação com serviços de terceiros
     "social_feed_post_update": RiskLevel.EXTERNAL_WRITE,
     "live_stream_send_alert": RiskLevel.EXTERNAL_WRITE,
-    "search_web": RiskLevel.EXTERNAL_WRITE,
+
 
     # PRIVILEGED: Agente autônomo e controle de sistema
     "antigravity_run_prompt": RiskLevel.PRIVILEGED,
