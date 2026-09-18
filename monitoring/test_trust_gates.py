@@ -312,6 +312,41 @@ def test_gate4_chat_dispatches_to_omniroute_when_selected():
             provider_router.set_active_provider("google_studio")
             assert resp.status_code == 200
             assert resp.json().get("provedor") == "omniroute"
+            assert resp.json().get("modelo") == f"omniroute/{OmniRouteProvider.get_model()}"
             assert mock_omni.called is True, "FALHA GATE 4: OmniRouteProvider.chat NÃO foi chamado mesmo com OmniRoute selecionado!"
             assert mock_runner.called is False, "FALHA GATE 4: Google Runner foi chamado indevidamente quando OmniRoute estava ativo!"
+
+
+def test_gate4_omniroute_observability_respects_custom_model(monkeypatch):
+    """Gate 4: A observabilidade do modelo OmniRoute deve refletir fielmente OMNIROUTE_MODEL."""
+    monkeypatch.setenv("OMNIROUTE_MODEL", "qwen3.6-plus")
+    assert OmniRouteProvider.get_model() == "qwen3.6-plus"
+
+    client = TestClient(app)
+    provider_router.set_active_provider("omniroute")
+    with patch("provider_router.OmniRouteProvider.chat", new_callable=AsyncMock) as mock_omni:
+        mock_omni.return_value = "Resposta Qwen"
+        resp = client.post(
+            "/api/chat",
+            json={"texto": "teste modelo", "sessao": "sess_mod", "usuario": "usr_mod"},
+            headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN}
+        )
+        provider_router.set_active_provider("google_studio")
+        assert resp.status_code == 200
+        assert resp.json().get("modelo") == "omniroute/qwen3.6-plus"
+
+
+def test_agent_skills_spec_compliance():
+    """Valida que todas as 8 skills do ecossistema são 100% conformes com a spec Agent Skills oficial."""
+    from adk_skill_loader import adk_skill_loader
+    relatorio = adk_skill_loader.relatorio()
+    assert len(relatorio) == 8, f"Esperado 8 skills, encontrado {len(relatorio)}"
+    for item in relatorio:
+        assert item["origem_carga"] == "adk_oficial", (
+            f"Skill {item['skill_name']} falhou na carga oficial do ADK: {item}"
+        )
+        assert item["spec_compliant"] is True, (
+            f"Skill {item['skill_name']} não é compliant com a spec Agent Skills: {item.get('spec_compliance_error')}"
+        )
+        assert item["l1_frontmatter_ok"] is True
 
