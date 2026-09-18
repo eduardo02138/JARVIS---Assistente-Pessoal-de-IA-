@@ -1307,12 +1307,25 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                 # Worker 1: Lê comandos e áudio do WebSocket sem interrupções
                 async def ws_client_worker():
+                    client_muted = False
                     while True:
                         msg_text = await websocket.receive_text()
                         msg = json.loads(msg_text)
                         msg_type = msg.get("type") or msg.get("tipo")
 
+                        if msg_type in ("microphone_state", "estado_microfone"):
+                            client_muted = bool(msg.get("muted", msg.get("mutado", False)))
+                            record_event("microphone_state_changed", {"muted": client_muted})
+                            if client_muted:
+                                if transcritor_dedicado.is_active:
+                                    asyncio.create_task(transcritor_dedicado.send_audio_stream_end())
+                                await session.send_realtime_input(audio_stream_end=True)
+                            continue
+
                         if msg_type == "audio":
+                            if client_muted:
+                                # Fail-closed: descarta chunks residuais que cheguem enquanto mutado
+                                continue
                             audio_b64 = msg.get("data", "")
                             if audio_b64:
                                 pcm_data = base64.b64decode(audio_b64)
