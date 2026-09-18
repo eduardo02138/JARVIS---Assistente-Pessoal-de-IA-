@@ -411,6 +411,8 @@ async def listar_pendentes(
     _=Depends(verify_jarvis_token)
 ):
     """Lista pendências ativas filtradas com estrito isolamento por sessão/usuário."""
+    if not sessao and not usuario:
+        return {"pendentes": []}
     pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
     now_m = time.monotonic()
     return {
@@ -421,6 +423,7 @@ async def listar_pendentes(
                 "argumentos": a.args,
                 "status": a.status,
                 "session_id": a.session_id,
+                "user_id": a.user_id,
                 "expira_em": max(0, int(a.expires_at - now_m))
             }
             for a in pendentes
@@ -433,21 +436,24 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     action_id = payload.get("id_confirmacao")
     aprovado = payload.get("aprovado", True)
     session_id = payload.get("sessao")
-    user_id = payload.get("usuario")
+    user_id = payload.get("usuario") or "local"
+
+    if not session_id:
+        return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' é obrigatório para confirmar ações."}, status_code=400)
 
     if not action_id:
         pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
         if pending:
             return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
-        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para esta sessão"}, status_code=404)
+        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para esta sessão/usuário"}, status_code=404)
 
     if aprovado:
         sucesso = policy_engine.approve_action(action_id, session_id=session_id, user_id=user_id)
         if sucesso:
             return {"status": "ok", "action_id": action_id}
-        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada, expirada ou pertencente a outra sessão"}, status_code=400)
+        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada, expirada ou sessão/usuário divergente"}, status_code=400)
     else:
-        policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
+        sucesso = policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
         return {"status": "rejeitado", "action_id": action_id}
 
 
@@ -463,9 +469,13 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     caminho_forcado = payload.get("caminho")
 
     # Verifica palavras de confirmação verbal ou digitada do usuário
-    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
+    palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
     texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-    if texto_limpo in palavras_confirmacao:
+    tokens = set(texto_limpo.split())
+    is_negado = bool(tokens & palavras_negacao)
+    is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
+    if is_confirmado:
         pending = policy_engine.approve_latest_pending(session_id=sessao)
         if pending:
             logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
@@ -580,9 +590,13 @@ async def live_adk(
                 )
             elif tipo == "texto":
                 texto_msg = msg.get("texto", "").strip()
-                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
+                palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
                 texto_limpo = "".join(c for c in texto_msg.lower() if c.isalnum() or c.isspace()).strip()
-                if texto_limpo in palavras_confirmacao or texto_msg.lower() in palavras_confirmacao:
+                tokens = set(texto_limpo.split())
+                is_negado = bool(tokens & palavras_negacao)
+                is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
+                if is_confirmado:
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por DIGITAÇÃO no Live ADK!", pending.action_id, pending.tool_name)
@@ -647,9 +661,13 @@ async def live_adk(
                     {"tipo": "transcricao_usuario", "texto": transcricao_usuario}
                 )
                 # Hook de aprovação verbal por voz na sessão Live
-                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
+                palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
                 texto_limpo = "".join(c for c in transcricao_usuario.lower() if c.isalnum() or c.isspace()).strip()
-                if texto_limpo in palavras_confirmacao or transcricao_usuario.lower() in palavras_confirmacao:
+                tokens = set(texto_limpo.split())
+                is_negado = bool(tokens & palavras_negacao)
+                is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
+                if is_confirmado:
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
@@ -820,7 +838,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "lease": policy_engine.control_lease_status()
                 })
                 logger.info(f"Sessão Gemini Live estabelecida com sucesso usando {model_name}!")
-                assistant_state = {"busy": False, "ultimo_audio": 0.0}
+                assistant_state = {
+                    "busy": False,
+                    "ultimo_audio": 0.0,
+                    "ultimo_envio_usuario": 0.0,
+                    "audio_recebido_no_turno": 0,
+                    "texto_recebido_no_turno": 0,
+                    "ultima_ferramenta": None,
+                    "ultimo_resultado_ferramenta": None
+                }
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
 
@@ -837,7 +863,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         "reason": decision.reason,
                         "timeout_s": CONFIRMATION_TIMEOUT_S
                     })
-                    record_event("policy_confirmation_request", {
+                    record_event("policy_confirmation_requested", {
+                        "call_id": call_id,
                         "name": func_name,
                         "risk": decision.risk_level.value,
                         "args": args
@@ -861,12 +888,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             if audio_b64:
                                 pcm_data = base64.b64decode(audio_b64)
                                 record_event("user_audio_chunk", {"bytes": len(pcm_data)})
-                                # Se o assistente estiver respondendo/falando, não repassa o microfone
-                                # para evitar que o som dos alto-falantes cause falso barge-in/cancelamento
-                                # Depois que o assistente para de emitir áudio, volta a ouvir mesmo
-                                # antes do turn_complete: senão o começo da frase do usuário se perdia.
-                                silencio = time.time() - assistant_state["ultimo_audio"] > MIC_GRACE_S
-                                if not assistant_state["busy"] or silencio:
+                                # Se o assistente estiver ocupado processando ou emitindo áudio nos falantes,
+                                # não repassa o áudio ambiente do microfone para evitar falso barge-in / cancelamento.
+                                agora = time.time()
+                                esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 3.5)
+                                falando_agora = (agora - assistant_state["ultimo_audio"] < MIC_GRACE_S)
+                                if not esperando_resposta and not falando_agora:
                                     await session.send_realtime_input(
                                         audio=types.Blob(
                                             data=pcm_data,
@@ -903,6 +930,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 record_event("user_text", {"text": user_text})
                                 gemini_bridge.log_audit_event("USER", "chat_input", user_text)
                                 assistant_state["busy"] = True
+                                assistant_state["ultimo_envio_usuario"] = time.time()
+                                assistant_state["audio_recebido_no_turno"] = 0
+                                assistant_state["texto_recebido_no_turno"] = 0
+                                assistant_state["ultima_ferramenta"] = None
+                                assistant_state["ultimo_resultado_ferramenta"] = None
                                 await session.send_client_content(
                                     turns=types.Content(
                                         role="user",
@@ -938,6 +970,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         inj_text = await active_session_queue.get()
                         logger.info(f"Injetando prompt na sessão ativa: '{inj_text}'")
                         assistant_state["busy"] = True
+                        assistant_state["ultimo_envio_usuario"] = time.time()
+                        assistant_state["audio_recebido_no_turno"] = 0
+                        assistant_state["texto_recebido_no_turno"] = 0
+                        assistant_state["ultima_ferramenta"] = None
+                        assistant_state["ultimo_resultado_ferramenta"] = None
                         await session.send_client_content(
                             turns=types.Content(
                                 role="user",
@@ -970,6 +1007,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             if part.inline_data and part.inline_data.data:
                                                 record_event("model_audio_chunk", {"bytes": len(part.inline_data.data)})
                                                 assistant_state["ultimo_audio"] = time.time()
+                                                assistant_state["audio_recebido_no_turno"] += len(part.inline_data.data)
                                                 audio_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
                                                 await websocket.send_json({
                                                     "type": "audio",
@@ -980,6 +1018,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     if server_content.output_transcription and server_content.output_transcription.text:
                                         transcribed = server_content.output_transcription.text
                                         record_event("model_text", {"text": transcribed})
+                                        assistant_state["texto_recebido_no_turno"] += len(transcribed)
                                         await websocket.send_json({
                                             "type": "text",
                                             "text": transcribed
@@ -994,8 +1033,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         })
                                         # Aprovação por comando de voz no WebSocket nativo
                                         palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder"}
+                                        palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
                                         trans_lower = "".join(c for c in user_trans.lower() if c.isalnum() or c.isspace()).strip()
-                                        if trans_lower in palavras_sim or user_trans.lower().strip() in palavras_sim:
+                                        tokens_voz = set(trans_lower.split())
+                                        if (trans_lower in palavras_sim or bool(tokens_voz & palavras_sim)) and not (tokens_voz & palavras_nao):
                                             for cid, fut in list(pending_confirmations.items()):
                                                 if not fut.done():
                                                     fut.set_result(True)
@@ -1008,7 +1049,28 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     })
 
                                     if server_content.turn_complete:
+                                        # Resiliência de voz: se uma ferramenta foi concluída mas o modelo fechou o turno em silêncio
+                                        if (assistant_state.get("ultima_ferramenta") 
+                                                and assistant_state.get("audio_recebido_no_turno", 0) == 0 
+                                                and assistant_state.get("texto_recebido_no_turno", 0) == 0):
+                                            res_ferramenta = assistant_state.get("ultimo_resultado_ferramenta") or {}
+                                            msg_fala = res_ferramenta.get("mensagem")
+                                            if not msg_fala:
+                                                if isinstance(res_ferramenta, dict):
+                                                    itens = [f"{k}: {v}" for k, v in res_ferramenta.items() if k != "sucesso"]
+                                                    msg_fala = f"Resultado de {assistant_state['ultima_ferramenta']}: {', '.join(itens)}"
+                                                else:
+                                                    msg_fala = str(res_ferramenta)
+                                            logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
+                                            record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
+                                            await websocket.send_json({
+                                                "type": "fallback_text",
+                                                "text": msg_fala
+                                            })
+
                                         assistant_state["busy"] = False
+                                        assistant_state["ultima_ferramenta"] = None
+                                        assistant_state["ultimo_resultado_ferramenta"] = None
                                         record_event("turn_complete")
                                         await websocket.send_json({"type": "turn_complete"})
 
@@ -1051,6 +1113,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             else:
                                                 res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
 
+                                        assistant_state["ultima_ferramenta"] = func_name
+                                        assistant_state["ultimo_resultado_ferramenta"] = res
                                         record_event("tool_result", {"name": func_name, "result": res})
                                         gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
                                         await websocket.send_json({

@@ -437,31 +437,46 @@ class PolicyEngine:
         if time.monotonic() > pending.expires_at:
             pending.status = "rejected"
             return False
-        if session_id and pending.session_id and pending.session_id != session_id:
+        # Isolamento obrigatório: se a ação foi associada a uma sessão/usuário, eles são indispensáveis
+        if not session_id:
+            logger.warning(f"Tentativa de aprovação de ação sem informar session_id obrigatório: {action_id}")
+            return False
+        if pending.session_id and pending.session_id != session_id:
             logger.warning(f"Tentativa de aprovação de ação por sessão alheia: {session_id} != {pending.session_id}")
             return False
-        if user_id and pending.user_id and pending.user_id != user_id:
+        if pending.user_id and not user_id:
+            logger.warning(f"Tentativa de aprovação de ação sem informar user_id obrigatório: {action_id}")
+            return False
+        if pending.user_id and user_id and pending.user_id != user_id:
             logger.warning(f"Tentativa de aprovação de ação por usuário alheio: {user_id} != {pending.user_id}")
             return False
         pending.status = "approved"
-        logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name}")
+        logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
         return True
 
     def approve_latest_pending(
         self,
-        session_id: Optional[str] = None,
+        session_id: str,
         user_id: Optional[str] = None
     ) -> Optional[PendingAction]:
+        """Aprova a pendência mais recente pertencente EXCLUSIVAMENTE à sessão e usuário fornecidos.
+        session_id é OBRIGATÓRIO para impedir aprovação indevida de ações de outras sessões ou globais.
+        """
+        if not session_id:
+            logger.warning("Tentativa de approve_latest_pending sem session_id obrigatório.")
+            return None
         now = time.monotonic()
         for action_id in reversed(list(self._pending_actions.keys())):
             action = self._pending_actions[action_id]
             if action.status == "pending" and now <= action.expires_at:
-                if session_id is not None and action.session_id is not None and action.session_id != session_id:
+                if action.session_id != session_id:
                     continue
-                if user_id is not None and action.user_id is not None and action.user_id != user_id:
+                if action.user_id and not user_id:
+                    continue
+                if action.user_id and user_id and action.user_id != user_id:
                     continue
                 action.status = "approved"
-                logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id})")
+                logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
                 return action
         return None
 
@@ -474,9 +489,13 @@ class PolicyEngine:
         pending = self._pending_actions.get(action_id)
         if not pending:
             return False
-        if session_id and pending.session_id and pending.session_id != session_id:
+        if not session_id:
             return False
-        if user_id and pending.user_id and pending.user_id != user_id:
+        if pending.session_id and pending.session_id != session_id:
+            return False
+        if pending.user_id and not user_id:
+            return False
+        if pending.user_id and user_id and pending.user_id != user_id:
             return False
         pending.status = "rejected"
         del self._pending_actions[action_id]
@@ -497,10 +516,12 @@ class PolicyEngine:
         for action_id, action in list(self._pending_actions.items()):
             if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
                 if action.args_hash == args_hash or not action.args:
-                    if session_id is not None and action.session_id is not None and action.session_id != session_id:
-                        continue
-                    if user_id is not None and action.user_id is not None and action.user_id != user_id:
-                        continue
+                    if action.session_id is not None:
+                        if not session_id or action.session_id != session_id:
+                            continue
+                    if action.user_id is not None:
+                        if not user_id or action.user_id != user_id:
+                            continue
                     # Consumo estritamente único (one-shot): revoga e apaga imediatamente
                     action.status = "consumed"
                     del self._pending_actions[action_id]
@@ -513,15 +534,19 @@ class PolicyEngine:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None
     ) -> list[PendingAction]:
-        """Retorna apenas as pendências ativas da sessão e usuário requisitantes."""
+        """Retorna apenas as pendências ativas da sessão e usuário requisitantes.
+        Exige ao menos session_id ou user_id para evitar enumeração global não autorizada.
+        """
         self.cleanup_expired_actions()
         now = time.monotonic()
+        if not session_id and not user_id:
+            return []
         resultado = []
         for action in self._pending_actions.values():
             if action.status == "pending" and now <= action.expires_at:
-                if session_id is not None and action.session_id is not None and action.session_id != session_id:
+                if session_id is not None and action.session_id != session_id:
                     continue
-                if user_id is not None and action.user_id is not None and action.user_id != user_id:
+                if user_id is not None and action.user_id != user_id:
                     continue
                 resultado.append(action)
         return resultado

@@ -70,6 +70,7 @@ def guarda_de_ferramentas(
     O LLM não pode se auto-autorizar.
     """
     session_id = getattr(tool_context, "session_id", None) or "local"
+    user_id = getattr(tool_context, "user_id", None) or getattr(tool_context, "usuario", None) or "local"
     decision = policy_engine.evaluate(tool.name, args, session_id=session_id)
 
     if not decision.allowed:
@@ -80,14 +81,15 @@ def guarda_de_ferramentas(
 
     if decision.requires_confirmation:
         # Verifica se há autorização one-shot aprovada pelo usuário para esta chamada
-        if policy_engine.consume_authorization(tool.name, args, session_id=session_id):
+        if policy_engine.consume_authorization(tool.name, args, session_id=session_id, user_id=user_id):
             return None  # Autorizado e consumido!
 
-        # Bloqueado: cria solicitação pendente com TTL de 60s
+        # Bloqueado: cria solicitação pendente com TTL de 60s com isolamento de sessão e usuário
         pending = policy_engine.create_pending_action(
             tool_name=tool.name,
             args=args,
             session_id=session_id,
+            user_id=user_id,
             ttl=60.0
         )
         return {

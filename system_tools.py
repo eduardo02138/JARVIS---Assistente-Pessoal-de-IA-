@@ -86,7 +86,8 @@ def get_system_status() -> dict:
         "battery": battery_info,
         "gpu": get_gpu_status(),
         "uptime": f"{hours} horas e {minutes} minutos",
-        "status_geral": "Todos os subsistemas operando em parâmetros nominais, senhor."
+        "status_geral": "Todos os subsistemas operando em parâmetros nominais, senhor.",
+        "mensagem": f"CPU em {cpu_percent}%, Memória RAM em {memory.percent}% ({memory.used / (1024**3):.1f} GB de {memory.total / (1024**3):.1f} GB usados), Disco com {disk.free / (1024**3):.1f} GB livres. Todos os subsistemas nominais."
     }
 
 def get_current_datetime() -> dict:

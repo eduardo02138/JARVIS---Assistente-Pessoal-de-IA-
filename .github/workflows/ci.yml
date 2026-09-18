@@ -29,6 +29,10 @@ jobs:
         run: |
           python -m py_compile server.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py monitoring/test_suite.py app.py servidor_adk.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py
 
+      - name: Runtime Module Import Check (Smoke Test)
+        run: |
+          python -c "import servidor_adk; import server; import policy_engine; import system_tools; print('Todos os modulos importados com sucesso em runtime!')"
+
       - name: Run Architecture & Security Test Suite
         env:
           GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"

@@ -51,12 +51,12 @@ const state = {
 
     // Configurações
     voice: localStorage.getItem("gemini_live_voice") || "Puck",
-    currentMode: localStorage.getItem("jarvis_app_mode") || "tank-3.8",
+    currentMode: localStorage.getItem("jarvis_app_mode") || "live-flash",
     model: (function () {
-        const mode = localStorage.getItem("jarvis_app_mode") || "tank-3.8";
+        const mode = localStorage.getItem("jarvis_app_mode") || "live-flash";
         if (mode === "simples") return "gemini-flash-latest";
-        if (mode === "live-flash") return "gemini-2.5-flash-native-audio-latest";
-        return "gemini-3.8-live";
+        if (mode === "tank-3.8") return "gemini-3.8-live";
+        return "gemini-2.5-flash-native-audio-latest";
     })(),
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
     micMode: localStorage.getItem("gemini_mic_mode") || "always",
@@ -665,8 +665,23 @@ async function connectLiveBackend() {
                 break;
 
             case "tool_result":
-                appendChatMessage("tool", `Concluído: ${msg.name}`, { source: "tool" });
-                dom.liveStatusText.textContent = "Ouvindo você...";
+                let detalheResultado = "";
+                if (msg.result) {
+                    if (msg.result.mensagem) {
+                        detalheResultado = `: ${msg.result.mensagem}`;
+                    } else if (msg.result.erro) {
+                        detalheResultado = `: ⚠️ ${msg.result.erro}`;
+                    } else if (typeof msg.result === "object") {
+                        const partes = Object.entries(msg.result)
+                            .filter(([k]) => k !== "sucesso" && k !== "erro")
+                            .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+                        if (partes.length > 0) {
+                            detalheResultado = `: ${partes.slice(0, 4).join(", ")}`;
+                        }
+                    }
+                }
+                appendChatMessage("tool", `Concluído: ${msg.name}${detalheResultado}`, { source: "tool" });
+                dom.liveStatusText.textContent = detalheResultado ? detalheResultado.slice(2, 60) : "Ouvindo você...";
                 break;
 
             case "error":

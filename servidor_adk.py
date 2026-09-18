@@ -14,15 +14,60 @@ import base64
 import json
 import logging
 import os
-
-from dotenv import load_dotenv
+import sys
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(RAIZ, ".env"), override=True)
+# Auto-injeção do .venv local para execução transparente via python3 ou fish shell
+for venv_site in [
+    os.path.join(RAIZ, ".venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),
+    os.path.join(RAIZ, ".venv", "lib", "site-packages")
+]:
+    if os.path.isdir(venv_site) and venv_site not in sys.path:
+        sys.path.insert(0, venv_site)
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect  # noqa: E402
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(RAIZ, ".env"), override=True)
+except ImportError:
+    pass
+
+import time
+import secrets
+from typing import Optional
+from fastapi import (
+    FastAPI,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+)  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
+if not JARVIS_SECRET_TOKEN:
+    JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
+
+async def verify_jarvis_token(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_jarvis_token: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+):
+    req_token = None
+    if authorization and authorization.startswith("Bearer "):
+        req_token = authorization.split("Bearer ")[1].strip()
+    elif x_jarvis_token:
+        req_token = x_jarvis_token.strip()
+    elif token:
+        req_token = token.strip()
+
+    if req_token != JARVIS_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
+    return req_token
 from google.adk.agents import LiveRequestQueue  # noqa: E402
 from google.adk.agents.run_config import RunConfig  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
@@ -160,6 +205,10 @@ async def pagina_inicial():
     return FileResponse(os.path.join(RAIZ, "static_adk", "index.html"))
 
 
+@app.get("/api/auth/session")
+async def obter_token_sessao():
+    return {"token": JARVIS_SECRET_TOKEN}
+
 @app.get("/api/health")
 async def saude():
     return {
@@ -203,21 +252,25 @@ async def listar_pendentes(
 async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     action_id = payload.get("id_confirmacao")
     aprovado = payload.get("aprovado", True)
-    session_id = payload.get("sessao", "sessao-principal")
+    session_id = payload.get("sessao")
+    user_id = payload.get("usuario") or "local"
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Parâmetro 'sessao' é obrigatório para confirmar ações.")
 
     if not action_id:
-        pending = policy_engine.approve_latest_pending(session_id=session_id)
+        pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
         if pending:
             return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
-        return {"status": "erro", "mensagem": "Nenhuma acao pendente encontrada para confirmacao"}
+        return {"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para confirmação nesta sessão"}
 
     if aprovado:
-        sucesso = policy_engine.approve_action(action_id, session_id=session_id)
+        sucesso = policy_engine.approve_action(action_id, session_id=session_id, user_id=user_id)
         if sucesso:
             return {"status": "ok", "action_id": action_id}
-        return {"status": "erro", "mensagem": "Acao nao encontrada ou expirada"}
+        return {"status": "erro", "mensagem": "Ação não encontrada, expirada ou sessão/usuário divergente"}
     else:
-        policy_engine.reject_action(action_id)
+        sucesso = policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
         return {"status": "rejeitado", "action_id": action_id}
 
 
@@ -236,9 +289,13 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
     else:
         caminho, motivo = escolher_caminho(texto)
     # Verifica palavras de confirmacao emitidas pelo usuario
-    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
+    palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
     texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-    if texto_limpo in palavras_confirmacao:
+    tokens = set(texto_limpo.split())
+    is_negado = bool(tokens & palavras_negacao)
+    is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
+    if is_confirmado:
         pending = policy_engine.approve_latest_pending(session_id=sessao)
         if pending:
             logger.info("Usuario aprovou acao pendente %s (%s)", pending.action_id, pending.tool_name)
