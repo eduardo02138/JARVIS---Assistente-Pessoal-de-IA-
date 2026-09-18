@@ -357,14 +357,10 @@ def test_websocket_auth():
 
     # 2. Handshake com token válido -> autenticação aprovada
     auth_accepted = False
-    try:
-        with client.websocket_connect("/ws/live") as ws:
-            ws.send_json({"type": "init", "voice": "Charon", "token": JARVIS_SECRET_TOKEN})
-            # Não deve dar erro de "Não autorizado"
-            auth_accepted = True
-    except Exception as e:
-        if "Não autorizado" not in str(e):
-            auth_accepted = True
+    with client.websocket_connect("/ws/live") as ws:
+        ws.send_json({"type": "init", "voice": "Charon", "token": JARVIS_SECRET_TOKEN})
+        # Verifica que o handshake inicial com credenciais válidas é aceito sem exceção
+        auth_accepted = True
 
     success = unauth_rejected and auth_accepted
     detail = f"Sem token rejeitado: {unauth_rejected} | Com token aprovado: {auth_accepted}"
