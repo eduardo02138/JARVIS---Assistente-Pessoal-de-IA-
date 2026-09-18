@@ -41,7 +41,7 @@ const state = {
     connected: false,
     listening: false,
     speaking: false,
-    paused: true,
+    paused: false,
     ws: null,
     
     // Histórico & Contexto Ativo
@@ -51,13 +51,13 @@ const state = {
 
     // Configurações
     voice: localStorage.getItem("gemini_live_voice") || "Puck",
-    currentMode: localStorage.getItem("jarvis_app_mode") || "live-flash",
+    currentMode: localStorage.getItem("jarvis_app_mode") || "tank-3.8",
     model: (function () {
-        const mode = localStorage.getItem("jarvis_app_mode") || "live-flash";
+        const mode = localStorage.getItem("jarvis_app_mode") || "tank-3.8";
         if (mode === "simples") return "gemini-flash-latest";
-        if (mode === "tank-3.8") return "gemini-3.8-live";
-        if (mode === "computador") return "gemini-2.5-computer-use-preview-10-2025";
-        return "gemini-2.5-flash-native-audio-latest";
+        if (mode === "live-flash") return "gemini-2.5-flash-native-audio-latest";
+        if (mode === "computador") return "gemini-3.6-flash";
+        return "gemini-3.8-live";
     })(),
     provider: localStorage.getItem("jarvis_provider") || "google_studio",
     micDeviceId: localStorage.getItem("gemini_mic_device") || "default",
@@ -733,6 +733,7 @@ async function connectLiveBackend() {
                 }
                 dom.liveStatusText.textContent = `Gemini Live [${provRotulo}] (${msg.model || state.model})`;
                 dom.statusBadgeChip.classList.add("active");
+                if (state.micMode !== "ptt") state.listening = true;
                 initAudio();
                 updateProviderUI();
                 break;

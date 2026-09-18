@@ -25,7 +25,7 @@ from .playwright_computer import PlaywrightComputer
 
 logger = logging.getLogger("jarvis.computer_use")
 
-MODELO_COMPUTER = os.environ.get("COMPUTER_USE_MODEL", "gemini-2.5-computer-use-preview-10-2025")
+MODELO_COMPUTER = os.environ.get("COMPUTER_USE_MODEL", "gemini-3.6-flash")
 
 INSTRUCAO_COMPUTADOR = """Você é o J.A.R.V.I.S. operando o navegador do computador do usuário.
 

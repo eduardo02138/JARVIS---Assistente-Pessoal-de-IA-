@@ -161,7 +161,7 @@ async def health_check():
         "active_provider": provider_router.active_provider,
         "omniroute_online": omni["online"],
         "omniroute_combo": omni["combo"],
-        "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
     }
 
 @app.get("/api/providers")
@@ -184,7 +184,7 @@ async def get_providers_endpoint():
                 "is_primary": True,
                 "is_active": act == "google_studio",
                 "status": "online" if has_key else "missing_keys",
-                "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
+                "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
                 "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
                 "features": ["Native Audio 24kHz", "Latência <500ms", "Live WebSockets", "Visão & 55 Ferramentas"],
                 "description": "Provedor primário oficial com velocidade máxima e áudio bidirecional em tempo real."
@@ -1085,7 +1085,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # O modelo pedido pelo cliente é respeitado; o .env define o padrão.
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
-    model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest")
+    model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
     req_provider = (init_data.get("provider") or "").strip() or ACTIVE_AI_PROVIDER
     allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
     activity_handling = (
