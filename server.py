@@ -64,7 +64,7 @@ if not JARVIS_SECRET_TOKEN:
 CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "30"))
 
 # Silêncio do assistente (segundos) a partir do qual o microfone volta a ser encaminhado
-MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "1.0"))
+MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "0.3"))
 
 # Caminho interno do agente de Computer Use (navegador Chromium via Playwright)
 CAMINHO_COMPUTADOR = "computador"
@@ -1433,15 +1433,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     model_turn = server_content.model_turn
                                     if model_turn is not None:
                                         for part in model_turn.parts:
-                                            if part.text:
-                                                is_thought = getattr(part, "thought", False) or False
-                                                record_event("model_text", {"text": part.text, "thought": is_thought})
-                                                if not is_thought:
-                                                    assistant_state["texto_recebido_no_turno"] += len(part.text)
-                                                    await websocket.send_json({
-                                                        "type": "text",
-                                                        "text": part.text
-                                                    })
                                             if part.inline_data and part.inline_data.data:
                                                 record_event("model_audio_chunk", {"bytes": len(part.inline_data.data)})
                                                 assistant_state["ultimo_audio"] = time.time()
@@ -1452,16 +1443,27 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     "data": audio_b64
                                                 })
 
-                                    # Transcrição da resposta falada pelo Gemini em tempo real (fallback)
+                                    # Transcrição contínua da resposta falada pelo Gemini em tempo real
                                     if server_content.output_transcription and server_content.output_transcription.text:
                                         transcribed = server_content.output_transcription.text
-                                        if assistant_state["texto_recebido_no_turno"] == 0:
-                                            record_event("model_text", {"text": transcribed})
-                                            assistant_state["texto_recebido_no_turno"] += len(transcribed)
-                                            await websocket.send_json({
-                                                "type": "text",
-                                                "text": transcribed
-                                            })
+                                        record_event("model_text", {"text": transcribed})
+                                        assistant_state["texto_recebido_no_turno"] += len(transcribed)
+                                        await websocket.send_json({
+                                            "type": "text",
+                                            "text": transcribed
+                                        })
+                                    elif model_turn is not None:
+                                        # Fallback: se não houver output_transcription, envia texto textual do model_turn
+                                        for part in model_turn.parts:
+                                            if part.text:
+                                                is_thought = getattr(part, "thought", False) or False
+                                                record_event("model_text", {"text": part.text, "thought": is_thought})
+                                                if not is_thought:
+                                                    assistant_state["texto_recebido_no_turno"] += len(part.text)
+                                                    await websocket.send_json({
+                                                        "type": "text",
+                                                        "text": part.text
+                                                    })
 
                                     # Parcial em tempo real: se o transcritor dedicado não estiver ativo, usa nativo
                                     parcial = getattr(server_content, "interim_input_transcription", None)

@@ -381,7 +381,7 @@ async function initAudio() {
             // Limiar de fala natural e sensível (~0.006). Evita cortes de voz em fones e microfones comuns
             const isSpeaking = rms >= 0.006;
             if (isSpeaking) {
-                speechHoldover = 8; // Mantem envio por ~350ms adicionais
+                speechHoldover = 3; // Mantem envio por ~380ms adicionais
             } else if (speechHoldover > 0) {
                 speechHoldover--;
                 if (speechHoldover === 0) {
@@ -506,7 +506,7 @@ function playPCMResponse(base64Data) {
         if (dom.liveStatusText.textContent.includes("falando")) {
             dom.liveStatusText.textContent = "Ouvindo você...";
         }
-    }, Math.max(1000, (audioBuffer.duration + 0.3) * 1000));
+    }, Math.max(300, (audioBuffer.duration + 0.15) * 1000));
 
     source.onended = () => {
         if (state.activeAudioSources) {
