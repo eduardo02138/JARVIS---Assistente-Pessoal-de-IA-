@@ -1595,6 +1595,35 @@ async def test_chat_provider_routing_compulsory():
     return True
 
 
+async def test_server_integration_and_app_name_standardization():
+    """Valida a integração dos servidores e padronização do app_name em sessoes.db (Fase R4)."""
+    import server
+    import servidor_adk
+
+    # 1. Padronização de APP_NOME para compartilhamento transparente de histórico
+    assert servidor_adk.APP_NOME == "assistente"
+
+    # 2. Sessão criada pelo runtime ADK é compartilhada entre os serviços
+    sess_id = "sessao-unificada-r4-test"
+    user_id = "usuario-r4"
+    await server.session_service_adk.create_session(
+        app_name="assistente", user_id=user_id, session_id=sess_id
+    )
+
+    # O servidor_adk deve ser capaz de recuperar a mesma sessão
+    sess_recuperada = await servidor_adk.sessoes.get_session(
+        app_name=servidor_adk.APP_NOME, user_id=user_id, session_id=sess_id
+    )
+    assert sess_recuperada is not None, "servidor_adk falhou em acessar sessão criada em server.py!"
+    assert sess_recuperada.id == sess_id
+
+    # 3. Documentação e formalização de rota legada /ws/live_adk
+    assert "[LEGADO / COMPATIBILIDADE ADK]" in server.live_adk.__doc__
+
+    log_test("Integração dos Servidores & Padronização de Sessões (Fase R4)", True, "app_name='assistente' unificado e histórico compartilhado entre servidores")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
@@ -1646,6 +1675,7 @@ async def run_p0_suite():
     test_ide_lease_fail_closed_missing_identity()
     test_provider_live_honesty()
     await test_chat_provider_routing_compulsory()
+    await test_server_integration_and_app_name_standardization()
     executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 

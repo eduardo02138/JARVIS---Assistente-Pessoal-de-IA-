@@ -93,7 +93,7 @@ CAMINHO_VOZ = "voz"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("assistente")
 
-APP_NOME = "assistente_adk"
+APP_NOME = "assistente"
 VOZ = os.environ.get("VOICE_NAME", "Charon")
 IDIOMA = os.environ.get("LANGUAGE_CODE", "pt-BR")
 
@@ -209,6 +209,15 @@ async def garantir_sessao(usuario: str, sessao: str) -> None:
     existente = await sessoes.get_session(
         app_name=APP_NOME, user_id=usuario, session_id=sessao
     )
+    if existente is None:
+        try:
+            legado = await sessoes.get_session(
+                app_name="assistente_adk", user_id=usuario, session_id=sessao
+            )
+            if legado is not None:
+                existente = legado
+        except Exception:
+            pass
     if existente is None:
         await sessoes.create_session(
             app_name=APP_NOME, user_id=usuario, session_id=sessao

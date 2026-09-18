@@ -4,7 +4,9 @@ FastAPI + WebSockets + Google GenAI Live API + Ferramentas do SO + Sistema de Mo
 """
 import os
 from dotenv import load_dotenv
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+RAIZ = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = RAIZ
+ENV_PATH = os.path.join(RAIZ, ".env")
 load_dotenv(ENV_PATH, override=True)
 import sys
 import json
@@ -404,7 +406,7 @@ def build_gemini_tools():
 
 # ------------------ ADK Engine & Session Service ------------------
 def _criar_session_service_adk() -> BaseSessionService:
-    url_banco = os.environ.get("SESSION_DB_URL", "sqlite+aiosqlite:///sessoes.db")
+    url_banco = os.environ.get("SESSION_DB_URL", f"sqlite+aiosqlite:///{os.path.join(RAIZ, 'sessoes.db')}")
     if url_banco.strip().lower() in {"", "memoria", "memory", "none"}:
         return InMemorySessionService()
     try:
@@ -747,7 +749,11 @@ async def live_adk(
     sessao: str = Query("sessao-principal"),
     origem: str = Query(""),
 ):
-    """Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado."""
+    """[LEGADO / COMPATIBILIDADE ADK] Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado.
+
+    Nota de Arquitetura: O endpoint primário recomendado para clientes e widgets é /ws/live.
+    Esta rota /ws/live_adk é mantida para conformidade estrita com ferramentas e suítes de teste ADK legadas.
+    """
     await websocket.accept()
     
     # Handshake seguro: exige token idêntico ao /ws/live
