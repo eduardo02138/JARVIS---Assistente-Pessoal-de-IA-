@@ -27,7 +27,7 @@ jobs:
 
       - name: Static Syntax Compilation Check
         run: |
-          python -m py_compile server.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py monitoring/test_suite.py app.py
+          python -m py_compile server.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py monitoring/test_suite.py app.py servidor_adk.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py
 
       - name: Run Architecture & Security Test Suite
         env:

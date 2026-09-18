@@ -1,17 +1,16 @@
-"""Assistente único, com dois cérebros internos.
+"""Assistente único, com dois cérebros internos e governança unificada de segurança.
 
 Para o usuário existe um assistente só. Por dentro há dois caminhos:
-
 - caminho rápido: ferramentas diretas no próprio agente (hora, status, abrir site,
   pesquisa). Sem delegação, sem salto extra de modelo.
 - caminho complexo: sub-agentes especialistas chamados por AgentTool, com guarda de
   risco e memória de preferências.
 
-Na voz os dois vivem no mesmo agente: trocar de agente no meio de uma sessão Live
-significaria derrubar a conexão bidirecional, então o coordenador carrega as
-ferramentas rápidas e só delega quando a tarefa pede.
-No texto, o roteador escolhe o agente básico quando o pedido é trivial, o que evita
-o custo de um coordenador com muitas ferramentas no schema.
+Segurança:
+O ADK conecta-se diretamente ao PolicyEngine oficial do J.A.R.V.I.S. Ações de risco
+(como abrir sites ou executar comandos) exigem autorização estritamente one-shot com
+TTL e verificação de integridade dos argumentos. O LLM não possui nenhuma ferramenta
+de auto-autorização: a aprovação só pode vir de uma ação legítima do usuário.
 """
 
 import os
@@ -22,6 +21,7 @@ from google.adk.tools import ToolContext
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
 
+from policy_engine import policy_engine, RiskLevel
 from .ferramentas import (
     abrir_site,
     consultar_preferencias,
@@ -31,13 +31,11 @@ from .ferramentas import (
     status_do_sistema,
 )
 
-# Modelos: Live e texto são famílias diferentes. Um modelo de texto comum não mantém
-# a conexão bidirecional do run_live(), e um modelo Live não é usado em run_async().
+# Modelos: Live e texto são famílias diferentes.
 MODELO_LIVE = os.environ.get("LIVE_MODEL_PRIMARY", "gemini-3.8-live")
+MODELO_LIVE_RESERVA = os.environ.get("LIVE_MODEL_FALLBACK", "gemini-2.5-flash-native-audio-latest")
 MODELO_TEXTO = os.environ.get("TEXT_MODEL", "gemini-flash-latest")
-
-# Ferramentas que saem da máquina ou mudam algo fora do assistente
-FERRAMENTAS_DE_RISCO = {"abrir_site", "pesquisar_na_web"}
+MODELO_TEXTO_RESERVA = os.environ.get("TEXT_MODEL_FALLBACK", "gemini-2.5-flash")
 
 INSTRUCAO_BASE = """Você é um assistente pessoal em português do Brasil, falado e escrito.
 
@@ -46,10 +44,11 @@ Conversa:
 - Não leia listas longas nem URLs inteiras em voz alta.
 - Nunca afirme ter feito algo que a ferramenta não confirmou.
 
-Ferramentas:
+Ferramentas e Governança:
 - Use as ferramentas diretas para hora, status do sistema, abrir sites e pesquisas.
-- Ações de risco exigem autorização: pergunte, e com o "sim" do usuário chame
-  autorizar_acao antes de repetir a ação.
+- Ações de risco são bloqueadas automaticamente pelo Policy Engine. Se uma ferramenta
+  retornar status bloqueado aguardando confirmação, peça autorização ao usuário de forma clara.
+- Você NUNCA pode conceder a sua própria autorização; a confirmação precisa ser emitida pelo usuário.
 - Use lembrar_preferencia quando o usuário disser uma preferência duradoura.
 """
 
@@ -61,37 +60,50 @@ Delegação:
 """
 
 
-def autorizar_acao(acao: str, tool_context: ToolContext) -> dict:
-    """Registra que o usuário autorizou uma ação sensível.
-
-    Args:
-        acao: Nome da ferramenta autorizada, por exemplo "abrir_site".
-    """
-    autorizadas = set(tool_context.state.get("autorizadas", []))
-    autorizadas.add(acao)
-    tool_context.state["autorizadas"] = sorted(autorizadas)
-    return {"status": "ok", "autorizadas": sorted(autorizadas)}
-
-
 def guarda_de_ferramentas(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> Optional[dict]:
-    """Bloqueia ferramentas de risco sem autorização registrada na sessão.
+    """Bloqueia ferramentas que exigem confirmação explícita do usuário.
 
-    Devolver um dicionário aqui substitui a execução: o ADK entrega este valor ao
-    modelo como se fosse o resultado, e a ferramenta original não roda.
+    Reutiliza o PolicyEngine oficial do J.A.R.V.I.S. A autorização é estritamente
+    one-shot com TTL e hash de argumentos: uma vez executada, a permissão é revogada.
+    O LLM não pode se auto-autorizar.
     """
-    if tool.name not in FERRAMENTAS_DE_RISCO:
-        return None
-    if tool.name in set(tool_context.state.get("autorizadas", [])):
-        return None
-    return {
-        "status": "bloqueado",
-        "mensagem": (
-            f"A ação '{tool.name}' precisa de autorização do usuário. "
-            "Peça a confirmação e, quando ele concordar, chame autorizar_acao."
-        ),
-    }
+    session_id = getattr(tool_context, "session_id", None) or "local"
+    decision = policy_engine.evaluate(tool.name, args, session_id=session_id)
+
+    if not decision.allowed:
+        return {
+            "status": "negado_por_politica",
+            "motivo": decision.reason,
+        }
+
+    if decision.requires_confirmation:
+        # Verifica se há autorização one-shot aprovada pelo usuário para esta chamada
+        if policy_engine.consume_authorization(tool.name, args, session_id=session_id):
+            return None  # Autorizado e consumido!
+
+        # Bloqueado: cria solicitação pendente com TTL de 60s
+        pending = policy_engine.create_pending_action(
+            tool_name=tool.name,
+            args=args,
+            session_id=session_id,
+            ttl=60.0
+        )
+        return {
+            "status": "bloqueado_aguardando_confirmacao",
+            "acao": tool.name,
+            "id_confirmacao": pending.action_id,
+            "argumentos": args,
+            "motivo": decision.reason,
+            "mensagem": (
+                f"A ferramenta sensível '{tool.name}' foi bloqueada pelo Policy Engine aguardando aprovação explícita do usuário. "
+                "Informe ao usuário a ação e solicite que ele confirme (digitando 'sim' ou autorizando na interface). "
+                f"ID da pendência: {pending.action_id}."
+            ),
+        }
+
+    return None
 
 
 def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
@@ -101,7 +113,7 @@ def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
         model=modelo or MODELO_TEXTO,
         description="Responde pedidos diretos: hora, status do sistema, abrir site e pesquisa.",
         instruction=INSTRUCAO_BASE,
-        tools=[hora_atual, status_do_sistema, abrir_site, pesquisar_na_web, autorizar_acao],
+        tools=[hora_atual, status_do_sistema, abrir_site, pesquisar_na_web],
         before_tool_callback=guarda_de_ferramentas,
     )
 
@@ -125,7 +137,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
         description="Executa sequências de navegação: abrir sites e pesquisas encadeadas.",
         instruction=(
             "Abra o que foi pedido e confirme em poucas palavras. "
-            "Se a ferramenta responder 'bloqueado', explique que falta autorização."
+            "Se a ferramenta responder bloqueada, explique que falta autorização do usuário."
         ),
         tools=[abrir_site, pesquisar_na_web],
         before_tool_callback=guarda_de_ferramentas,
@@ -141,7 +153,6 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
             status_do_sistema,
             abrir_site,
             pesquisar_na_web,
-            autorizar_acao,
             lembrar_preferencia,
             AgentTool(agent=especialista_sistema),
             AgentTool(agent=especialista_navegador),

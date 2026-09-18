@@ -28,7 +28,8 @@ from google.adk.agents.run_config import RunConfig  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
 from google.adk.sessions import BaseSessionService, InMemorySessionService  # noqa: E402
 from google.genai import types  # noqa: E402
-from google.genai.errors import ServerError  # noqa: E402
+from google.genai.errors import ServerError, ClientError
+from policy_engine import policy_engine  # noqa: E402
 
 from agentes.assistente import (  # noqa: E402
     criar_agente_coordenador,
@@ -174,6 +175,46 @@ async def saude():
 
 
 # ----------------------------- MODO TEXTO -----------------------------
+
+@app.get("/api/acoes_pendentes")
+async def listar_pendentes(usuario: str = "local"):
+    return {
+        "pendentes": [
+            {
+                "id": a.action_id,
+                "ferramenta": a.tool_name,
+                "argumentos": a.args,
+                "status": a.status,
+                "expira_em": max(0, int(a.expires_at - time.time()))
+            }
+            for a in policy_engine._pending_actions.values()
+            if a.status == "pending" and time.time() <= a.expires_at
+        ]
+    }
+
+
+@app.post("/api/confirmar_acao")
+async def confirmar_acao(payload: dict):
+    action_id = payload.get("id_confirmacao")
+    aprovado = payload.get("aprovado", True)
+    session_id = payload.get("sessao", "sessao-principal")
+
+    if not action_id:
+        pending = policy_engine.approve_latest_pending(session_id=session_id)
+        if pending:
+            return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
+        return {"status": "erro", "mensagem": "Nenhuma acao pendente encontrada para confirmacao"}
+
+    if aprovado:
+        sucesso = policy_engine.approve_action(action_id, session_id=session_id)
+        if sucesso:
+            return {"status": "ok", "action_id": action_id}
+        return {"status": "erro", "mensagem": "Acao nao encontrada ou expirada"}
+    else:
+        policy_engine.reject_action(action_id)
+        return {"status": "rejeitado", "action_id": action_id}
+
+
 @app.post("/api/chat")
 async def chat(payload: dict):
     """Um turno de texto. O roteador escolhe o caminho; 'caminho' no payload força."""
@@ -188,6 +229,16 @@ async def chat(payload: dict):
         caminho, motivo = forcado, "escolha manual"
     else:
         caminho, motivo = escolher_caminho(texto)
+    # Verifica palavras de confirmacao emitidas pelo usuario
+    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+    texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
+    if texto_limpo in palavras_confirmacao:
+        pending = policy_engine.approve_latest_pending(session_id=sessao)
+        if pending:
+            logger.info("Usuario aprovou acao pendente %s (%s)", pending.action_id, pending.tool_name)
+            texto = f"O usuario confirmou expressamente a acao. Execute a ferramenta {pending.tool_name} agora."
+            caminho, motivo = "complexo", "execucao de acao autorizada pelo usuario"
+
 
     runner = obter_runner(caminho)
     await garantir_sessao(usuario, sessao)
@@ -359,15 +410,14 @@ async def live(
             tg.create_task(do_agente_para_o_cliente())
     except* WebSocketDisconnect:
         logger.info("Cliente saiu do modo live")
-    except* ServerError as grupo:
-        # Modelo Live indisponível: troca para o reserva e avisa o cliente
-        logger.warning("Modelo Live indisponível (%s). Próxima sessão usa %s.",
-                       grupo.exceptions[0], MODELO_LIVE_RESERVA)
+    except* (ServerError, ClientError) as grupo:
+        erro_inst = grupo.exceptions[0]
+        logger.warning("Falha na sessao Live (%s). Rotacionando chave e/ou modelo.", erro_inst)
+        girou = girar_chave()
         trocar_modelo(runner, MODELO_LIVE_RESERVA)
+        msg_erro = "Limite ou instabilidade na Live API. Chave rotacionada no pool. Reconecte para continuar." if girou else "Modelo Live indisponivel. Reconecte para tentar o modelo reserva."
         try:
-            await websocket.send_json(
-                {"tipo": "erro", "mensagem": "Modelo de voz indisponível. Reconecte para tentar o reserva."}
-            )
+            await websocket.send_json({"tipo": "erro", "mensagem": msg_erro})
         except Exception:
             pass
     finally:

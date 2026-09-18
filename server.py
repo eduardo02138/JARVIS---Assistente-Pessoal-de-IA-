@@ -19,6 +19,21 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HT
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from policy_engine import policy_engine
+from google.adk.runners import Runner
+from google.adk.sessions import BaseSessionService, InMemorySessionService
+from google.adk.agents import LiveRequestQueue
+from google.adk.agents.run_config import RunConfig
+from google.genai.errors import ClientError, ServerError
+from agentes.assistente import (
+    criar_agente_rapido,
+    criar_agente_coordenador,
+    criar_agente_de_voz,
+    MODELO_TEXTO,
+    MODELO_LIVE,
+    MODELO_TEXTO_RESERVA,
+    MODELO_LIVE_RESERVA,
+)
+from agentes.roteador import escolher_caminho, CAMINHO_RAPIDO, CAMINHO_COMPLEXO
 from google import genai
 from google.genai import types
 
@@ -335,6 +350,286 @@ def build_gemini_tools():
     ]
 
 # ----------------- WEBSOCKET BRIDGE COM GEMINI LIVE -----------------
+
+# ------------------ ADK Engine & Session Service ------------------
+def _criar_session_service_adk() -> BaseSessionService:
+    url_banco = os.environ.get("SESSION_DB_URL", "sqlite+aiosqlite:///sessoes.db")
+    if url_banco.strip().lower() in {"", "memoria", "memory", "none"}:
+        return InMemorySessionService()
+    try:
+        from google.adk.sessions import DatabaseSessionService
+        return DatabaseSessionService(db_url=url_banco)
+    except Exception as err:
+        logger.warning("Falha ao inicializar DatabaseSessionService (%s); usando InMemorySessionService.", err)
+        return InMemorySessionService()
+
+session_service_adk = _criar_session_service_adk()
+runners_adk: dict[str, Runner] = {}
+
+_indice_chave_adk = 0
+
+def girar_chave_adk() -> bool:
+    global _indice_chave_adk
+    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
+    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    single = os.environ.get("GEMINI_API_KEY")
+    if single and single not in key_pool:
+        key_pool.insert(0, single)
+    if len(key_pool) < 2:
+        return False
+    _indice_chave_adk = (_indice_chave_adk + 1) % len(key_pool)
+    nova_chave = key_pool[_indice_chave_adk]
+    os.environ["GOOGLE_API_KEY"] = nova_chave
+    os.environ["GEMINI_API_KEY"] = nova_chave
+    runners_adk.clear()
+    logger.warning("Cota ADK atingida: rotacionando para chave %d/%d.", _indice_chave_adk + 1, len(key_pool))
+    return True
+
+
+def obter_runner_adk(tipo: str) -> Runner:
+    if tipo not in runners_adk:
+        if tipo == "rapido":
+            agente = criar_agente_rapido()
+        elif tipo == "coordenador":
+            agente = criar_agente_coordenador()
+        elif tipo == "voz":
+            agente = criar_agente_de_voz()
+        else:
+            raise ValueError(f"Tipo de runner desconhecido: {tipo}")
+        runners_adk[tipo] = Runner(
+            agent=agente,
+            session_service=session_service_adk,
+            app_name="assistente",
+        )
+    return runners_adk[tipo]
+
+
+@app.get("/api/acoes_pendentes")
+async def listar_pendentes(usuario: str = "local"):
+    return {
+        "pendentes": [
+            {
+                "id": a.action_id,
+                "ferramenta": a.tool_name,
+                "argumentos": a.args,
+                "status": a.status,
+                "expira_em": max(0, int(a.expires_at - time.time()))
+            }
+            for a in policy_engine._pending_actions.values()
+            if a.status == "pending" and time.time() <= a.expires_at
+        ]
+    }
+
+
+@app.post("/api/confirmar_acao")
+async def confirmar_acao(payload: dict):
+    action_id = payload.get("id_confirmacao")
+    aprovado = payload.get("aprovado", True)
+    session_id = payload.get("sessao", "sessao-principal")
+
+    if not action_id:
+        pending = policy_engine.approve_latest_pending(session_id=session_id)
+        if pending:
+            return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
+        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada"}, status_code=404)
+
+    if aprovado:
+        sucesso = policy_engine.approve_action(action_id, session_id=session_id)
+        if sucesso:
+            return {"status": "ok", "action_id": action_id}
+        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada ou expirada"}, status_code=400)
+    else:
+        policy_engine.reject_action(action_id)
+        return {"status": "rejeitado", "action_id": action_id}
+
+
+@app.post("/api/chat")
+async def api_chat_adk(payload: dict):
+    """Turno textual unificado: o roteador escolhe entre o agente rápido e o coordenador."""
+    texto = (payload.get("texto") or "").strip()
+    if not texto:
+        return JSONResponse({"status": "erro", "mensagem": "Texto vazio"}, status_code=400)
+
+    usuario = payload.get("usuario", "local")
+    sessao = payload.get("sessao", "sessao-principal")
+    caminho_forcado = payload.get("caminho")
+
+    # Verifica palavras de confirmação verbal ou digitada do usuário
+    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo"}
+    texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
+    if texto_limpo in palavras_confirmacao:
+        pending = policy_engine.approve_latest_pending(session_id=sessao)
+        if pending:
+            logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
+            texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
+            caminho_forcado = "complexo"
+
+    if caminho_forcado in ("rapido", "complexo"):
+        caminho, motivo = caminho_forcado, "escolha explícita"
+    else:
+        caminho, motivo = escolher_caminho(texto)
+
+    tipo_runner = "rapido" if caminho == CAMINHO_RAPIDO else "coordenador"
+    runner = obter_runner_adk(tipo_runner)
+
+    try:
+        await session_service_adk.create_session(
+            app_name="assistente", user_id=usuario, session_id=sessao
+        )
+    except Exception:
+        pass
+
+    resposta = ""
+    ferramentas_executadas = []
+    
+    for tentativa in range(4):
+        runner = obter_runner_adk(tipo_runner)
+        try:
+            async for evento in runner.run_async(
+                user_id=usuario,
+                session_id=sessao,
+                new_message=types.Content(role="user", parts=[types.Part(text=texto)]),
+            ):
+                if not evento.content or not evento.content.parts:
+                    continue
+                for parte in evento.content.parts:
+                    if parte.function_call:
+                        ferramentas_executadas.append(parte.function_call.name)
+                    if parte.text and evento.is_final_response():
+                        resposta += parte.text
+            break
+        except Exception as err:
+            err_str = str(err)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                if girar_chave_adk():
+                    continue
+            logger.warning("Falha na execução do ADK run_async (%s).", err)
+            return JSONResponse({
+                "status": "erro",
+                "mensagem": f"Erro na execução do agente: {err}",
+                "caminho": caminho
+            }, status_code=500)
+
+    return {
+        "status": "ok",
+        "caminho": caminho,
+        "motivo_do_roteamento": motivo,
+        "modelo": runner.agent.model,
+        "resposta": resposta.strip(),
+        "ferramentas": ferramentas_executadas,
+    }
+
+
+@app.websocket("/ws/live_adk")
+async def live_adk(
+    websocket: WebSocket,
+    usuario: str = Query("local"),
+    sessao: str = Query("sessao-principal"),
+):
+    """Sessão de voz Live bidirecional nativa do Google ADK."""
+    await websocket.accept()
+    runner = obter_runner_adk("voz")
+    try:
+        await session_service_adk.create_session(
+            app_name="assistente", user_id=usuario, session_id=sessao
+        )
+    except Exception:
+        pass
+
+    fila = LiveRequestQueue()
+    logger.info("Cliente conectou ao Live ADK nativo (modelo: %s)", runner.agent.model)
+    await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model})
+
+    async def do_cliente_para_o_agente():
+        while True:
+            msg = json.loads(await websocket.receive_text())
+            tipo = msg.get("tipo")
+            if tipo == "audio":
+                fila.send_realtime(
+                    types.Blob(
+                        data=base64.b64decode(msg["dados"]),
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+            elif tipo == "texto":
+                fila.send_content(
+                    types.Content(role="user", parts=[types.Part(text=msg["texto"])])
+                )
+            elif tipo == "confirmar_acao":
+                action_id = msg.get("id_confirmacao")
+                policy_engine.approve_action(action_id, session_id=sessao)
+
+    async def do_agente_para_o_cliente():
+        run_cfg = RunConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
+                )
+            ),
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+        )
+        async for evento in runner.run_live(
+            user_id=usuario,
+            session_id=sessao,
+            live_request_queue=fila,
+            run_config=run_cfg,
+        ):
+            if evento.input_transcription and evento.input_transcription.text:
+                await websocket.send_json(
+                    {"tipo": "transcricao_usuario", "texto": evento.input_transcription.text}
+                )
+            if evento.output_transcription and evento.output_transcription.text:
+                await websocket.send_json(
+                    {"tipo": "texto", "texto": evento.output_transcription.text}
+                )
+            if evento.content and evento.content.parts:
+                for parte in evento.content.parts:
+                    if parte.inline_data and parte.inline_data.data:
+                        await websocket.send_json(
+                            {
+                                "tipo": "audio",
+                                "dados": base64.b64encode(parte.inline_data.data).decode(),
+                            }
+                        )
+                    if parte.function_call:
+                        await websocket.send_json(
+                            {
+                                "tipo": "ferramenta",
+                                "nome": parte.function_call.name,
+                                "args": dict(parte.function_call.args or {}),
+                            }
+                        )
+                    if parte.function_response:
+                        await websocket.send_json(
+                            {
+                                "tipo": "ferramenta_resultado",
+                                "nome": parte.function_response.name,
+                                "resultado": dict(parte.function_response.response or {}),
+                            }
+                        )
+            if evento.interrupted:
+                await websocket.send_json({"tipo": "interrompido"})
+            if evento.turn_complete:
+                await websocket.send_json({"tipo": "turno_concluido"})
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(do_cliente_para_o_agente())
+            tg.create_task(do_agente_para_o_cliente())
+    except* WebSocketDisconnect:
+        logger.info("Cliente Live ADK desconectou.")
+    except* (ServerError, ClientError) as grupo:
+        logger.warning("Falha na sessão Live ADK (%s).", grupo.exceptions[0])
+        try:
+            await websocket.send_json({"tipo": "erro", "mensagem": "Instabilidade na Live API. Reconecte para tentar novamente."})
+        except Exception:
+            pass
+    finally:
+        fila.close()
+
+
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(websocket: WebSocket):
     await websocket.accept()

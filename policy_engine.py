@@ -28,8 +28,27 @@ class PolicyDecision:
     reason: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+@dataclass
+class PendingAction:
+    action_id: str
+    tool_name: str
+    args: Dict[str, Any]
+    args_hash: str
+    session_id: Optional[str]
+    created_at: float
+    expires_at: float
+    status: str = "pending"  # "pending", "approved", "consumed", "rejected"
+
+
 # Mapeamento inicial de ferramentas nativas e de plug-ins para seus níveis de risco
 TOOL_RISK_MAP: Dict[str, RiskLevel] = {
+    # Módulo Google ADK
+    "hora_atual": RiskLevel.READ,
+    "status_do_sistema": RiskLevel.READ,
+    "pesquisar_na_web": RiskLevel.LOW_WRITE,
+    "lembrar_preferencia": RiskLevel.LOW_WRITE,
+    "consultar_preferencias": RiskLevel.READ,
+    "abrir_site": RiskLevel.EXTERNAL_WRITE,
     # READ: Informação e Consulta
     "get_system_status": RiskLevel.READ,
     "get_gpu_status": RiskLevel.READ,
@@ -148,6 +167,7 @@ class PolicyEngine:
         self._custom_policies: Dict[str, RiskLevel] = {}
         self._control_lease_expira_em: float = 0.0
         self._control_lease_owner: Optional[str] = None
+        self._pending_actions: Dict[str, PendingAction] = {}
 
     def register_tool_policy(self, tool_name: str, risk_level: RiskLevel):
         """Registra ou atualiza o nível de risco de uma ferramenta (ex: via plug-in)."""
@@ -351,6 +371,97 @@ class PolicyEngine:
             requires_confirmation=False,
             reason="Execução autorizada por política padrão."
         )
+
+    # ---------------- Autorização One-Shot com TTL (Policy Gate) ----------------
+
+    @staticmethod
+    def _compute_args_hash(args: Dict[str, Any]) -> str:
+        import hashlib
+        import json
+        try:
+            canonical = json.dumps(args, sort_keys=True)
+        except Exception:
+            canonical = str(sorted(args.items()))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+    def create_pending_action(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        session_id: Optional[str] = None,
+        ttl: float = 60.0
+    ) -> PendingAction:
+        import secrets
+        action_id = secrets.token_hex(4)
+        now = time.time()
+        args_hash = self._compute_args_hash(args)
+        pending = PendingAction(
+            action_id=action_id,
+            tool_name=tool_name,
+            args=args,
+            args_hash=args_hash,
+            session_id=session_id,
+            created_at=now,
+            expires_at=now + ttl,
+            status="pending"
+        )
+        self._pending_actions[action_id] = pending
+        logger.info(f"Ação pendente criada: {action_id} -> {tool_name} (TTL {ttl}s)")
+        return pending
+
+    def approve_action(self, action_id: str, session_id: Optional[str] = None) -> bool:
+        pending = self._pending_actions.get(action_id)
+        if not pending:
+            return False
+        if time.time() > pending.expires_at:
+            pending.status = "rejected"
+            return False
+        if session_id and pending.session_id and pending.session_id != session_id:
+            return False
+        pending.status = "approved"
+        logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name}")
+        return True
+
+    def approve_latest_pending(self, session_id: Optional[str] = None) -> Optional[PendingAction]:
+        now = time.time()
+        for action_id in reversed(list(self._pending_actions.keys())):
+            action = self._pending_actions[action_id]
+            if action.status == "pending" and now <= action.expires_at:
+                if session_id is None or action.session_id is None or action.session_id == session_id:
+                    action.status = "approved"
+                    logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name}")
+                    return action
+        return None
+
+    def reject_action(self, action_id: str) -> bool:
+        if action_id in self._pending_actions:
+            self._pending_actions[action_id].status = "rejected"
+            return True
+        return False
+
+    def consume_authorization(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        session_id: Optional[str] = None
+    ) -> bool:
+        """Verifica se há autorização válida, aprovada e com hash de argumentos correspondente.
+        Ao encontrar, consome imediatamente (one-shot), revogando para execuções futuras.
+        """
+        now = time.time()
+        args_hash = self._compute_args_hash(args)
+        for action_id, action in list(self._pending_actions.items()):
+            if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
+                if action.args_hash == args_hash or not action.args:
+                    if session_id is None or action.session_id is None or action.session_id == session_id:
+                        action.status = "consumed"
+                        del self._pending_actions[action_id]
+                        logger.info(f"Autorização one-shot consumida com sucesso: {action_id} -> {tool_name}")
+                        return True
+        return False
+
+    def get_pending_action(self, action_id: str) -> Optional[PendingAction]:
+        return self._pending_actions.get(action_id)
 
 # Instância global do Policy Engine
 policy_engine = PolicyEngine()

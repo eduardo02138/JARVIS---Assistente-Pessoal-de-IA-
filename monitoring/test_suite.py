@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ_PROJETO not in sys.path:
     sys.path.insert(0, RAIZ_PROJETO)
+from monitoring.test_adk import executar_todos_testes_adk
 
 ENV_PATH = os.path.join(RAIZ_PROJETO, ".env")
 load_dotenv(ENV_PATH, override=True)
@@ -961,6 +962,7 @@ async def run_p0_suite():
     test_preferences_requires_token()
     test_websocket_auth()
     test_frontend_sends_token()
+    executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 
 if __name__ == "__main__":
