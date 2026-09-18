@@ -7,10 +7,21 @@
 const TAXA_ENTRADA = 16000;
 const TAXA_SAIDA = 24000;
 
+function obterOuCriarSessao() {
+  let s = localStorage.getItem("jarvis_sessao");
+  if (!s) {
+    s = "sessao-" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID().substring(0, 8) : Math.random().toString(36).substring(2, 10));
+    try {
+      localStorage.setItem("jarvis_sessao", s);
+    } catch (_) {}
+  }
+  return s;
+}
+
 const estado = {
   ws: null,
   token: localStorage.getItem("jarvis_token") || "",
-  sessao: localStorage.getItem("jarvis_sessao") || "sessao-principal",
+  sessao: obterOuCriarSessao(),
   usuario: localStorage.getItem("jarvis_usuario") || "local",
   gravando: false,
   ctxEntrada: null,
