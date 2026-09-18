@@ -175,6 +175,9 @@ async function ligarMicrofone() {
   fonte.connect(estado.processador);
   estado.processador.connect(estado.ctxEntrada.destination);
   estado.gravando = true;
+  if (estado.ws && estado.ws.readyState === WebSocket.OPEN) {
+    estado.ws.send(JSON.stringify({ tipo: "estado_microfone", mutado: false }));
+  }
   el.microfone.textContent = "Microfone ligado";
   el.microfone.classList.add("ativo");
   mostrarEstado("Ouvindo você", "ok");
@@ -183,6 +186,7 @@ async function ligarMicrofone() {
 function desligarMicrofone() {
   estado.gravando = false;
   if (estado.ws && estado.ws.readyState === WebSocket.OPEN) {
+    estado.ws.send(JSON.stringify({ tipo: "estado_microfone", mutado: true }));
     estado.ws.send(JSON.stringify({ tipo: "fim_do_audio" }));
   }
   if (estado.processador) estado.processador.disconnect();

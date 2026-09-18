@@ -649,10 +649,19 @@ async def live(
 
     async def do_cliente_para_o_agente():
         """Áudio e texto do navegador entram na fila do ADK."""
+        client_muted = False
         while True:
             msg = json.loads(await websocket.receive_text())
             tipo = msg.get("tipo") or msg.get("type")
+            if tipo in ("microphone_state", "estado_microfone"):
+                client_muted = bool(msg.get("muted", msg.get("mutado", False)))
+                if client_muted:
+                    fila.send_audio_stream_end()
+                continue
             if tipo == "audio":
+                if client_muted:
+                    # Fail-closed: descarta áudio residual enquanto mutado
+                    continue
                 audio_b64 = msg.get("dados") or msg.get("data")
                 if audio_b64:
                     fila.send_realtime(
