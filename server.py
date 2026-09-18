@@ -383,6 +383,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
         output_audio_transcription=types.AudioTranscriptionConfig(),
         realtime_input_config=types.RealtimeInputConfig(
             activity_handling=types.ActivityHandling.NO_INTERRUPTION
+        ),
+        # Sessões com vídeo duram ~2 min sem compressão; a janela deslizante evita o corte
+        context_window_compression=types.ContextWindowCompressionConfig(
+            sliding_window=types.SlidingWindow()
         )
     )
 
@@ -509,6 +513,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         elif msg_type == "get_status":
                             status = system_tools.get_system_status()
                             await websocket.send_json({"type": "system_status", "data": status})
+
+                        elif msg_type == "video":
+                            # Compartilhamento de tela do cliente: só enquanto houver
+                            # autoridade de controle físico concedida a esta sessão.
+                            frame_b64 = msg.get("data", "")
+                            if frame_b64 and policy_engine.is_control_lease_active(sessao_id):
+                                frame = base64.b64decode(frame_b64)
+                                record_event("screen_frame", {"bytes": len(frame)})
+                                await session.send_realtime_input(
+                                    video=types.Blob(data=frame, mime_type="image/jpeg")
+                                )
 
                         elif msg_type == "tool_confirmation":
                             # Resposta do usuário a uma ferramenta que exige autorização explícita

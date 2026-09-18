@@ -566,10 +566,16 @@ async function connectWebSocket() {
                 if (dom.controlModeIndicator) {
                     if (msg.active) {
                         dom.controlModeIndicator.classList.remove('hidden');
+                        iniciarVisaoDeTela().then((ok) => {
+                            appendToolLog('VISÃO DE TELA', ok ? 'success' : 'error',
+                                ok ? 'Compartilhamento de tela ativo: o JARVIS acompanha o que está na tela.'
+                                   : 'Sem visão de tela: o compartilhamento foi recusado, o controle fica às cegas.');
+                        });
                         const ttl = msg.lease && msg.lease.segundos_restantes ? ` Autoridade válida por ${Math.round(msg.lease.segundos_restantes / 60)} min.` : '';
                         appendToolLog('MODO CONTROLE', 'executing', `Controle físico de mouse, teclado e janelas ativado.${ttl}`);
                     } else {
                         dom.controlModeIndicator.classList.add('hidden');
+                        pararVisaoDeTela();
                         appendToolLog('MODO CONTROLE', 'idle', 'Modo Controle desativado.');
                     }
                 }
@@ -689,6 +695,59 @@ function handleToolConfirmationRequest(msg) {
     painel.querySelector('.aprovar').addEventListener('click', () => responder(true));
     painel.querySelector('.negar').addEventListener('click', () => responder(false));
     const temporizador = setTimeout(() => responder(false), (msg.timeout_s || 60) * 1000);
+}
+
+
+// ---------------- VISÃO DE TELA EM TEMPO REAL (MODO CONTROLE) ----------------
+// Enquanto o Modo Controle estiver ativo, a tela é compartilhada com a sessão Live,
+// como no compartilhamento de tela do Gemini Live. Sem isso o assistente opera às cegas.
+const VISAO_FPS = 1;
+const VISAO_LARGURA = 1024;
+const visao = { stream: null, timer: null, canvas: null, video: null };
+
+async function iniciarVisaoDeTela() {
+    if (visao.stream) return true;
+    try {
+        visao.stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: VISAO_FPS, max: 5 } },
+            audio: false
+        });
+    } catch (e) {
+        console.warn("Compartilhamento de tela recusado:", e);
+        return false;
+    }
+
+    visao.video = document.createElement("video");
+    visao.video.srcObject = visao.stream;
+    visao.video.muted = true;
+    await visao.video.play();
+
+    visao.canvas = document.createElement("canvas");
+    const contexto = visao.canvas.getContext("2d");
+
+    // O usuário pode encerrar o compartilhamento pela barra do sistema
+    visao.stream.getVideoTracks()[0].addEventListener("ended", () => pararVisaoDeTela());
+
+    visao.timer = setInterval(() => {
+        if (!visao.video || !visao.video.videoWidth) return;
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+        const escala = VISAO_LARGURA / visao.video.videoWidth;
+        visao.canvas.width = VISAO_LARGURA;
+        visao.canvas.height = Math.round(visao.video.videoHeight * escala);
+        contexto.drawImage(visao.video, 0, 0, visao.canvas.width, visao.canvas.height);
+        const dados = visao.canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+        state.ws.send(JSON.stringify({ type: "video", data: dados }));
+    }, Math.round(1000 / VISAO_FPS));
+    return true;
+}
+
+function pararVisaoDeTela() {
+    if (visao.timer) clearInterval(visao.timer);
+    if (visao.stream) visao.stream.getTracks().forEach((t) => t.stop());
+    if (visao.video) visao.video.srcObject = null;
+    visao.timer = null;
+    visao.stream = null;
+    visao.video = null;
 }
 
 function disconnectWebSocket() {

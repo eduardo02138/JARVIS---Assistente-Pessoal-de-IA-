@@ -846,6 +846,39 @@ def test_configuracao_de_voz_e_texto():
     return success
 
 
+def test_visao_de_tela_no_modo_controle():
+    """Modo Controle precisa abrir visão de tela; sem isso o agente clica às cegas."""
+    import inspect
+    import server
+
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fonte_servidor = inspect.getsource(server.websocket_live_endpoint)
+    aceita_frames = 'msg_type == "video"' in fonte_servidor
+    exige_lease = "policy_engine.is_control_lease_active(sessao_id)" in fonte_servidor
+    envia_ao_modelo = "video=types.Blob(data=frame" in fonte_servidor
+    comprime_contexto = "context_window_compression" in inspect.getsource(server)
+
+    clientes = []
+    for caminho in [("static", "app.js"), ("gemini-live-widget", "widget.js")]:
+        with open(os.path.join(base, *caminho), encoding="utf-8") as f:
+            codigo = f.read()
+        clientes.append(
+            "getDisplayMedia" in codigo
+            and "iniciarVisaoDeTela" in codigo
+            and "pararVisaoDeTela" in codigo
+        )
+
+    success = aceita_frames and exige_lease and envia_ao_modelo and comprime_contexto and all(clientes)
+    detail = (
+        f"servidor aceita frames: {aceita_frames} | exige lease: {exige_lease} | "
+        f"envia ao modelo: {envia_ao_modelo} | compressão de contexto: {comprime_contexto} | "
+        f"HUD e widget compartilham tela: {all(clientes)}"
+    )
+    log_test("Visão de Tela no Modo Controle", success, detail)
+    assert success
+    return success
+
+
 def test_controller_sem_evdev():
     """O sistema importa e responde mesmo sem evdev ou sem /dev/uinput."""
     import importlib
@@ -920,6 +953,7 @@ async def run_p0_suite():
     test_risco_de_escrita_externa()
     test_mensagens_de_mock_sao_honestas()
     test_configuracao_de_voz_e_texto()
+    test_visao_de_tela_no_modo_controle()
     test_sem_shell_true_em_plugins()
     test_game_timer_expiration()
     test_session_endpoint()
