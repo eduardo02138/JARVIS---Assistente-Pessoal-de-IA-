@@ -37,28 +37,28 @@ jobs:
 
       - name: Run R1 Trust Gates Suite
         env:
-          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          GEMINI_API_KEY: "ci-dummy-key-test"
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           PYTHONPATH=. pytest monitoring/test_trust_gates.py -v
 
       - name: Run P0 Reproduction Regressions
         env:
-          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          GEMINI_API_KEY: "ci-dummy-key-test"
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           PYTHONPATH=. pytest monitoring/test_reproduction_p0.py -v
 
       - name: Run Architecture & Security Test Suite (P0)
         env:
-          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          GEMINI_API_KEY: "ci-dummy-key-test"
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           python monitoring/test_suite.py --p0
 
       - name: Run Google ADK Test Suite
         env:
-          GEMINI_API_KEY: "AIzaDummyKeyForCIValidation1234567890"
+          GEMINI_API_KEY: "ci-dummy-key-test"
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           python monitoring/test_adk.py
