@@ -4,6 +4,7 @@ O ADK lê a assinatura e a docstring de cada função para montar o schema envia
 modelo, então os tipos e a descrição aqui são parte da interface com o Gemini.
 """
 
+import asyncio
 import datetime
 import shutil
 import subprocess
@@ -31,7 +32,7 @@ def status_do_sistema() -> dict:
     ligado_ha = datetime.datetime.now() - inicializacao
     return {
         "status": "ok",
-        "cpu_percentual": psutil.cpu_percent(interval=0.3),
+        "cpu_percentual": psutil.cpu_percent(interval=None),
         "cpu_nucleos": psutil.cpu_count(logical=True),
         "ram_percentual": memoria.percent,
         "ram_usada_gb": round(memoria.used / 1024**3, 1),
@@ -121,9 +122,14 @@ def obter_todas_ferramentas_adk() -> list[BaseTool]:
     adk_tools: list[BaseTool] = []
 
     def _criar_wrapper(handler_fn: Callable[..., Any], tool_name: str, docstring: str, signature: inspect.Signature):
-        @functools.wraps(handler_fn)
-        def _tool_wrapper(*args, **kwargs):
-            return handler_fn(*args, **kwargs)
+        if inspect.iscoroutinefunction(handler_fn):
+            @functools.wraps(handler_fn)
+            async def _tool_wrapper(*args, **kwargs):
+                return await handler_fn(*args, **kwargs)
+        else:
+            @functools.wraps(handler_fn)
+            async def _tool_wrapper(*args, **kwargs):
+                return await asyncio.to_thread(handler_fn, *args, **kwargs)
 
         _tool_wrapper.__name__ = tool_name
         _tool_wrapper.__doc__ = docstring

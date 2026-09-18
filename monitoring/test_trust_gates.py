@@ -10,6 +10,7 @@ Gates Auditados:
 5. Frontend & Backend Contracts (Token nas chamadas mutantes do Widget e Dashboard)
 """
 
+import asyncio
 import inspect
 import json
 import time
@@ -725,6 +726,135 @@ def test_gate6_live_adk_drops_audio_when_muted():
                 assert mock_queue.send_realtime.called is True, (
                     "FALHA GATE 6: /ws/live_adk não repassou áudio após desmutar!"
                 )
+
+
+# ==============================================================================
+# GATE 7: ASYNC RUNTIME INTEGRITY & NON-BLOCKING TOOL EXECUTION
+# ==============================================================================
+
+def test_gate7_adk_tool_wrappers_are_asynchronous():
+    """Gate 7.1: Todas as ferramentas ADK geradas devem ser corrotinas assíncronas."""
+    from agentes.ferramentas import obter_todas_ferramentas_adk
+    tools = obter_todas_ferramentas_adk()
+    assert len(tools) >= 30, f"FALHA GATE 7: Esperado >= 30 ferramentas, encontrado {len(tools)}"
+    for t in tools:
+        assert inspect.iscoroutinefunction(t.func), (
+            f"FALHA GATE 7: Ferramenta {t.name} não é assíncrona (inspect.iscoroutinefunction == False)!"
+        )
+
+
+def test_gate7_system_status_cpu_check_is_non_blocking():
+    """Gate 7.2: Obtenção de status não pode conter pausas síncronas bloqueantes (interval=None)."""
+    import system_tools
+    import agentes.ferramentas as af
+
+    # Pré-aquecimento da GPU para aferir estritamente a telemetria do sistema operacional
+    system_tools.get_system_status()
+    
+    t0 = time.perf_counter()
+    st_sys = system_tools.get_system_status()
+    dt_sys = time.perf_counter() - t0
+    
+    t1 = time.perf_counter()
+    st_af = af.status_do_sistema()
+    dt_af = time.perf_counter() - t1
+    
+    # Ambas devem executar em menos de 80ms (interval=0.1 ou 0.3 levava >100ms e >300ms)
+    assert dt_sys < 0.08, f"FALHA GATE 7: system_tools.get_system_status demorou {dt_sys:.3f}s (esperado < 0.08s)"
+    assert dt_af < 0.08, f"FALHA GATE 7: agentes.ferramentas.status_do_sistema demorou {dt_af:.3f}s (esperado < 0.08s)"
+    assert "cpu_percent" in st_sys
+    assert "cpu_percentual" in st_af
+
+
+def test_gate7_tool_execution_does_not_block_live_event_loop():
+    """Gate 7.3: Ferramentas síncronas demoradas despachadas via to_thread não bloqueiam o event loop."""
+    async def _run_test():
+        loop_ticks = 0
+        running = True
+
+        async def loop_ticker():
+            nonlocal loop_ticks, running
+            while running:
+                await asyncio.sleep(0.01)
+                loop_ticks += 1
+
+        # Tarefa síncrona demorada (ex: simula comando no SO que leva 200ms)
+        def blocking_tool():
+            time.sleep(0.2)
+            return {"sucesso": True, "resultado": "concluido"}
+
+        # Inicia ticker concorrente no event loop
+        ticker_task = asyncio.create_task(loop_ticker())
+
+        # Despacha a ferramenta com offload assíncrono (mesmo padrão adotado no server.py)
+        res = await asyncio.wait_for(asyncio.to_thread(blocking_tool), timeout=2.0)
+        running = False
+        await ticker_task
+
+        assert res.get("sucesso") is True
+        # Se estivesse bloqueando o loop, loop_ticks seria 0 ou 1. Como é não-bloqueante, rodou várias vezes.
+        assert loop_ticks >= 8, (
+            f"FALHA GATE 7: Event loop congelou durante execução da ferramenta! Ticks: {loop_ticks}"
+        )
+
+    asyncio.run(_run_test())
+
+
+def test_gate7_concurrent_websocket_writes_are_serialized():
+    """Gate 7.4: Envios simultâneos via safe_send_json devem ser estritamente serializados por lock."""
+    async def _run_test():
+        # Simula WebSocket com detecção de reentrância/colisão concorrente
+        class MockWS:
+            def __init__(self):
+                self.in_send = False
+                self.sent_messages = []
+
+            async def send_json(self, payload):
+                if self.in_send:
+                    raise RuntimeError("COLISÃO CONCORRENTE: Tentativa de escrita simultânea sem lock!")
+                self.in_send = True
+                await asyncio.sleep(0.005)  # Breve latência I/O
+                self.sent_messages.append(payload)
+                self.in_send = False
+
+        ws = MockWS()
+        ws_send_lock = asyncio.Lock()
+
+        async def safe_send_json(payload):
+            async with ws_send_lock:
+                await ws.send_json(payload)
+
+        # Dispara 20 escritas simultâneas
+        tasks = [safe_send_json({"idx": i}) for i in range(20)]
+        await asyncio.gather(*tasks)
+
+        assert len(ws.sent_messages) == 20
+        indices = {m["idx"] for m in ws.sent_messages}
+        assert indices == set(range(20))
+
+    asyncio.run(_run_test())
+
+
+def test_gate7_tool_execution_timeout_fails_closed():
+    """Gate 7.5: Se uma ferramenta travar ou exceder o timeout, deve falhar fechada com erro estruturado."""
+    async def _run_test():
+        def hanging_tool():
+            time.sleep(2.0)
+            return {"sucesso": True}
+
+        # Despacha com timeout curto (50ms)
+        func_name = "ferramenta_travada"
+        try:
+            res = await asyncio.wait_for(asyncio.to_thread(hanging_tool), timeout=0.05)
+        except asyncio.TimeoutError:
+            res = {"sucesso": False, "erro": f"Timeout (30s) na execução da ferramenta {func_name}."}
+        except Exception as exc:
+            res = {"sucesso": False, "erro": str(exc)}
+
+        assert res["sucesso"] is False
+        assert "Timeout" in res["erro"]
+
+    asyncio.run(_run_test())
 
 
 

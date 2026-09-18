@@ -44,7 +44,16 @@ import secrets
 import transcricao
 import urllib.request
 import urllib.error
-from typing import Optional
+from typing import Optional, Set
+
+# Retenção de tarefas de background do servidor contra Garbage Collection (Python 3.14)
+_servidor_background_tasks: Set[asyncio.Task] = set()
+
+def _schedule_servidor_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _servidor_background_tasks.add(task)
+    task.add_done_callback(_servidor_background_tasks.discard)
+    return task
 from fastapi import (
     FastAPI,
     Query,
@@ -538,7 +547,7 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
         except Exception as e:
             logger.warning("Falha ao salvar sessão na memória: %s", e)
 
-    asyncio.create_task(_salvar_memoria_bg())
+    _schedule_servidor_task(_salvar_memoria_bg())
 
     return {
         "status": "ok",
@@ -622,6 +631,19 @@ async def live(
     sessao: str = Query("sessao-principal"),
 ):
     await websocket.accept()
+
+    ws_send_lock = asyncio.Lock()
+    _conn_background_tasks: Set[asyncio.Task] = set()
+
+    def _schedule_conn_task(coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        _conn_background_tasks.add(task)
+        task.add_done_callback(_conn_background_tasks.discard)
+        return task
+
+    async def safe_send_json(payload: dict):
+        async with ws_send_lock:
+            await websocket.send_json(payload)
     
     # Handshake de autenticação
     try:
@@ -634,7 +656,7 @@ async def live(
     if not init_data or init_data.get("token") != JARVIS_SECRET_TOKEN:
         logger.warning("Tentativa de conexão WebSocket /ws/live não autorizada: token inválido ou ausente.")
         try:
-            await websocket.send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+            await safe_send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
         except Exception:
             pass
         await websocket.close(code=1008, reason="Unauthorized")
@@ -645,7 +667,7 @@ async def live(
 
     fila = LiveRequestQueue()
     logger.info("Cliente autenticado no modo live ADK (modelo %s)", runner.agent.model)
-    await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model, "voz": VOZ})
+    await safe_send_json({"tipo": "pronto", "modelo": runner.agent.model, "voz": VOZ})
 
     async def do_cliente_para_o_agente():
         """Áudio e texto do navegador entram na fila do ADK."""
@@ -698,28 +720,28 @@ async def live(
         ):
             parcial = getattr(evento, "interim_input_transcription", None)
             if parcial and parcial.text:
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "transcricao_usuario_parcial", "texto": parcial.text}
                 )
             if evento.input_transcription and evento.input_transcription.text:
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "transcricao_usuario", "texto": evento.input_transcription.text}
                 )
             if evento.output_transcription and evento.output_transcription.text:
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "texto", "texto": evento.output_transcription.text}
                 )
             if evento.content and evento.content.parts:
                 for parte in evento.content.parts:
                     if parte.inline_data and parte.inline_data.data:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "audio",
                                 "dados": base64.b64encode(parte.inline_data.data).decode(),
                             }
                         )
                     if parte.function_call:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "ferramenta",
                                 "nome": parte.function_call.name,
@@ -727,7 +749,7 @@ async def live(
                             }
                         )
                     if parte.function_response:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "ferramenta_resultado",
                                 "nome": parte.function_response.name,
@@ -735,24 +757,24 @@ async def live(
                             }
                         )
             if evento.interrupted:
-                await websocket.send_json({"tipo": "interrompido"})
+                await safe_send_json({"tipo": "interrompido"})
             if _env_flag("LIVE_EXPLICIT_VAD") and evento.voice_activity:
                 try:
                     va = evento.voice_activity
                     estado = getattr(va, "is_speech", None)
                     if estado is None:
                         estado = getattr(va, "voice_in", None) or getattr(va, "response_in", None)
-                    await websocket.send_json(
+                    await safe_send_json(
                         {"tipo": "voz_ativa", "ativo": bool(estado), "detalhe": str(va)}
                     )
                 except Exception:
                     pass
             if evento.turn_complete:
-                await websocket.send_json({"tipo": "turno_concluido"})
+                await safe_send_json({"tipo": "turno_concluido"})
                 try:
                     sess_obj = await sessoes.get_session(app_name=APP_NOME, user_id=usuario, session_id=sessao)
                     if sess_obj:
-                        asyncio.create_task(memory_service_adk.add_session_to_memory(sess_obj))
+                        _schedule_conn_task(memory_service_adk.add_session_to_memory(sess_obj))
                 except Exception:
                     pass
 
@@ -770,11 +792,14 @@ async def live(
         trocar_modelo(runner, MODELO_LIVE_RESERVA)
         msg_erro = "Limite ou instabilidade na Live API. Chave rotacionada no pool. Reconecte para continuar." if girou else "Modelo Live indisponivel. Reconecte para tentar o modelo reserva."
         try:
-            await websocket.send_json({"tipo": "erro", "mensagem": msg_erro})
+            await safe_send_json({"tipo": "erro", "mensagem": msg_erro})
         except Exception:
             pass
     finally:
         fila.close()
+        for t in list(_conn_background_tasks):
+            if not t.done():
+                t.cancel()
         try:
             sess_obj = await sessoes.get_session(app_name=APP_NOME, user_id=usuario, session_id=sessao)
             if sess_obj:

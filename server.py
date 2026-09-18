@@ -15,7 +15,8 @@ import asyncio
 import logging
 import urllib.request
 import urllib.error
-from typing import Dict, Optional
+import inspect
+from typing import Dict, Optional, Set
 
 import secrets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Header, HTTPException, Request, Query
@@ -69,6 +70,15 @@ MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "0.3"))
 # Caminho interno do agente de Computer Use (navegador Chromium via Playwright)
 CAMINHO_COMPUTADOR = "computador"
 
+# Retenção de tarefas de background do servidor contra Garbage Collection (Python 3.14)
+_server_background_tasks: Set[asyncio.Task] = set()
+
+def _schedule_server_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _server_background_tasks.add(task)
+    task.add_done_callback(_server_background_tasks.discard)
+    return task
+
 
 def liberar_controle_da_sessao(session_id: str) -> None:
     """Encerra a autoridade física e do agente ao fim da sessão dona da lease.
@@ -118,7 +128,7 @@ async def get_session_token(request: Request):
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(gemini_bridge.gemini_file_watcher_task())
+    _schedule_server_task(gemini_bridge.gemini_file_watcher_task())
 
 # Servir arquivos estáticos do HUD e do Widget
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -797,7 +807,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         except Exception as e:
             logger.warning("Falha ao salvar sessão na memória de longo prazo: %s", e)
 
-    asyncio.create_task(_salvar_memoria_bg())
+    _schedule_server_task(_salvar_memoria_bg())
 
     return {
         "status": "ok",
@@ -819,6 +829,19 @@ async def live_adk(
 ):
     """Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado."""
     await websocket.accept()
+
+    ws_send_lock = asyncio.Lock()
+    _conn_background_tasks: Set[asyncio.Task] = set()
+
+    def _schedule_conn_task(coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        _conn_background_tasks.add(task)
+        task.add_done_callback(_conn_background_tasks.discard)
+        return task
+
+    async def safe_send_json(payload: dict):
+        async with ws_send_lock:
+            await websocket.send_json(payload)
     
     # Handshake seguro: exige token idêntico ao /ws/live
     try:
@@ -842,7 +865,7 @@ async def live_adk(
             "origem": origem_teste and "teste" or "real",
         })
         try:
-            await websocket.send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+            await safe_send_json({"tipo": "erro", "mensagem": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
         except Exception:
             pass
         await websocket.close(code=1008, reason="Unauthorized")
@@ -858,7 +881,7 @@ async def live_adk(
 
     fila = LiveRequestQueue()
     logger.info("Cliente autenticado no Live ADK (sessão: %s, modelo: %s)", sessao, runner.agent.model)
-    await websocket.send_json({"tipo": "pronto", "modelo": runner.agent.model})
+    await safe_send_json({"tipo": "pronto", "modelo": runner.agent.model})
 
     async def do_cliente_para_o_agente():
         client_muted = False
@@ -906,7 +929,7 @@ async def live_adk(
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por DIGITAÇÃO no Live ADK!", pending.action_id, pending.tool_name)
-                        await websocket.send_json({
+                        await safe_send_json({
                             "tipo": "acao_aprovada",
                             "origem": "texto_live",
                             "action_id": pending.action_id,
@@ -929,7 +952,7 @@ async def live_adk(
                     if sucesso:
                         pending = policy_engine.get_pending_action(action_id)
                         tool_name = pending.tool_name if pending else "ação"
-                        await websocket.send_json({
+                        await safe_send_json({
                             "tipo": "acao_aprovada",
                             "origem": "botao_ui",
                             "action_id": action_id,
@@ -942,7 +965,7 @@ async def live_adk(
                         ))
                 else:
                     policy_engine.reject_action(action_id, session_id=sessao, user_id=usuario)
-                    await websocket.send_json({"tipo": "acao_rejeitada", "action_id": action_id})
+                    await safe_send_json({"tipo": "acao_rejeitada", "action_id": action_id})
 
     async def do_agente_para_o_cliente():
         run_cfg = RunConfig(
@@ -963,12 +986,12 @@ async def live_adk(
         ):
             parcial = getattr(evento, "interim_input_transcription", None)
             if parcial and parcial.text:
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "transcricao_usuario_parcial", "texto": parcial.text}
                 )
             if evento.input_transcription and evento.input_transcription.text:
                 transcricao_usuario = evento.input_transcription.text.strip()
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "transcricao_usuario", "texto": transcricao_usuario}
                 )
                 # Hook de aprovação verbal por voz na sessão Live
@@ -982,7 +1005,7 @@ async def live_adk(
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
-                        await websocket.send_json({
+                        await safe_send_json({
                             "tipo": "acao_aprovada",
                             "origem": "voz",
                             "action_id": pending.action_id,
@@ -994,20 +1017,20 @@ async def live_adk(
                             parts=[types.Part(text=f"O usuário confirmou expressamente por voz: 'sim'. Execute a ferramenta '{pending.tool_name}' agora.")]
                         ))
             if evento.output_transcription and evento.output_transcription.text:
-                await websocket.send_json(
+                await safe_send_json(
                     {"tipo": "texto", "texto": evento.output_transcription.text}
                 )
             if evento.content and evento.content.parts:
                 for parte in evento.content.parts:
                     if parte.inline_data and parte.inline_data.data:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "audio",
                                 "dados": base64.b64encode(parte.inline_data.data).decode(),
                             }
                         )
                     if parte.function_call:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "ferramenta",
                                 "nome": parte.function_call.name,
@@ -1015,7 +1038,7 @@ async def live_adk(
                             }
                         )
                     if parte.function_response:
-                        await websocket.send_json(
+                        await safe_send_json(
                             {
                                 "tipo": "ferramenta_resultado",
                                 "nome": parte.function_response.name,
@@ -1023,15 +1046,15 @@ async def live_adk(
                             }
                         )
             if evento.interrupted:
-                await websocket.send_json({"tipo": "interrompido"})
+                await safe_send_json({"tipo": "interrompido"})
             if evento.turn_complete:
-                await websocket.send_json({"tipo": "turno_concluido"})
+                await safe_send_json({"tipo": "turno_concluido"})
                 try:
                     sess_obj = await session_service_adk.get_session(
                         app_name="assistente", user_id=usuario, session_id=sessao
                     )
                     if sess_obj:
-                        asyncio.create_task(memory_service_adk.add_session_to_memory(sess_obj))
+                        _schedule_conn_task(memory_service_adk.add_session_to_memory(sess_obj))
                 except Exception:
                     pass
 
@@ -1044,11 +1067,14 @@ async def live_adk(
     except* (ServerError, ClientError) as grupo:
         logger.warning("Falha na sessão Live ADK (%s).", grupo.exceptions[0])
         try:
-            await websocket.send_json({"tipo": "erro", "mensagem": "Instabilidade na Live API. Reconecte para tentar novamente."})
+            await safe_send_json({"tipo": "erro", "mensagem": "Instabilidade na Live API. Reconecte para tentar novamente."})
         except Exception:
             pass
     finally:
         fila.close()
+        for t in list(_conn_background_tasks):
+            if not t.done():
+                t.cancel()
         try:
             sess_obj = await session_service_adk.get_session(
                 app_name="assistente", user_id=usuario, session_id=sessao
@@ -1067,6 +1093,19 @@ active_live_socket: Optional[WebSocket] = None
 async def websocket_live_endpoint(websocket: WebSocket):
     global active_live_socket
     await websocket.accept()
+
+    ws_send_lock = asyncio.Lock()
+    _conn_background_tasks: Set[asyncio.Task] = set()
+
+    def _schedule_conn_task(coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        _conn_background_tasks.add(task)
+        task.add_done_callback(_conn_background_tasks.discard)
+        return task
+
+    async def safe_send_json(payload: dict):
+        async with ws_send_lock:
+            await websocket.send_json(payload)
 
     # Encerra conexão anterior imediatamente para evitar múltiplos agentes falando juntos
     if active_live_socket is not None and active_live_socket != websocket:
@@ -1109,7 +1148,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
             "reason": "invalid_or_missing_token",
             "origem": origem_teste and "teste" or "real",
         })
-        await websocket.send_json({"type": "error", "message": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
+        await safe_send_json({"type": "error", "message": "Não autorizado: JARVIS_TOKEN inválido ou ausente."})
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
@@ -1166,7 +1205,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     if not key_pool:
         err_msg = "Nenhuma chave no pool. Configure GEMINI_API_KEYS ou GEMINI_API_KEY no .env do servidor."
         record_event("error", {"message": err_msg})
-        await websocket.send_json({"type": "error", "message": err_msg})
+        await safe_send_json({"type": "error", "message": err_msg})
         await websocket.close()
         return
 
@@ -1194,7 +1233,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 usuario_id = sessao_id
                 live_info = provider_router.live_provider()
                 provedor_efetivo = live_info["provider"]
-                await websocket.send_json({
+                await safe_send_json({
                     "type": "connected",
                     "message": f"Sistemas online. Conectado via {provedor_efetivo} ({model_name}) com a voz {voice_name}.",
                     "voice": voice_name,
@@ -1206,17 +1245,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "primary_provider": "google_studio",
                     "secondary_provider": "omniroute"
                 })
-                await websocket.send_json({
+                await safe_send_json({
                     "type": "ide_mode",
                     "active": system_tools.get_ide_mode()
                 })
                 # Uma nova sessão não herda o Modo Controle: a autoridade é de quem tem a lease
-                await websocket.send_json({
+                await safe_send_json({
                     "type": "control_mode",
                     "active": system_tools.get_control_mode() and policy_engine.is_control_lease_active(sessao_id),
                     "lease": policy_engine.control_lease_status()
                 })
-                await websocket.send_json({
+                await safe_send_json({
                     "type": "computer_mode",
                     "active": policy_engine.is_computer_lease_active(sessao_id),
                     "lease": policy_engine.computer_lease_status()
@@ -1241,7 +1280,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     if not texto:
                         return
                     try:
-                        await websocket.send_json({
+                        await safe_send_json({
                             "type": "user_transcription_interim",
                             "text": texto
                         })
@@ -1257,7 +1296,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     ultima_transcricao_usuario["texto"] = texto
                     ultima_transcricao_usuario["tempo"] = agora
                     try:
-                        await websocket.send_json({
+                        await safe_send_json({
                             "type": "user_transcription",
                             "text": texto
                         })
@@ -1272,7 +1311,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     fut.set_result(True)
                                     logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", texto)
                                     record_event("user_confirmed_via_voice", {"text": texto})
-                                    await websocket.send_json({
+                                    await safe_send_json({
                                         "type": "policy_verbal_confirmation_approved",
                                         "call_id": cid,
                                         "text": texto
@@ -1290,7 +1329,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     """Pede autorização ao usuário no HUD e espera a resposta."""
                     future: asyncio.Future = asyncio.get_running_loop().create_future()
                     pending_confirmations[call_id] = future
-                    await websocket.send_json({
+                    await safe_send_json({
                         "type": "tool_confirmation_request",
                         "id": call_id,
                         "name": func_name,
@@ -1328,7 +1367,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             record_event("microphone_state_changed", {"muted": client_muted})
                             if client_muted:
                                 if transcritor_dedicado.is_active:
-                                    asyncio.create_task(transcritor_dedicado.send_audio_stream_end())
+                                    _schedule_conn_task(transcritor_dedicado.send_audio_stream_end())
                                 await session.send_realtime_input(audio_stream_end=True)
                             continue
 
@@ -1343,7 +1382,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                 # Encaminha imediatamente para o transcritor de baixa latência
                                 if transcritor_dedicado.is_active:
-                                    asyncio.create_task(transcritor_dedicado.send_audio(pcm_data))
+                                    _schedule_conn_task(transcritor_dedicado.send_audio(pcm_data))
 
                                 # Repassa para a sessão do agente com controle refinado
                                 agora = time.time()
@@ -1360,7 +1399,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         elif msg_type in ("audio_stream_end", "end_of_audio", "fim_do_audio"):
                             record_event("user_audio_stream_end")
                             if transcritor_dedicado.is_active:
-                                asyncio.create_task(transcritor_dedicado.send_audio_stream_end())
+                                _schedule_conn_task(transcritor_dedicado.send_audio_stream_end())
                             await session.send_realtime_input(audio_stream_end=True)
 
                         elif msg_type == "text":
@@ -1407,7 +1446,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                         elif msg_type == "get_status":
                             status = system_tools.get_system_status()
-                            await websocket.send_json({"type": "system_status", "data": status})
+                            await safe_send_json({"type": "system_status", "data": status})
 
                         elif msg_type in ("video", "screen_frame", "imagem"):
                             # Compartilhamento de tela do cliente para visão multimodal da Live API
@@ -1460,7 +1499,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     if server_content.interrupted:
                                         assistant_state["busy"] = False
                                         record_event("interrupted")
-                                        await websocket.send_json({"type": "interrupted"})
+                                        await safe_send_json({"type": "interrupted"})
                                         continue
 
                                     model_turn = server_content.model_turn
@@ -1471,7 +1510,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                 assistant_state["ultimo_audio"] = time.time()
                                                 assistant_state["audio_recebido_no_turno"] += len(part.inline_data.data)
                                                 audio_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
-                                                await websocket.send_json({
+                                                await safe_send_json({
                                                     "type": "audio",
                                                     "data": audio_b64
                                                 })
@@ -1481,7 +1520,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         transcribed = server_content.output_transcription.text
                                         record_event("model_text", {"text": transcribed})
                                         assistant_state["texto_recebido_no_turno"] += len(transcribed)
-                                        await websocket.send_json({
+                                        await safe_send_json({
                                             "type": "text",
                                             "text": transcribed
                                         })
@@ -1493,7 +1532,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                 record_event("model_text", {"text": part.text, "thought": is_thought})
                                                 if not is_thought:
                                                     assistant_state["texto_recebido_no_turno"] += len(part.text)
-                                                    await websocket.send_json({
+                                                    await safe_send_json({
                                                         "type": "text",
                                                         "text": part.text
                                                     })
@@ -1524,7 +1563,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     msg_fala = str(res_ferramenta)
                                             logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
                                             record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
-                                            await websocket.send_json({
+                                            await safe_send_json({
                                                 "type": "fallback_text",
                                                 "text": msg_fala
                                             })
@@ -1533,7 +1572,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         assistant_state["ultima_ferramenta"] = None
                                         assistant_state["ultimo_resultado_ferramenta"] = None
                                         record_event("turn_complete")
-                                        await websocket.send_json({"type": "turn_complete"})
+                                        await safe_send_json({"type": "turn_complete"})
 
                                 # Tratamento de Function Calling (Ferramentas do SO)
                                 tool_call = response.tool_call
@@ -1546,7 +1585,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         args = call.args or {}
 
                                         record_event("tool_call", {"name": func_name, "args": args})
-                                        await websocket.send_json({
+                                        await safe_send_json({
                                             "type": "tool_call",
                                             "name": func_name,
                                             "args": args
@@ -1568,7 +1607,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             executor = system_tools.TOOL_REGISTRY.get(func_name)
                                             if executor:
                                                 try:
-                                                    res = executor(**args)
+                                                    if inspect.iscoroutinefunction(executor):
+                                                        res = await asyncio.wait_for(executor(**args), timeout=30.0)
+                                                    else:
+                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=30.0)
+                                                except asyncio.TimeoutError:
+                                                    res = {"sucesso": False, "erro": f"Timeout (30s) na execução da ferramenta {func_name}."}
                                                 except Exception as exc:
                                                     res = {"sucesso": False, "erro": str(exc)}
                                             else:
@@ -1578,20 +1622,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         assistant_state["ultimo_resultado_ferramenta"] = res
                                         record_event("tool_result", {"name": func_name, "result": res})
                                         gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
-                                        await websocket.send_json({
+                                        await safe_send_json({
                                             "type": "tool_result",
                                             "name": func_name,
                                             "result": res
                                         })
 
                                         if func_name == "set_ide_mode":
-                                            await websocket.send_json({
+                                            await safe_send_json({
                                                 "type": "ide_mode",
                                                 "active": res.get("ide_mode", False)
                                             })
 
                                         if func_name == "toggle_telemetry_overlay":
-                                            await websocket.send_json({
+                                            await safe_send_json({
                                                 "type": "toggle_telemetry",
                                                 "active": res.get("active", True),
                                                 "telemetry": res.get("telemetry", {})
@@ -1605,7 +1649,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             else:
                                                 lease = policy_engine.revoke_control_lease(session_id=sessao_id)
                                                 record_event("control_lease_revoked", lease)
-                                            await websocket.send_json({
+                                            await safe_send_json({
                                                 "type": "control_mode",
                                                 "active": res.get("control_mode", False),
                                                 "lease": lease,
@@ -1620,7 +1664,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             else:
                                                 lease = policy_engine.revoke_ide_lease(session_id=sessao_id, user_id=usuario_id)
                                                 record_event("ide_lease_revoked", lease)
-                                            await websocket.send_json({
+                                            await safe_send_json({
                                                 "type": "ide_mode",
                                                 "active": res.get("ide_mode", False),
                                                 "lease": lease,
@@ -1655,7 +1699,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             lease = policy_engine.revoke_control_lease(session_id=sessao_id)
                             record_event("control_lease_expired", lease)
                             logger.info("Lease de controle expirada: Modo Controle desativado automaticamente.")
-                            await websocket.send_json({
+                            await safe_send_json({
                                 "type": "control_mode",
                                 "active": False,
                                 "lease": lease,
@@ -1674,6 +1718,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     logger.info("Cliente Web HUD desconectado.")
                 finally:
                     await transcritor_dedicado.close()
+                    for t in list(_conn_background_tasks):
+                        if not t.done():
+                            t.cancel()
                     liberar_controle_da_sessao(sessao_id)
                 record_event("client_disconnected")
                 return
@@ -1692,7 +1739,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
             })
             logger.warning(f"Conta {idx+1} falhou ({e}). Tentando próxima do pool...")
             try:
-                await websocket.send_json({"type": "warn", "message": f"Conta {idx+1} falhou, rotacionando para próxima..."})
+                await safe_send_json({"type": "warn", "message": f"Conta {idx+1} falhou, rotacionando para próxima..."})
             except Exception:
                 pass
             continue
@@ -1700,7 +1747,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     err_final = f"Todas as contas do pool falharam: {last_err}"
     record_event("error", {"message": err_final})
     try:
-        await websocket.send_json({"type": "error", "message": err_final})
+        await safe_send_json({"type": "error", "message": err_final})
         await websocket.close()
     except Exception:
         pass

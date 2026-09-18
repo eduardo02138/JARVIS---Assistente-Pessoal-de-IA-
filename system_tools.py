@@ -1,26 +1,3 @@
-def get_gpu_status() -> dict:
-    """Verifica e retorna o uso, temperatura e memória VRAM da GPU dedicada."""
-    try:
-        res = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            parts = [p.strip() for p in res.stdout.strip().split(",")]
-            if len(parts) >= 6:
-                return {
-                    "disponivel": True,
-                    "modelo": parts[0],
-                    "uso_gpu": f"{parts[1]}%",
-                    "vram_usada_mb": f"{parts[3]} MB",
-                    "vram_total_mb": f"{parts[4]} MB",
-                    "temperatura": f"{parts[5]}°C",
-                    "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
-                }
-    except Exception:
-        pass
-    return {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
-
 """
 Ferramentas de sistema operacional e automações do JARVIS.
 """
@@ -31,8 +8,46 @@ import datetime
 import psutil
 import shutil
 import glob
+import json
+import shlex
+import time
 import preferences_manager
 import controller_engine
+
+_last_gpu_result = None
+_last_gpu_time = 0.0
+
+def get_gpu_status() -> dict:
+    """Verifica e retorna o uso, temperatura e memória VRAM da GPU dedicada."""
+    global _last_gpu_result, _last_gpu_time
+    now = time.monotonic()
+    if _last_gpu_result is not None and (now - _last_gpu_time < 2.0):
+        return _last_gpu_result
+
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = [p.strip() for p in res.stdout.strip().split(",")]
+            if len(parts) >= 6:
+                _last_gpu_result = {
+                    "disponivel": True,
+                    "modelo": parts[0],
+                    "uso_gpu": f"{parts[1]}%",
+                    "vram_usada_mb": f"{parts[3]} MB",
+                    "vram_total_mb": f"{parts[4]} MB",
+                    "temperatura": f"{parts[5]}°C",
+                    "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
+                }
+                _last_gpu_time = now
+                return _last_gpu_result
+    except Exception:
+        pass
+    _last_gpu_result = {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
+    _last_gpu_time = now
+    return _last_gpu_result
 
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
 
@@ -59,7 +74,7 @@ def get_system_status() -> dict:
     Retorna telemetria detalhada de hardware: uso de CPU, memória RAM,
     espaço em disco, status da bateria (se disponível) e processos ativos.
     """
-    cpu_percent = psutil.cpu_percent(interval=0.1)
+    cpu_percent = psutil.cpu_percent(interval=None)
     cpu_cores = psutil.cpu_count(logical=True)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
@@ -109,17 +124,52 @@ def list_installed_games(filter_name: str = "") -> dict:
     a pasta de instalação e comandos de execução.
     """
     games = []
+
+    # 1. Descoberta dinâmica de pontos de montagem (SSDs, HDs e mídias externas)
+    discovered_mounts = set()
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mp = parts[1].replace("\\040", " ")
+                    if mp.startswith("/run/media/") or mp.startswith("/media/") or mp.startswith("/mnt/"):
+                        if os.path.isdir(mp):
+                            discovered_mounts.add(mp)
+    except Exception:
+        pass
+
+    for base in ["/run/media", "/media", "/mnt"]:
+        if os.path.exists(base):
+            for pattern in [os.path.join(base, "*"), os.path.join(base, "*", "*")]:
+                for d in glob.glob(pattern):
+                    if os.path.isdir(d):
+                        discovered_mounts.add(d)
+
+    # 2. Descoberta de bibliotecas Steam locais e em outros discos/SSDs
     vdf_paths = [
         os.path.expanduser("~/.steam/steam/steamapps/libraryfolders.vdf"),
         os.path.expanduser("~/.local/share/Steam/steamapps/libraryfolders.vdf"),
         os.path.expanduser("~/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/libraryfolders.vdf"),
-        "/run/media/edu/gamer/SteamLibrary/steamapps/libraryfolders.vdf"
     ]
     steam_lib_dirs = set([
         os.path.expanduser("~/.steam/steam/steamapps"),
         os.path.expanduser("~/.local/share/Steam/steamapps"),
-        "/run/media/edu/gamer/SteamLibrary/steamapps"
     ])
+
+    for m in discovered_mounts:
+        for rel in [
+            "SteamLibrary/steamapps",
+            "steamapps",
+            "Program Files (x86)/Steam/steamapps",
+            "Program Files/Steam/steamapps"
+        ]:
+            cand = os.path.join(m, rel)
+            if os.path.isdir(cand):
+                steam_lib_dirs.add(cand)
+                vdf = os.path.join(cand, "libraryfolders.vdf")
+                if os.path.exists(vdf):
+                    vdf_paths.append(vdf)
 
     for vp in vdf_paths:
         if os.path.exists(vp):
@@ -129,13 +179,37 @@ def list_installed_games(filter_name: str = "") -> dict:
                         if '"path"' in line:
                             parts = line.split('"')
                             if len(parts) >= 4:
-                                p = os.path.join(parts[3], "steamapps")
-                                if os.path.exists(p):
-                                    steam_lib_dirs.add(p)
+                                raw_p = parts[3].replace("\\\\", "/")
+                                if raw_p.startswith("/"):
+                                    p = os.path.join(raw_p, "steamapps")
+                                    if os.path.exists(p):
+                                        steam_lib_dirs.add(p)
+                                else:
+                                    folder_name = os.path.basename(raw_p.rstrip("/\\"))
+                                    if folder_name:
+                                        for m in discovered_mounts:
+                                            cand = os.path.join(m, folder_name, "steamapps")
+                                            if os.path.exists(cand):
+                                                steam_lib_dirs.add(cand)
             except Exception:
                 pass
 
     ignored_names = ["Steamworks Common Redistributables", "Proton", "Steam Linux Runtime"]
+
+    def _identificar_disco(caminho: str) -> str:
+        for m in sorted(discovered_mounts, key=len, reverse=True):
+            if caminho.startswith(m):
+                bname = os.path.basename(m)
+                if "gamer" in bname.lower():
+                    return "SSD Gamer (SATA 1TB)"
+                elif "novo volume" in bname.lower():
+                    return "SSD Secundário (SATA 240GB)"
+                elif "8a8c78608c7848a9" in bname.lower() or "windows" in bname.lower():
+                    return "SSD Windows/Dados (NVMe 732GB)"
+                return f"SSD/Drive {bname}"
+        if caminho.startswith("/home/edu"):
+            return "SSD Linux Principal (NVMe)"
+        return "Armazenamento Local"
 
     for sdir in steam_lib_dirs:
         if not os.path.exists(sdir):
@@ -159,17 +233,59 @@ def list_installed_games(filter_name: str = "") -> dict:
                         if len(parts) >= 4: installdir = parts[3]
 
                 if name and appid and not any(ign in name for ign in ignored_names):
+                    pasta_jogo = os.path.join(sdir, "common", installdir) if installdir else sdir
                     games.append({
                         "nome": name,
                         "distribuidora": "Steam",
                         "appid": appid,
-                        "pasta": os.path.join(sdir, "common", installdir) if installdir else sdir,
+                        "pasta": pasta_jogo,
+                        "disco": _identificar_disco(pasta_jogo),
                         "comando": f"steam steam://rungameid/{appid}"
                     })
             except Exception:
                 pass
 
-    # Varre .desktop locais em busca de outros jogos (Lutris, Wine, etc.)
+    # 3. Varredura de jogos GOG Galaxy instalados nos discos/SSDs
+    gog_dirs = [
+        os.path.expanduser("~/.local/share/GOG.com"),
+        os.path.expanduser("~/GOG Games"),
+    ]
+    for m in discovered_mounts:
+        gog_dirs.extend([
+            os.path.join(m, "Program Files (x86)/GOG Galaxy/Games"),
+            os.path.join(m, "Program Files/GOG Galaxy/Games"),
+            os.path.join(m, "GOG Games"),
+        ])
+
+    for gd in gog_dirs:
+        if not os.path.isdir(gd):
+            continue
+        try:
+            for entry in os.listdir(gd):
+                game_dir = os.path.join(gd, entry)
+                if not os.path.isdir(game_dir):
+                    continue
+                info_files = glob.glob(os.path.join(game_dir, "goggame-*.info"))
+                if info_files:
+                    try:
+                        with open(info_files[0], "r", encoding="utf-8", errors="ignore") as f:
+                            info_data = json.load(f)
+                        g_name = info_data.get("name", entry)
+                        g_id = str(info_data.get("gameId", ""))
+                        games.append({
+                            "nome": g_name,
+                            "distribuidora": "GOG Galaxy",
+                            "appid": g_id,
+                            "pasta": game_dir,
+                            "disco": _identificar_disco(game_dir),
+                            "comando": f"xdg-open {shlex.quote(game_dir)}"
+                        })
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 4. Varre .desktop locais em busca de outros jogos (Lutris, Wine, etc.)
     desktop_dirs = [
         os.path.expanduser("~/.local/share/applications"),
         "/usr/share/applications"
@@ -200,6 +316,7 @@ def list_installed_games(filter_name: str = "") -> dict:
                             "distribuidora": dist,
                             "appid": None,
                             "pasta": df,
+                            "disco": "SSD Linux Principal (NVMe)",
                             "comando": dexec.split("%")[0].strip()
                         })
             except Exception:
@@ -226,7 +343,7 @@ def list_installed_games(filter_name: str = "") -> dict:
             "rivals": "marvel rivals"
         }
         q_target = alias_filter.get(q, q)
-        unique = [g for g in unique if q in g["nome"].lower() or q_target in g["nome"].lower() or q in g["distribuidora"].lower()]
+        unique = [g for g in unique if q in g["nome"].lower() or q_target in g["nome"].lower() or q in g["distribuidora"].lower() or q in g.get("disco", "").lower()]
 
     nomes = [g["nome"] for g in unique]
     if unique:
@@ -306,9 +423,9 @@ def open_application(app_name: str) -> dict:
                         chosen_game = cand
                         break
 
-            cmd = chosen_game["comando"].split()
+            cmd = shlex.split(chosen_game["comando"])
             if isinstance(saved_game_pref, dict) and saved_game_pref.get("custom_args"):
-                cmd.extend(saved_game_pref["custom_args"].split())
+                cmd.extend(shlex.split(saved_game_pref["custom_args"]))
 
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             return {
