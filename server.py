@@ -55,9 +55,20 @@ from monitoring.logger import (
 
 app = FastAPI(title="JARVIS AI Assistant - Gemini Live")
 
-JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
-if not JARVIS_SECRET_TOKEN:
-    JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
+from jarvis.core.auth import (
+    JARVIS_SECRET_TOKEN,
+    verify_jarvis_token,
+    verify_jarvis_token_ws,
+    is_valid_token,
+)
+from jarvis.core.leases import release_session_leases
+from jarvis.core.confirmation import check_and_approve_verbal, handle_confirmar_acao_payload
+from jarvis.core.key_pool import (
+    key_pool,
+    get_gemini_keys,
+    get_active_gemini_key,
+    rotate_gemini_key,
+)
 
 # Tempo máximo de espera pela confirmação do usuário em ferramentas de risco
 CONFIRMATION_TIMEOUT_S = int(os.environ.get("JARVIS_CONFIRMATION_TIMEOUT", "30"))
@@ -74,35 +85,12 @@ def liberar_controle_da_sessao(session_id: str) -> None:
 
     Sessões que não são donas da lease não mexem no Modo Controle ou IDE de quem é.
     """
-    if policy_engine.control_lease_status().get("owner") == session_id:
-        if system_tools.get_control_mode():
-            system_tools.set_control_mode(False)
-        lease = policy_engine.revoke_control_lease(session_id=session_id)
-        record_event("control_lease_released", lease)
-
-    if policy_engine.ide_lease_status().get("owner") == session_id:
-        lease_ide = policy_engine.revoke_ide_lease(session_id=session_id)
-        record_event("ide_lease_released", lease_ide)
+    rel = release_session_leases(session_id)
+    if rel["control_released"]:
+        record_event("control_lease_released", policy_engine.control_lease_status())
+    if rel["ide_released"]:
+        record_event("ide_lease_released", policy_engine.ide_lease_status())
     logger.info("Sessão encerrada: Modo Controle desativado e lease de controle revogada.")
-
-async def verify_jarvis_token(
-    request: Request,
-    authorization: Optional[str] = Header(None),
-    x_jarvis_token: Optional[str] = Header(None),
-    token: Optional[str] = Query(None)
-):
-    """Exige token de autorização para ações de mutação ou controle."""
-    req_token = None
-    if authorization and authorization.startswith("Bearer "):
-        req_token = authorization.split("Bearer ")[1].strip()
-    elif x_jarvis_token:
-        req_token = x_jarvis_token.strip()
-    elif token:
-        req_token = token.strip()
-
-    if req_token != JARVIS_SECRET_TOKEN:
-        raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
-    return req_token
 
 @app.get("/api/auth/session")
 @app.get("/api/auth/token")
@@ -555,28 +543,10 @@ async def listar_pendentes(
 
 @app.post("/api/confirmar_acao")
 async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
-    action_id = payload.get("id_confirmacao") or payload.get("action_id") or payload.get("id")
-    aprovado = payload.get("aprovado", True)
-    session_id = payload.get("sessao") or payload.get("session_id")
-    user_id = payload.get("usuario") or payload.get("user_id") or "local"
-
-    if not session_id:
-        return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' é obrigatório para confirmar ações."}, status_code=400)
-
-    if not action_id:
-        pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
-        if pending:
-            return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
-        return JSONResponse({"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para esta sessão/usuário"}, status_code=404)
-
-    if aprovado:
-        sucesso = policy_engine.approve_action(action_id, session_id=session_id, user_id=user_id)
-        if sucesso:
-            return {"status": "ok", "action_id": action_id}
-        return JSONResponse({"status": "erro", "mensagem": "Ação não encontrada, expirada ou sessão/usuário divergente"}, status_code=400)
-    else:
-        sucesso = policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
-        return {"status": "rejeitado", "action_id": action_id}
+    status_code, resp = handle_confirmar_acao_payload(payload)
+    if status_code != 200:
+        return JSONResponse(resp, status_code=status_code)
+    return resp
 
 
 async def chamar_omniroute_chat(texto: str) -> str:
@@ -665,19 +635,10 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         "navegação automática",
     )
 
-    # Verifica palavras de confirmação verbal ou digitada do usuário
-    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
-    palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-    texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-    tokens = set(texto_limpo.split())
-    is_negado = bool(tokens & palavras_negacao)
-    is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
-    if is_confirmado:
-        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
-        if pending:
-            logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
-            texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
-            caminho_forcado = "complexo"
+    # Verifica palavras de confirmação verbal ou digitada do usuário (jarvis.core.confirmation)
+    confirmado, pending, texto = check_and_approve_verbal(texto, session_id=sessao, user_id=usuario)
+    if confirmado:
+        caminho_forcado = "complexo"
 
     texto_min = texto.lower()
     if caminho_forcado in ("rapido", "complexo", CAMINHO_COMPUTADOR):

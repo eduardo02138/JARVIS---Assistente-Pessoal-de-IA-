@@ -57,27 +57,14 @@ from fastapi import (
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
-if not JARVIS_SECRET_TOKEN:
-    JARVIS_SECRET_TOKEN = secrets.token_urlsafe(24)
-
-async def verify_jarvis_token(
-    request: Request,
-    authorization: Optional[str] = Header(None),
-    x_jarvis_token: Optional[str] = Header(None),
-    token: Optional[str] = Query(None)
-):
-    req_token = None
-    if authorization and authorization.startswith("Bearer "):
-        req_token = authorization.split("Bearer ")[1].strip()
-    elif x_jarvis_token:
-        req_token = x_jarvis_token.strip()
-    elif token:
-        req_token = token.strip()
-
-    if req_token != JARVIS_SECRET_TOKEN:
-        raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
-    return req_token
+from jarvis.core.auth import (
+    JARVIS_SECRET_TOKEN,
+    verify_jarvis_token,
+    verify_jarvis_token_ws,
+    is_valid_token,
+)
+from jarvis.core.confirmation import check_and_approve_verbal, handle_confirmar_acao_payload
+from jarvis.core.key_pool import get_gemini_keys
 from google.adk.agents import LiveRequestQueue  # noqa: E402
 from google.adk.agents.run_config import RunConfig  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
@@ -118,19 +105,7 @@ MODELO_TEXTO_RESERVA = os.environ.get("TEXT_MODEL_FALLBACK", "gemini-2.5-flash")
 
 # Pool de chaves: o nível gratuito estoura cota (429) com facilidade, então o servidor
 # gira para a próxima chave em vez de devolver erro ao usuário.
-def _carregar_chaves() -> list[str]:
-    brutas = [os.environ.get("GOOGLE_API_KEY", "")]
-    brutas += os.environ.get("GEMINI_API_KEYS", "").split(",")
-    brutas.append(os.environ.get("GEMINI_API_KEY", ""))
-    vistas, chaves = set(), []
-    for chave in (c.strip() for c in brutas):
-        if chave and chave not in vistas:
-            vistas.add(chave)
-            chaves.append(chave)
-    return chaves
-
-
-CHAVES = _carregar_chaves()
+CHAVES = get_gemini_keys()
 _indice_chave = 0
 if CHAVES:
     os.environ["GOOGLE_API_KEY"] = CHAVES[0]
@@ -366,28 +341,12 @@ async def listar_pendentes(
 
 @app.post("/api/confirmar_acao")
 async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
-    action_id = payload.get("id_confirmacao")
-    aprovado = payload.get("aprovado", True)
-    session_id = payload.get("sessao")
-    user_id = payload.get("usuario") or "local"
-
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Parâmetro 'sessao' é obrigatório para confirmar ações.")
-
-    if not action_id:
-        pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
-        if pending:
-            return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
-        return {"status": "erro", "mensagem": "Nenhuma ação pendente encontrada para confirmação nesta sessão"}
-
-    if aprovado:
-        sucesso = policy_engine.approve_action(action_id, session_id=session_id, user_id=user_id)
-        if sucesso:
-            return {"status": "ok", "action_id": action_id}
-        return {"status": "erro", "mensagem": "Ação não encontrada, expirada ou sessão/usuário divergente"}
-    else:
-        sucesso = policy_engine.reject_action(action_id, session_id=session_id, user_id=user_id)
-        return {"status": "rejeitado", "action_id": action_id}
+    status_code, resp = handle_confirmar_acao_payload(payload)
+    if status_code != 200:
+        if status_code == 400 and "obrigatório" in resp.get("mensagem", ""):
+            raise HTTPException(status_code=400, detail=resp.get("mensagem", ""))
+        return resp
+    return resp
 
 
 async def chamar_omniroute_chat(texto: str) -> str:
@@ -414,25 +373,17 @@ async def chat(payload: dict, _=Depends(verify_jarvis_token)):
         "controlar o navegador",
         "navegação automática",
     )
-    if forcado:
-        caminho, motivo = forcado, "escolha manual"
+    if forcado in ("rapido", "complexo", CAMINHO_COMPUTADOR):
+        caminho, motivo = forcado, "escolha explícita no payload"
     elif any(marca in texto_min for marca in marcas_navegador):
         caminho, motivo = CAMINHO_COMPUTADOR, "solicitação de operação do navegador (Computer Use)"
     else:
         caminho, motivo = escolher_caminho(texto)
-    # Verifica palavras de confirmacao emitidas pelo usuario
-    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
-    palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-    texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-    tokens = set(texto_limpo.split())
-    is_negado = bool(tokens & palavras_negacao)
-    is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
-    if is_confirmado:
-        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
-        if pending:
-            logger.info("Usuario aprovou acao pendente %s (%s)", pending.action_id, pending.tool_name)
-            texto = f"O usuario confirmou expressamente a acao. Execute a ferramenta {pending.tool_name} agora."
-            caminho, motivo = "complexo", "execucao de acao autorizada pelo usuario"
+
+    # Verifica palavras de confirmacao emitidas pelo usuario (jarvis.core.confirmation)
+    confirmado, pending, texto = check_and_approve_verbal(texto, session_id=sessao, user_id=usuario)
+    if confirmado and pending:
+        caminho, motivo = "complexo", "execucao de acao autorizada pelo usuario"
 
 
     runner = obter_runner(caminho)

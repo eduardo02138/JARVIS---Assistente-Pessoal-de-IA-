@@ -1437,10 +1437,62 @@ def test_tool_catalog_unification():
     return True
 
 
+def test_shared_runtime_services():
+    """Valida a consolidação dos serviços de runtime compartilhado no pacote jarvis.core (Fase R2)."""
+    import server
+    import servidor_adk
+    from jarvis.core.auth import JARVIS_SECRET_TOKEN, is_valid_token
+    from jarvis.core.confirmation import parse_verbal_intent, handle_confirmar_acao_payload
+    from jarvis.core.key_pool import key_pool, get_gemini_keys, get_active_gemini_key
+    from jarvis.core.leases import release_session_leases
+    from provider_router import GoogleStudioProvider
+
+    # 1. Autenticação unificada e paridade estrita de tokens entre servidores
+    assert server.JARVIS_SECRET_TOKEN == servidor_adk.JARVIS_SECRET_TOKEN == JARVIS_SECRET_TOKEN
+    assert is_valid_token(JARVIS_SECRET_TOKEN) is True
+    assert is_valid_token("token_invalido_hacker") is False
+    assert is_valid_token("") is False
+    assert is_valid_token(None) is False
+
+    # 2. Motor de confirmação verbal normalizado
+    c_ok, n_ok = parse_verbal_intent("Sim, com certeza pode executar agora")
+    assert c_ok is True and n_ok is False
+
+    c_no, n_no = parse_verbal_intent("Não, recuso e cancela essa ação")
+    assert c_no is False and n_no is True
+
+    c_neu, n_neu = parse_verbal_intent("Qual é a temperatura da GPU agora?")
+    assert c_neu is False and n_neu is False
+
+    # 3. Tratamento robusto do payload de confirmação sem sessão
+    code, resp = handle_confirmar_acao_payload({"id_confirmacao": "123"})
+    assert code == 400
+    assert "sessao" in resp.get("mensagem", "")
+
+    # 4. Pool canônico de chaves Gemini
+    keys = get_gemini_keys()
+    provider_keys = GoogleStudioProvider.get_keys()
+    assert keys == provider_keys
+    if keys:
+        assert get_active_gemini_key() == keys[0]
+        status = key_pool.get_status()
+        assert status["total_chaves"] == len(keys)
+        assert "chave_ativa_mascarada" in status
+
+    # 5. Liberação segura de leases de sessão
+    res_leases = release_session_leases("sessao-inexistente-teste")
+    assert res_leases["session_id"] == "sessao-inexistente-teste"
+    assert res_leases["control_released"] is False
+
+    log_test("Serviços de Runtime Compartilhados (jarvis.core - Fase R2)", True, "Auth timing-safe, KeyPool unificado, Confirmation Engine e Leases operacionais")
+    return True
+
+
 # Wrapper assíncrono para execução interativa direta via CLI
 async def run_p0_suite():
     print(f"\n{BOLD}{CYAN}=== EXECUTANDO TESTES DE SEGURANÇA E ARQUITETURA (FASE P0) ==={RESET}\n")
     test_tool_catalog_unification()
+    test_shared_runtime_services()
     test_preferences_rce_prevention()
     test_confirmar_acao_session_isolation()
     test_localhost_binding()
@@ -1482,6 +1534,7 @@ async def run_p0_suite():
     test_gemini_38_live_config()
     test_providers_select_authentication()
     test_tool_catalog_unification()
+    test_shared_runtime_services()
     test_preferences_rce_prevention()
     test_confirmar_acao_session_isolation()
     await test_omniroute_failover_reachable()

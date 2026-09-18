@@ -26,12 +26,8 @@ class GoogleStudioProvider:
 
     @classmethod
     def get_keys(cls) -> list[str]:
-        raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-        keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-        single_key = os.environ.get("GEMINI_API_KEY")
-        if single_key and single_key not in keys:
-            keys.insert(0, single_key)
-        return keys
+        from jarvis.core.key_pool import get_gemini_keys
+        return get_gemini_keys()
 
     @classmethod
     async def test_connection(cls) -> Dict[str, Any]:
