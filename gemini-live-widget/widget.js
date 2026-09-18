@@ -1247,28 +1247,38 @@ function updateProviderUI() {
 
 async function setProvider(newProvider, reconnect = true) {
     if (newProvider !== "google_studio" && newProvider !== "omniroute") return;
-    state.provider = newProvider;
-    localStorage.setItem("jarvis_provider", newProvider);
-    updateProviderUI();
 
     try {
-        await fetch("/api/providers/select", {
+        const token = jarvisSessionToken || (await initSessionToken());
+        const resp = await fetch("/api/providers/select", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json",
+                "X-Jarvis-Token": token,
+                "Authorization": `Bearer ${token}`
+            },
             body: JSON.stringify({ provider: newProvider })
         });
+        if (!resp.ok) {
+            throw new Error(`Falha HTTP ${resp.status}: ${await resp.text()}`);
+        }
+
+        state.provider = newProvider;
+        localStorage.setItem("jarvis_provider", newProvider);
+        updateProviderUI();
+
+        appendChatMessage("gemini", newProvider === "google_studio"
+            ? "⭐ Provedor alterado: Google AI Studio API ativado como 1º Provedor (Primário)."
+            : "🛡️ Provedor alterado: OmniRoute ativado como 2º Provedor (Proxy multi-contas)."
+        );
+
+        if (reconnect && state.ws) {
+            state.ws.close();
+            initWebSocket();
+        }
     } catch (e) {
         console.warn("Falha ao sincronizar provedor com o backend:", e);
-    }
-
-    appendChatMessage("gemini", newProvider === "google_studio"
-        ? "⭐ Provedor alterado: Google AI Studio API ativado como 1º Provedor (Primário)."
-        : "🛡️ Provedor alterado: OmniRoute ativado como 2º Provedor (Proxy multi-contas)."
-    );
-
-    if (reconnect && state.ws) {
-        state.ws.close();
-        initWebSocket();
+        appendChatMessage("gemini", `⚠️ Falha ao alterar provedor: ${e.message}`);
     }
 }
 
