@@ -141,11 +141,7 @@ def _criar_skill_toolset():
         from google.adk.tools.skill_toolset import SkillToolset
 
         adk_skill_loader.carregar()
-        ativas = [
-            skill
-            for name, skill in adk_skill_loader.skills_carregadas().items()
-            if name in set(adk_skill_loader.ids_ativos())
-        ]
+        ativas = adk_skill_loader.skills_unicas(apenas_ativas=True)
         if not ativas:
             return None
 
