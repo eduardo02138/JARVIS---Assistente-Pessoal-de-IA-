@@ -32,6 +32,20 @@ class PluginMeta:
     enabled: bool = True
     installed: bool = True
 
+    def to_store_dict(self) -> dict:
+        """Converte metadados canônicos para representação no catálogo da loja."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "version": self.version,
+            "category": self.category,
+            "icon": self.icon,
+            "description": self.description,
+            "author": self.author,
+            "installed": self.installed,
+            "enabled": self.enabled,
+        }
+
 class JarvisPlugin:
     """Classe base abstrata para todos os plug-ins do ecossistema JARVIS."""
     

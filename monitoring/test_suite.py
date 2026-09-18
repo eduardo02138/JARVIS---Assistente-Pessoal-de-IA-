@@ -1604,8 +1604,9 @@ async def test_server_integration_and_app_name_standardization():
     assert servidor_adk.APP_NOME == "assistente"
 
     # 2. Sessão criada pelo runtime ADK é compartilhada entre os serviços
-    sess_id = "sessao-unificada-r4-test"
-    user_id = "usuario-r4"
+    import secrets
+    sess_id = f"sessao-unificada-r4-{secrets.token_hex(4)}"
+    user_id = f"usuario-r4-{secrets.token_hex(4)}"
     await server.session_service_adk.create_session(
         app_name="assistente", user_id=user_id, session_id=sess_id
     )
@@ -1621,6 +1622,55 @@ async def test_server_integration_and_app_name_standardization():
     assert "[LEGADO / COMPATIBILIDADE ADK]" in server.live_adk.__doc__
 
     log_test("Integração dos Servidores & Padronização de Sessões (Fase R4)", True, "app_name='assistente' unificado e histórico compartilhado entre servidores")
+    return True
+
+
+def test_dynamic_plugin_discovery_and_metadata():
+    """Valida a descoberta dinâmica de plug-ins e autoridade única de metadados via PluginMeta (Fase R5)."""
+    from plugin_manager import plugin_manager, STORE_CATALOG, REMOTE_STORE_ITEMS
+    from unittest.mock import patch
+    import system_tools
+
+    # 1. Descoberta dinâmica: todos os plug-ins em plugins/*/plugin.py foram carregados
+    descobertos = plugin_manager._discover_plugin_modules()
+    assert len(descobertos) >= 8, f"Esperado ao menos 8 plug-ins descobertos, obtido: {len(descobertos)}"
+
+    for pasta, _ in descobertos:
+        assert pasta in plugin_manager._plugins, f"Plug-in da pasta '{pasta}' não foi instanciado pelo PluginManager!"
+
+    # 2. PluginMeta como Autoridade Única para STORE_CATALOG
+    assert len(STORE_CATALOG) >= len(descobertos)
+    ids_store = {item["id"] for item in STORE_CATALOG}
+    for p_id, plugin in plugin_manager._plugins.items():
+        assert p_id in ids_store
+        # Valida paridade dos metadados
+        item = next(it for it in STORE_CATALOG if it["id"] == p_id)
+        assert item["name"] == plugin.meta.name
+        assert item["category"] == plugin.meta.category
+        assert item["enabled"] == plugin.meta.enabled
+
+    # 3. Itens remotos da loja presentes
+    assert "obs_studio" in ids_store
+    obs_item = next(it for it in STORE_CATALOG if it["id"] == "obs_studio")
+    assert obs_item["installed"] is False
+
+    # 4. Desduplicação de lançamento de jogos: GameCompanion delega para system_tools.open_application
+    gc = plugin_manager._plugins["game_companion"]
+    with patch("system_tools.open_application") as mock_open_app:
+        mock_open_app.return_value = {
+            "sucesso": True,
+            "tipo": "jogo",
+            "jogo": "Marvel Rivals",
+            "distribuidora": "Steam",
+            "comando": "steam -applaunch 2767030",
+            "mensagem": "Iniciando o jogo 'Marvel Rivals' através da Steam, senhor."
+        }
+        res_gc = gc.launch_game("Marvel Rivals")
+        assert res_gc["sucesso"] is True
+        assert res_gc["jogo"] == "Marvel Rivals"
+        mock_open_app.assert_called_once_with("Marvel Rivals")
+
+    log_test("Metadata de Plug-ins & Descoberta Dinâmica (Fase R5)", True, "Descoberta por reflexão, STORE_CATALOG sincronizado e lançamento unificado")
     return True
 
 
@@ -1676,6 +1726,7 @@ async def run_p0_suite():
     test_provider_live_honesty()
     await test_chat_provider_routing_compulsory()
     await test_server_integration_and_app_name_standardization()
+    test_dynamic_plugin_discovery_and_metadata()
     executar_todos_testes_adk()
     print(f"\n{BOLD}{GREEN}✔ Todos os testes de segurança e arquitetura passaram com sucesso!{RESET}\n")
 

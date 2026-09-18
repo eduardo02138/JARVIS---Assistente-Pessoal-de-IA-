@@ -15,96 +15,8 @@ logger = logging.getLogger("jarvis.plugins")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
 
-# Catálogo oficial da Loja de Habilidades do JARVIS
-STORE_CATALOG = [
-    {
-        "id": "game_companion",
-        "name": "Companhia em Jogos Online",
-        "version": "1.2.0",
-        "category": "gaming",
-        "icon": "🎮",
-        "description": "Assistência tática em tempo real para jogos (Marvel Rivals, GTA, RPGs), timers táticos e inicializador de jogos instalados.",
-        "author": "Stark Gaming Hub",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "google_workspace",
-        "name": "Google Workspace (Gmail, Docs & Keep)",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "📑",
-        "description": "Comandos de voz para redigir documentos no Docs, consultar caixa de entrada no Gmail e capturar ideias no Keep.",
-        "author": "Google Cloud & Stark Industries",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "deep_research",
-        "name": "Pesquisa Profunda & Dossiês Assíncronos",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "🔬",
-        "description": "Executa investigações aprofundadas em segundo plano sem travar o chat, emitindo notificações de voz/HUD ao concluir.",
-        "author": "Gemini Live Research Lab",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "google_finance",
-        "name": "Google Finance & Portfólio de Investimentos",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "📈",
-        "description": "SIMULADO: cotações de demonstração… não consulta o Google Finance real. Demonstração de carteira e alocação de ativos.",
-        "author": "Google Finance & Stark Holdings",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "ginjutsu_studio",
-        "name": "Ginjutsu Motion & Video AI Studio",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "🎬",
-        "description": "Transferência de atuação, coreografia e enquadramento de vídeos existentes para novos personagens via Higgsfield Ginjutsu.",
-        "author": "Higgsfield & Stark Visuals",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "smart_home",
-        "name": "Casa Inteligente & IoT",
-        "version": "1.0.0",
-        "category": "smart_home",
-        "icon": "🏠",
-        "description": "Controle de iluminação inteligente, climatização e cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso').",
-        "author": "Stark Home Automation",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "live_stream",
-        "name": "Transmissão ao Vivo & Streaming",
-        "version": "1.0.0",
-        "category": "streaming",
-        "icon": "📡",
-        "description": "Integração para transmissões ao vivo: leitura e síntese de chat em tempo real e alertas de doações.",
-        "author": "Stark Media Lab",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "social_feed",
-        "name": "Mídias Sociais & Notificações",
-        "version": "1.0.0",
-        "category": "social",
-        "icon": "💬",
-        "description": "Monitoramento inteligente de feeds, menções, mensagens diretas (Discord, Telegram, X/Twitter).",
-        "author": "Stark Comms",
-        "installed": True,
-        "enabled": True
-    },
+# Itens remotos da loja não instalados localmente
+REMOTE_STORE_ITEMS = [
     {
         "id": "obs_studio",
         "name": "Controle de Cenas OBS Studio",
@@ -117,6 +29,9 @@ STORE_CATALOG = [
         "enabled": False
     }
 ]
+
+# Catálogo dinâmico da Loja de Habilidades alimentado por PluginMeta (Autoridade Única)
+STORE_CATALOG: list[dict] = []
 
 # Plug-ins que ainda respondem com dados simulados. Ficam desligados por padrão para não
 # poluir a conversa com notificações, cotações e e-mails inventados; ative com
@@ -134,27 +49,41 @@ class PluginManager:
         self._plugins: dict[str, JarvisPlugin] = {}
         self._load_all()
 
+    def _sync_store_catalog(self):
+        """Sincroniza STORE_CATALOG a partir dos metadados reais (PluginMeta) dos plug-ins."""
+        STORE_CATALOG.clear()
+        # 1. Plug-ins descobertos e instalados localmente
+        for plugin in self._plugins.values():
+            STORE_CATALOG.append(plugin.meta.to_store_dict())
+
+        # 2. Itens remotos/não-instalados da loja
+        for remote in REMOTE_STORE_ITEMS:
+            if not any(item["id"] == remote["id"] for item in STORE_CATALOG):
+                STORE_CATALOG.append(dict(remote))
+
+    def _discover_plugin_modules(self) -> list[tuple[str, str]]:
+        """Varre dinamicamente o diretório plugins/ em busca de subclasses em plugins/*/plugin.py."""
+        modulos = []
+        if not os.path.exists(PLUGINS_DIR):
+            return modulos
+
+        for pasta in sorted(os.listdir(PLUGINS_DIR)):
+            caminho_plugin = os.path.join(PLUGINS_DIR, pasta, "plugin.py")
+            if os.path.isfile(caminho_plugin):
+                modulos.append((pasta, f"plugins.{pasta}.plugin"))
+        return modulos
+
     def _load_all(self):
-        """Carrega todos os módulos de plug-in encontrados em plugins/."""
+        """Descobre e carrega automaticamente todas as subclasses de JarvisPlugin em plugins/."""
         if not os.path.exists(PLUGINS_DIR):
             os.makedirs(PLUGINS_DIR, exist_ok=True)
 
         if BASE_DIR not in sys.path:
             sys.path.insert(0, BASE_DIR)
 
-        # Plugins oficiais mapeados
-        known_modules = {
-            "game_companion": "plugins.game_companion.plugin",
-            "google_workspace": "plugins.google_workspace.plugin",
-            "deep_research": "plugins.deep_research.plugin",
-            "google_finance": "plugins.google_finance.plugin",
-            "ginjutsu_studio": "plugins.ginjutsu_studio.plugin",
-            "smart_home": "plugins.smart_home.plugin",
-            "live_stream": "plugins.live_stream.plugin",
-            "social_feed": "plugins.social_feed.plugin",
-        }
+        descobertos = self._discover_plugin_modules()
 
-        for plugin_id, mod_path in known_modules.items():
+        for pasta, mod_path in descobertos:
             try:
                 mod = importlib.import_module(mod_path)
                 for attr_name in dir(mod):
@@ -163,16 +92,14 @@ class PluginManager:
                         instance = attr()
                         if instance.meta.id in PLUGINS_SIMULADOS and not MOCKS_ATIVOS:
                             instance.meta.enabled = False
-                            for item in STORE_CATALOG:
-                                if item["id"] == instance.meta.id:
-                                    item["enabled"] = False
-                                    break
                         instance.on_load()
                         self._plugins[instance.meta.id] = instance
-                        logger.info(f"Plug-in '{instance.meta.name}' ({instance.meta.id}) carregado com sucesso.")
+                        logger.info(f"Plug-in '{instance.meta.name}' ({instance.meta.id}) carregado com sucesso via descoberta dinâmica.")
                         break
             except Exception as e:
-                logger.error(f"Falha ao carregar o plug-in '{plugin_id}': {e}")
+                logger.error(f"Falha ao carregar o plug-in da pasta '{pasta}': {e}")
+
+        self._sync_store_catalog()
 
     def get_active_tools(self) -> list[ToolSpec]:
         """Retorna todas as ferramentas de plug-ins atualmente ativos/habilitados."""

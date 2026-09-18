@@ -232,33 +232,23 @@ class GameCompanionPlugin(JarvisPlugin):
             return {"sucesso": False, "erro": str(e), "mensagem": f"Falha ao consultar catálogo de jogos: {e}"}
 
     def launch_game(self, game_name: str) -> dict:
+        """Inicia um jogo instalado delegando à autoridade única de execução system_tools.open_application."""
         try:
             import system_tools
-            lista = system_tools.list_installed_games(filter_name=game_name)
-            jogos = lista.get("jogos", [])
-            if not jogos:
-                return {"sucesso": False, "mensagem": f"Jogo '{game_name}' não foi localizado na biblioteca, senhor."}
-
-            jogo = jogos[0]
-            cmd = jogo.get("comando")
-            if not cmd:
-                return {"sucesso": False, "mensagem": f"Comando de inicialização não disponível para {jogo.get('nome')}."}
-
-            import shlex
-            import subprocess
-            # shell=False: o comando vem de arquivos .desktop e da biblioteca do Steam,
-            # então metacaracteres de shell (;, &&, |) não podem virar execução arbitrária.
-            argumentos = shlex.split(cmd)
-            if not argumentos:
-                return {"sucesso": False, "mensagem": f"Comando de inicialização inválido para {jogo.get('nome')}."}
-            subprocess.Popen(argumentos)
-            self.active_game = jogo.get("nome")
+            res = system_tools.open_application(game_name)
+            if res.get("sucesso"):
+                nome_jogo = res.get("jogo") or game_name
+                self.active_game = nome_jogo
+                return {
+                    "sucesso": True,
+                    "jogo": nome_jogo,
+                    "distribuidora": res.get("distribuidora", "Nativa"),
+                    "comando": res.get("comando", nome_jogo),
+                    "mensagem": res.get("mensagem") or f"Inicializando '{nome_jogo}', senhor. Telemetria e timers prontos."
+                }
             return {
-                "sucesso": True,
-                "jogo": jogo.get("nome"),
-                "distribuidora": jogo.get("distribuidora"),
-                "comando": cmd,
-                "mensagem": f"Inicializando '{jogo.get('nome')}' via {jogo.get('distribuidora')}, senhor. Telemetria e timers prontos."
+                "sucesso": False,
+                "mensagem": res.get("mensagem", f"Jogo '{game_name}' não foi localizado na biblioteca, senhor.")
             }
         except Exception as e:
             return {"sucesso": False, "erro": str(e), "mensagem": f"Erro ao iniciar o jogo: {e}"}
