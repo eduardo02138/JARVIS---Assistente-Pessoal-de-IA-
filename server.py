@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from policy_engine import policy_engine
 from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.events import Event
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
@@ -493,6 +494,8 @@ Diretrizes fundamentais:
 7. MODO IDE & INTEGRAÇÃO CONTÍNUA COM ANTIGRAVITY:
    - ATIVAÇÃO: Quando o senhor falar "iniciar modo IDE", "ativar modo IDE" ou termos equivalentes, chame IMEDIATAMENTE `set_ide_mode(enabled=True)`. Anuncie prontidão dizendo que a conexão com o agente Antigravity está ativa e que manterá o canal de programação aberto.
    - DESATIVAÇÃO: Quando o senhor falar "sair do modo IDE", "encerrar modo IDE", "desativar modo IDE", chame `set_ide_mode(enabled=False)` e confirme o retorno ao modo padrão.
+   - NUNCA chame `set_ide_mode(enabled=True)` em saudações, cumprimentos ("oi", "olá", "boa tarde", "tudo bem") ou conversas casuais, nem por associação com código no assunto. Ative o Modo IDE SOMENTE mediante comando explícito de ativação.
+   - Se o Modo IDE já estiver ativo (o resultado da ferramenta conter `"ide_mode": true`), NÃO o reative nem reanuncie: responda normalmente à solicitação do senhor.
    - FLUXO NO MODO IDE: Sempre que estiver no Modo IDE, qualquer instrução técnica, comando de código, dúvida do projeto, edição de arquivo ou execução de testes solicitada pelo senhor DEVE ser repassada diretamente para o agente Antigravity usando `antigravity_run_prompt(prompt=..., continue_session=True)`. Quando o agente concluir, relate o resultado ao senhor em voz alta de maneira fluida e elegante, mantendo o contexto de programação contínuo.
 8. ECOSSISTEMA DE PLUG-INS EXTENSÍVEL (ESTILO N.E.K.O):
    Você possui módulos de extensão dinâmicos:
@@ -1340,6 +1343,34 @@ async def websocket_live_endpoint(websocket: WebSocket):
         task.add_done_callback(_conn_background_tasks.discard)
         return task
 
+    # Memória de longo prazo da sessão nativa: eventos de conversa (texto do usuário
+    # e respostas do modelo) são acumulados e persistidos no jarvis.memory service.
+    # O caminho ADK usa add_session_to_memory; o nativo não cria eventos ADK, então
+    # este coletor alimenta o mesmo serviço via add_events_to_memory.
+    eventos_memoria_nativa: list = []
+    model_textos_do_turno: list = []
+
+    async def _flush_memoria_nativa():
+        """Persiste os eventos acumulados da conversa nativa na memória de longo prazo."""
+        if not eventos_memoria_nativa:
+            return
+        lote = list(eventos_memoria_nativa)
+        eventos_memoria_nativa.clear()
+        try:
+            await memory_service_adk.add_events_to_memory(
+                app_name="assistente",
+                user_id=usuario_id,
+                events=lote,
+                session_id=sessao_id,
+            )
+            logger.info(
+                "Conversa salva na memória de longo prazo (%d eventos, sessão %s).",
+                len(lote),
+                sessao_id,
+            )
+        except Exception as exc:
+            logger.warning("Falha ao salvar conversa nativa na memória de longo prazo: %s", exc)
+
     async def safe_send_json(payload: dict):
         async with ws_send_lock:
             await websocket.send_json(payload)
@@ -1671,6 +1702,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             continue
                                 record_event("user_text", {"text": user_text})
                                 gemini_bridge.log_audit_event("USER", "chat_input", user_text)
+                                eventos_memoria_nativa.append(
+                                    Event(
+                                        author="user",
+                                        content=types.Content(
+                                            parts=[types.Part(text=user_text)]
+                                        ),
+                                        session_id=sessao_id,
+                                    )
+                                )
                                 assistant_state["busy"] = True
                                 turno_concluido["done"] = False
                                 assistant_state["ultimo_envio_usuario"] = time.time()
@@ -1863,6 +1903,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     msg_fala = str(res_ferramenta)
                             logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
                             record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
+                            model_textos_do_turno.append(msg_fala)
                             await safe_send_json({"type": "fallback_text", "text": msg_fala})
 
                         assistant_state["busy"] = False
@@ -1870,6 +1911,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         assistant_state["ultimo_resultado_ferramenta"] = None
                         record_event("turn_complete")
                         await safe_send_json({"type": "turn_complete"})
+
+                        # Persiste a conversa deste turno na memória de longo prazo
+                        if model_textos_do_turno:
+                            eventos_memoria_nativa.append(
+                                Event(
+                                    author="model",
+                                    content=types.Content(
+                                        parts=[types.Part(text="\n".join(model_textos_do_turno))]
+                                    ),
+                                    session_id=sessao_id,
+                                )
+                            )
+                            model_textos_do_turno.clear()
+                        await _flush_memoria_nativa()
 
                     while True:
                         try:
@@ -1884,6 +1939,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     if status_interacao == "IN_PROGRESS":
                                         assistant_state["busy"] = True
                                         turno_concluido["done"] = False
+                                        model_textos_do_turno.clear()
                                     elif status_interacao == "IDLE" and is_extended:
                                         await finalizar_turno()
 
@@ -1913,6 +1969,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         transcribed = server_content.output_transcription.text
                                         record_event("model_text", {"text": transcribed})
                                         assistant_state["texto_recebido_no_turno"] += len(transcribed)
+                                        model_textos_do_turno.append(transcribed)
                                         await safe_send_json({
                                             "type": "text",
                                             "text": transcribed
@@ -1928,6 +1985,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                                     await safe_send_json({"type": "thought", "text": part.text})
                                                 else:
                                                     assistant_state["texto_recebido_no_turno"] += len(part.text)
+                                                    model_textos_do_turno.append(part.text)
                                                     await safe_send_json({
                                                         "type": "text",
                                                         "text": part.text
@@ -2012,6 +2070,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 except* EncerramentoLimpoDaSessao:
                     logger.info("Sessão do Gemini Live encerrada de forma limpa pela API (close 1000/1001).")
                 finally:
+                    try:
+                        if model_textos_do_turno:
+                            eventos_memoria_nativa.append(
+                                Event(
+                                    author="model",
+                                    content=types.Content(
+                                        parts=[types.Part(text="\n".join(model_textos_do_turno))]
+                                    ),
+                                    session_id=sessao_id,
+                                )
+                            )
+                            model_textos_do_turno.clear()
+                        await _flush_memoria_nativa()
+                    except Exception:
+                        pass
                     await transcritor_dedicado.close()
                     for t in list(_conn_background_tasks):
                         if not t.done():

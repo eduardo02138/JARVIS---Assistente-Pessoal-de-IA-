@@ -937,7 +937,19 @@ IDE_MODE_ACTIVE = False
 def set_ide_mode(enabled: bool) -> dict:
     """Ativa ou desativa o Modo IDE contínuo entre o JARVIS e a IDE Antigravity."""
     global IDE_MODE_ACTIVE
-    IDE_MODE_ACTIVE = bool(enabled)
+    alvo = bool(enabled)
+    if alvo == IDE_MODE_ACTIVE:
+        # Guarda idempotente: evita que o modelo repita a ativação/desativação
+        # indevidamente em saudações ou por ruído, sem trocar o estado nem mensagem
+        # de "ativado" enganosa quando o modo já estava ativo.
+        return {
+            "sucesso": True,
+            "ide_mode": IDE_MODE_ACTIVE,
+            "ja_estava_no_estado": True,
+            "mensagem": ("O Modo IDE já está ativo, senhor." if IDE_MODE_ACTIVE
+                         else "O Modo IDE já está desativado, senhor.")
+        }
+    IDE_MODE_ACTIVE = alvo
     if IDE_MODE_ACTIVE:
         return {
             "sucesso": True,
