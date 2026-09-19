@@ -1022,7 +1022,7 @@ def montar_run_config(modelo: str = "") -> RunConfig:
     if _env_flag("LIVE_AFFECTIVE_DIALOG"):
         # Diálogo afetivo foi removido da API nos modelos 3.8 (config = erro).
         if "3.8" in modelado:
-            logger.warning("LIVE_AFFECTIVE_DIALOG ignorado: recurso removido nos modelos Gemini 3.8.")
+            logger.info("LIVE_AFFECTIVE_DIALOG ignorado: recurso removido nos modelos Gemini 3.8.")
         else:
             cfg["enable_affective_dialog"] = True
     if _env_flag("LIVE_EXPLICIT_VAD"):
@@ -2046,9 +2046,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             if codigo_fechamento == 1000:
                                 logger.info("Conexão do Gemini Live encerrada de forma limpa pelo servidor (close %s).", codigo_fechamento)
                                 raise EncerramentoLimpoDaSessao() from gemini_err
-                            # 1001 (going-away) e demais códigos propagam: o TaskGroup cancela
-                            # os demais workers e o handler externo faz o failover de conta.
-                            logger.exception("Erro no loop contínuo do Gemini Live: %s", gemini_err)
+                            err_str = str(gemini_err)
+                            codigo_transiente = (
+                                codigo_fechamento in (1001, 1011)
+                                or "1011" in err_str
+                                or "1001" in err_str
+                                or "Internal error encountered" in err_str
+                            )
+                            if codigo_transiente:
+                                logger.warning("Desconexão transitória da Google Gemini Live API (%s). Acionando failover de conta...", gemini_err)
+                            else:
+                                logger.exception("Erro no loop contínuo do Gemini Live: %s", gemini_err)
                             raise
 
                 # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
@@ -2131,12 +2139,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
             consecutive_failures += 1
             espera = min(1 << (consecutive_failures - 1), 30)
             next_idx = (idx + 1) % len(key_pool)
+            motivo_falha = str(e)
+            if hasattr(e, "exceptions") and e.exceptions:
+                sub_err = e.exceptions[0]
+                motivo_falha = f"{type(sub_err).__name__}: {sub_err}"
             record_event("account_failover", {
                 "from_index": idx + 1,
                 "to_index": next_idx + 1,
-                "reason": str(e)
+                "reason": motivo_falha
             })
-            logger.warning(f"Conta {idx+1} falhou ({e}). Tentando próxima do pool em {espera}s...")
+            logger.warning(f"Conta {idx+1} falhou ({motivo_falha}). Tentando próxima do pool em {espera}s...")
             try:
                 await safe_send_json({"type": "warn", "message": f"Conta {idx+1} falhou, rotacionando para próxima..."})
             except Exception:
