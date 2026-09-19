@@ -16,6 +16,7 @@ import logging
 import urllib.request
 import urllib.error
 import inspect
+from contextlib import asynccontextmanager
 from typing import Dict, Optional, Set
 
 import secrets
@@ -64,8 +65,6 @@ from monitoring.logger import (
     logger, record_event, get_recent_events,
     get_telemetry_summary, clear_logs, TEXT_LOG_FILE
 )
-
-app = FastAPI(title="JARVIS AI Assistant - Gemini Live")
 
 JARVIS_SECRET_TOKEN = os.environ.get("JARVIS_TOKEN")
 if not JARVIS_SECRET_TOKEN:
@@ -155,6 +154,28 @@ async def verify_jarvis_token(
 
 verify_auth_token = verify_jarvis_token
 
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    _schedule_server_task(gemini_bridge.gemini_file_watcher_task())
+    try:
+        from mcp_client_manager import mcp_client_manager
+        toolsets = mcp_client_manager.carregar_toolsets()
+        if toolsets:
+            logger.info("MCP Client: %d servidor(es) MCP carregado(s) no boot.", len(toolsets))
+    except Exception as e:
+        logger.warning("Falha ao inicializar clientes MCP no boot: %s", e)
+    yield
+    try:
+        from mcp_client_manager import mcp_client_manager
+        await mcp_client_manager.close_all()
+    except Exception as e:
+        logger.warning("Erro ao encerrar conexões MCP no shutdown: %s", e)
+
+
+app = FastAPI(title="JARVIS AI Assistant - Gemini Live", lifespan=lifespan)
+
+
 @app.get("/api/auth/session")
 @app.get("/api/auth/token")
 async def get_session_token(request: Request):
@@ -172,24 +193,6 @@ async def get_session_token(request: Request):
         SESSOES_EMITIDAS[sessao_id] = time.monotonic() + SESSO_TTL_S
     return {"status": "ok", "token": JARVIS_SECRET_TOKEN, "sessao_id": sessao_id}
 
-@app.on_event("startup")
-async def startup_event():
-    _schedule_server_task(gemini_bridge.gemini_file_watcher_task())
-    try:
-        from mcp_client_manager import mcp_client_manager
-        toolsets = mcp_client_manager.carregar_toolsets()
-        if toolsets:
-            logger.info("MCP Client: %d servidor(es) MCP carregado(s) no boot.", len(toolsets))
-    except Exception as e:
-        logger.warning("Falha ao inicializar clientes MCP no boot: %s", e)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    try:
-        from mcp_client_manager import mcp_client_manager
-        await mcp_client_manager.close_all()
-    except Exception as e:
-        logger.warning("Erro ao encerrar conexões MCP no shutdown: %s", e)
 
 # Servir arquivos estáticos do HUD e do Widget
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
