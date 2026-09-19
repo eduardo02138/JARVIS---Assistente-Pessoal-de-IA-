@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "filesystem_local": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/edu/Documentos"
+      ],
+      "tool_filter": [
+        "list_directory",
+        "read_file"
+      ],
+      "default_risk_level": "READ",
+      "policies": {
+        "read_file": "READ",
+        "list_directory": "READ",
+        "write_file": "LOW_WRITE"
+      },
+      "disabled": true
+    },
+    "google_maps_grounding": {
+      "url": "https://mapstools.googleapis.com/mcp",
+      "transport": "streamable_http",
+      "headers": {
+        "X-Goog-Api-Key": "${GOOGLE_MAPS_API_KEY}",
+        "Content-Type": "application/json"
+      },
+      "default_risk_level": "READ",
+      "disabled": true
+    }
+  }
+}

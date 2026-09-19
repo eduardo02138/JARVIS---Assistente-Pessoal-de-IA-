@@ -162,11 +162,22 @@ def _criar_skill_toolset():
         return None
 
 
+def _criar_mcp_toolsets() -> list:
+    """Carrega os McpToolsets configurados para o assistente (ADK como cliente MCP)."""
+    try:
+        from mcp_client_manager import mcp_client_manager
+        return mcp_client_manager.get_all_toolsets()
+    except Exception as e:
+        logger.warning("McpToolset indisponível (%s); operando sem servidores MCP externos.", e)
+        return []
+
+
 def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
     """Caminho rápido: um agente, ferramentas diretas, nenhum salto extra."""
     todas_ferramentas = obter_todas_ferramentas_adk()
     skill_toolset = _criar_skill_toolset()
-    ferramentas = list(todas_ferramentas) + ([] if skill_toolset is None else [skill_toolset])
+    mcp_toolsets = _criar_mcp_toolsets()
+    ferramentas = list(todas_ferramentas) + ([] if skill_toolset is None else [skill_toolset]) + mcp_toolsets
     return Agent(
         name="assistente_rapido",
         model=modelo or MODELO_TEXTO,
@@ -224,10 +235,11 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
     )
 
     skill_toolset = _criar_skill_toolset()
+    mcp_toolsets = _criar_mcp_toolsets()
     return Agent(
         name="assistente",
         model=modelo or MODELO_TEXTO,
-        description="Assistente J.A.R.V.I.S. com 56 ferramentas do sistema, plug-ins e especialistas.",
+        description="Assistente J.A.R.V.I.S. com 56 ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
         instruction=INSTRUCAO_COORDENADOR + ("" if skill_toolset is not None else _instrucoes_das_skills()),
         tools=[
             hora_atual,
@@ -240,7 +252,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
             *todas_ferramentas,
             AgentTool(agent=especialista_sistema),
             AgentTool(agent=especialista_navegador),
-        ] + ([] if skill_toolset is None else [skill_toolset]),
+        ] + ([] if skill_toolset is None else [skill_toolset]) + mcp_toolsets,
         before_tool_callback=guarda_de_ferramentas,
     )
 

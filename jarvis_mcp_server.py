@@ -159,6 +159,24 @@ def jarvis_list_skills() -> str:
         return json.dumps({"erro": f"Falha ao listar skills: {str(e)}"}, ensure_ascii=False)
 
 
+@server.tool()
+def jarvis_list_mcp_servers() -> str:
+    """
+    Lista todos os servidores MCP externos configurados no assistente JARVIS
+    (ADK como cliente MCP), tipos de transporte e ferramentas ativas.
+    """
+    try:
+        from mcp_client_manager import mcp_client_manager
+        status_list = mcp_client_manager.status()
+        return json.dumps({
+            "sucesso": True,
+            "total": len(status_list),
+            "servidores": status_list
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"sucesso": False, "erro": str(e)}, ensure_ascii=False)
+
+
 # ---------------- FERRAMENTAS DE PLUG-INS (Habilidades ADK) ----------------
 # Expõe as ferramentas de todos os plug-ins ativos pelo protocolo MCP, com os
 # mesmos nomes, descrições e parâmetros declarados no Plugin SDK e no Policy Engine.

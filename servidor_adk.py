@@ -19,6 +19,7 @@ Configuração da sessão Live via variáveis de ambiente (todas opcionais, defa
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -163,7 +164,26 @@ def girar_chave() -> bool:
     logger.warning("Cota atingida: girando para a chave %d de %d.", _indice_chave + 1, len(CHAVES))
     return True
 
-app = FastAPI(title="Assistente de Voz em Tempo Real (ADK + Gemini Live)")
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gerencia o ciclo de vida da aplicação e de conexões assíncronas MCP."""
+    try:
+        from mcp_client_manager import mcp_client_manager
+        toolsets = mcp_client_manager.carregar_toolsets()
+        if toolsets:
+            logger.info("MCP Client ADK: %d servidor(es) MCP carregado(s).", len(toolsets))
+    except Exception as e:
+        logger.warning("Falha ao inicializar clientes MCP no boot do ADK: %s", e)
+    yield
+    try:
+        from mcp_client_manager import mcp_client_manager
+        await mcp_client_manager.close_all()
+    except Exception as e:
+        logger.warning("Erro ao encerrar conexões MCP no shutdown: %s", e)
+
+
+app = FastAPI(title="Assistente de Voz em Tempo Real (ADK + Gemini Live)", lifespan=lifespan)
 
 
 def criar_servico_de_sessao() -> BaseSessionService:
@@ -268,6 +288,7 @@ async def obter_token_sessao(request: Request):
 
 @app.get("/api/health")
 async def saude():
+    from mcp_client_manager import mcp_client_manager
     return {
         "status": "online",
         "modelo_live": MODELO_LIVE,
@@ -279,6 +300,17 @@ async def saude():
         "sessoes": type(sessoes).__name__,
         "voz": VOZ,
         "modo_computador": policy_engine.computer_lease_status(),
+        "mcp_servers": mcp_client_manager.status(),
+    }
+
+
+@app.get("/api/mcp/servers")
+async def listar_servidores_mcp(_=Depends(verify_jarvis_token)):
+    """Lista todos os servidores MCP externos conectados ao ADK."""
+    from mcp_client_manager import mcp_client_manager
+    return {
+        "status": "ok",
+        "servers": mcp_client_manager.status(),
     }
 
 

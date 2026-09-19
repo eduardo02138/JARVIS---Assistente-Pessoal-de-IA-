@@ -26,6 +26,7 @@ Thumbs.db
 .vscode/
 .idea/
 .agents/
+.serena/
 scratch/
 tmp/
 

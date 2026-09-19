@@ -154,11 +154,21 @@ Cada plug-in traz uma **Skill ADK** no padrão oficial (L1 frontmatter, L2 corpo
 - **`ADKSkillLoader`**: usa `load_skill_from_dir` do ADK quando o diretório segue o padrão kebab-case; caso contrário faz *parser* local com os mesmos modelos (`Skill`, `Frontmatter`, `Resources`) do SDK.
 - **`SkillToolset`**: as skills **ativas** são injetadas nos agentes ADK (`criar_agente_rapido`, `criar_agente_coordenador`) como `SkillToolset`, mantendo o contexto enxuto (apenas skills habilitadas). Configurando `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (com ADC autenticado), o mesmo toolset passa a usar **Google Cloud Skill Registry** para descoberta e carregamento sob demanda (`search_skills`/`load_skill`). Sem a configuração GCP, tudo segue local, sem custo de API.
 
-### 🔌 Servidor MCP (`jarvis_mcp_server.py`)
+### 🔌 Integração MCP Bidirecional (Model Context Protocol)
 
-O servidor MCP (`stdio`) permite que a IDE Antigravity e agentes externos usem o JARVIS:
-- Ferramentas nativas: telemetria, notificação por voz, health-check, jogos e bridge Gemini.
-- **Plug-ins via MCP**: cada ferramenta de plug-in **ativo** é exposta automaticamente como `jarvis_plugin_<nome>`, com nomes, descrições e parâmetros vindos do Plugin SDK/Policy Engine.
+O J.A.R.V.I.S. suporta o protocolo MCP nos dois sentidos, seguindo as diretrizes oficiais do [Google ADK](https://adk.dev/tools-custom/mcp-tools/):
+
+1. **J.A.R.V.I.S. como Servidor MCP (`jarvis_mcp_server.py`)**:
+   - Transporte `stdio` para consumo direto pela **IDE Antigravity** e agentes externos.
+   - Ferramentas nativas: telemetria de hardware (GPU/CPU/RAM), notificações de voz, integridade (`jarvis_query_status`), lista de skills (`jarvis_list_skills`), lista de servidores conectados (`jarvis_list_mcp_servers`) e bridge Gemini.
+   - **Plug-ins expostos via MCP**: ferramentas de plug-ins ativos são registradas dinamicamente como `jarvis_plugin_<nome>`.
+
+2. **J.A.R.V.I.S. como Cliente MCP (`mcp_client_manager.py` & `McpToolset`)**:
+   - Conecta os agentes ADK (`assistente_rapido`, `assistente`) a ferramentas fornecidas por servidores MCP locais (Stdio) ou remotos (SSE/Streamable HTTP).
+   - Configuração declarativa via `mcp_servers.json` (veja modelo em `mcp_servers.example.json`) ou `MCP_SERVERS_CONFIG`.
+   - **Governança & Policy Engine**: suporte a filtros (`tool_filter`), prefixos (`tool_name_prefix`) e registro de níveis de risco por ferramenta (`policies`).
+   - **Ciclo de Vida Assíncrono**: encerramento ordenado com `close_all()` no `lifespan` do FastAPI para evitar processos zumbis ou conexões vazadas.
+   - Endpoint de monitoramento: `GET /api/mcp/servers`.
 
 ### Como Iniciar o Servidor ADK
 ```bash
