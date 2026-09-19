@@ -115,6 +115,7 @@ const dom = {
     captionsDrawer: document.getElementById("captionsDrawer"),
     captionsLog: document.getElementById("captionsLog"),
     transcriptionState: document.getElementById("transcriptionState"),
+    providerLatencyReport: document.getElementById("providerLatencyReport"),
     
     // Configurações
     settingsPanel: document.getElementById("settingsPanel"),
@@ -1382,7 +1383,7 @@ if (dom.btnTestProvidersLatency) {
 
 // ---------------- CONFIGURAÇÃO DE VOZES ----------------
 function updateVoiceSelectionUI() {
-    document.querySelectorAll(".voice-card").forEach(card => {
+    document.querySelectorAll(".voice-card[data-voice]").forEach(card => {
         const v = card.getAttribute("data-voice");
         if (v === state.voice) {
             card.classList.add("selected");
@@ -1390,6 +1391,13 @@ function updateVoiceSelectionUI() {
             card.classList.remove("selected");
         }
     });
+}
+
+function updateVoiceDropdownLabel() {
+    if (dom.voiceDropdownLabel) {
+        const isLive = state.mode === "live-flash";
+        dom.voiceDropdownLabel.textContent = isLive ? `Voz: ${state.voice}` : "Voz (apenas no modo ao vivo)";
+    }
 }
 
 document.querySelectorAll(".voice-card[data-voice]").forEach(card => {
@@ -1404,19 +1412,8 @@ document.querySelectorAll(".voice-card[data-voice]").forEach(card => {
         }
     });
 });
-
 // ---------------- NAVEGAÇÃO DE ABAS DE CONFIGURAÇÃO ----------------
-document.querySelectorAll(".settings-nav-tabs .tab-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-        document.querySelectorAll(".settings-nav-tabs .tab-btn").forEach(b => b.classList.remove("active"));
-        document.querySelectorAll(".settings-panel .tab-content").forEach(c => c.classList.remove("active"));
-        
-        btn.classList.add("active");
-        const targetId = btn.getAttribute("data-tab");
-        const targetContent = document.getElementById(targetId);
-        if (targetContent) targetContent.classList.add("active");
-    });
-});
+// (Listener único registrado na seção "Configurações"; bloco duplicado removido — F5.)
 
 function toggleSettings(forceOpen) {
     const isHidden = dom.settingsPanel.classList.contains("hidden");

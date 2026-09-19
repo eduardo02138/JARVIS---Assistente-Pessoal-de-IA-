@@ -2164,3 +2164,80 @@ body.app-mode .gemini-live-widget {
     transform: translateY(-1px);
 }
 
+
+/* ============ RESPONSIVIDADE: TELAS PEQUENAS (F2/F3/F6/F7) ============ */
+/* Janela 560px (mini widget 520px + right 40): ex-ação real */
+@media (max-width: 560px) {
+    .gemini-live-widget {
+        right: 12px;
+        width: calc(100vw - 24px);
+    }
+    .gemini-expanded-card {
+        right: 12px;
+        width: calc(100vw - 24px);
+    }
+}
+/* Janela 460px (expanded 440 + right 40): card espreme clip 20px → 100% */
+@media (max-width: 480px) {
+    .gemini-live-widget {
+        right: 0;
+        width: 100vw;
+        border-radius: 16px;
+    }
+    .gemini-expanded-card {
+        right: 0;
+        width: 100vw;
+        bottom: 0;
+        border-radius: 16px 16px 0 0;
+        height: calc(100vh - 8px);
+    }
+    /* Grids de voz: wrap em 2 colunas no mini */
+    .voice-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+    }
+    /* Tabs de configuração: overflow horizontal com scrollbar suave */
+    .settings-nav-tabs {
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+    .settings-nav-tabs .tab-btn {
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+    /* HUD: grid de status empilha em coluna única */
+    .hud-grid {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+    .status-bar {
+        flex-wrap: wrap;
+    }
+    /* Cards de modo: scroll horizontal em vez de quebra */
+    .mode-cards {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+    .mode-card {
+        flex: 0 0 auto;
+    }
+}
+/* Janela ≤360px: widget ocupa largura total, fonte HUD reduzida */
+@media (max-width: 360px) {
+    .gemini-live-widget {
+        width: 100vw;
+        right: 0;
+        left: 0;
+    }
+    .gemini-expanded-card {
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
+    }
+    .telemetry-hud, .hud-grid {
+        font-size: 10px;
+    }
+}
