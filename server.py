@@ -47,6 +47,7 @@ from google import genai
 from google.genai import types
 
 import system_tools
+import threading
 from plugin_manager import plugin_manager
 import gemini_bridge
 import transcricao
@@ -86,6 +87,29 @@ IDIOMA = os.environ.get("LANGUAGE_CODE") or os.environ.get("JARVIS_LANGUAGE", "p
 
 # Retenção de tarefas de background do servidor contra Garbage Collection (Python 3.14)
 _server_background_tasks: Set[asyncio.Task] = set()
+
+# Ferramentas mutantes rápidas (GUI/estado) rodam direto no event loop: sem
+# thread zumbi pós-timeout e sem corrida com o worker de leases do PolicyEngine.
+_TOOLS_MUTANTES = {"set_control_mode", "set_ide_mode", "toggle_telemetry_overlay"}
+
+# Teto de threads simultâneas para ferramentas síncronas (asyncio.to_thread):
+# limita exaustão do pool do loop e zumbis acumulados após timeouts de wait_for.
+_SEM_TOOL_THREADS = threading.Semaphore(3)
+
+# Sessões emitidas por /api/auth/session (identidade server-side).
+SESSOES_EMITIDAS: Dict[str, float] = {}
+_SESSOES_LOCK = threading.RLock()
+SESSO_TTL_S = int(os.environ.get("JARVIS_SESSAO_TTL_S", "43200"))
+
+
+def _sessao_aceita(sessao: Optional[str]) -> bool:
+    """Fail-closed: sessão explícita e qualquer exceto os nomes reservados.
+
+    'sessao-principal' e 'default' nunca são aceitos como identidade client-claimed:
+    obrigam o fluxo de confirmação a usar sessões reais (emitidas ou arbitrárias do
+    frontend), impedindo que duas conexões colidam em uma sessão mágica global.
+    """
+    return bool(sessao) and sessao not in ("sessao-principal", "default")
 
 def _schedule_server_task(coro) -> asyncio.Task:
     task = asyncio.create_task(coro)
@@ -134,11 +158,19 @@ verify_auth_token = verify_jarvis_token
 @app.get("/api/auth/session")
 @app.get("/api/auth/token")
 async def get_session_token(request: Request):
-    """Permite apenas ao cliente local no loopback obter o token da sessão ativa."""
+    """Permite apenas ao cliente local no loopback obter o token da sessão ativa.
+
+    Emite também um sessao_id server-side: identidade canônica para as rotas de
+    ação (nunca o 'usuario' client-claimed). O servidor ignora user_id recebido
+    do cliente; user_id efetivo é sempre a sessão autorizada.
+    """
     client_host = request.client.host if request.client else ""
     if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
         raise HTTPException(status_code=403, detail="Acesso restrito ao localhost.")
-    return {"status": "ok", "token": JARVIS_SECRET_TOKEN}
+    sessao_id = secrets.token_urlsafe(24)
+    with _SESSOES_LOCK:
+        SESSOES_EMITIDAS[sessao_id] = time.monotonic() + SESSO_TTL_S
+    return {"status": "ok", "token": JARVIS_SECRET_TOKEN, "sessao_id": sessao_id}
 
 @app.on_event("startup")
 async def startup_event():
@@ -611,13 +643,18 @@ obter_runner = obter_runner_adk
 @app.get("/api/acoes_pendentes")
 async def listar_pendentes(
     sessao: Optional[str] = Query(None),
-    usuario: Optional[str] = Query(None),
     _=Depends(verify_jarvis_token)
 ):
-    """Lista pendências ativas filtradas com estrito isolamento por sessão/usuário."""
-    if not sessao and not usuario:
-        return {"pendentes": []}
-    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=usuario)
+    """Lista pendências ativas filtradas com estrito isolamento por sessão.
+
+    Identidade vem da sessão server-side (user_id = sessão), nunca do cliente.
+    """
+    if not _sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=403,
+        )
+    pendentes = policy_engine.list_pending_actions(session_id=sessao, user_id=sessao)
     now_m = time.monotonic()
     return {
         "pendentes": [
@@ -640,10 +677,11 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     action_id = payload.get("id_confirmacao") or payload.get("action_id") or payload.get("id")
     aprovado = payload.get("aprovado", True)
     session_id = payload.get("sessao") or payload.get("session_id")
-    user_id = payload.get("usuario") or payload.get("user_id") or "local"
 
-    if not session_id or session_id in ("sessao-principal", "default"):
+    if not _sessao_aceita(session_id):
         return JSONResponse({"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório para confirmar ações."}, status_code=400)
+
+    user_id = session_id
 
     if not action_id:
         pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
@@ -674,8 +712,13 @@ async def alternar_modo_computador(payload: dict, _=Depends(verify_jarvis_token)
     Desativar revoga a lease e fecha o Chromium compartilhado do runner.
     """
     ativo = bool(payload.get("ativo"))
-    sessao = payload.get("sessao") or "sessao-principal"
-    usuario = payload.get("usuario") or "local"
+    sessao = payload.get("sessao")
+    if not _sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=400,
+        )
+    usuario = sessao
 
     if not ativo:
         lease = policy_engine.revoke_computer_lease(session_id=sessao)
@@ -736,8 +779,13 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     if not texto:
         return JSONResponse({"status": "erro", "mensagem": "Texto vazio"}, status_code=400)
 
-    usuario = payload.get("usuario", "local")
-    sessao = payload.get("sessao", "sessao-principal")
+    sessao = payload.get("sessao")
+    if not _sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=400,
+        )
+    usuario = sessao
     caminho_forcado = payload.get("caminho")
     marcas_navegador = (
         "modo computador",
@@ -746,14 +794,6 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         "controlar o navegador",
         "navegação automática",
     )
-
-    # Verifica palavras de confirmação verbal ou digitada do usuário
-    if palavra_confirma(texto):
-        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
-        if pending:
-            logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
-            texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
-            caminho_forcado = "complexo"
 
     texto_min = texto.lower()
     if caminho_forcado in ("rapido", "complexo", CAMINHO_COMPUTADOR):
@@ -784,6 +824,16 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
                 "caminho": caminho,
                 "mensagem": f"Provedor OmniRoute indisponível: {omni_err}"
             }, status_code=503)
+
+    # Verifica palavras de confirmação verbal ou digitada do usuário.
+    # Executa apenas no caminho com runner (ferramentas): no branch OmniRoute
+    # (text-only) a aprovação ficaria órfã — pendência aprovada sem consumível.
+    if palavra_confirma(texto):
+        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
+        if pending:
+            logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
+            texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
+            caminho_forcado = "complexo"
 
     if caminho == CAMINHO_RAPIDO:
         tipo_runner = "rapido"
@@ -989,8 +1039,7 @@ def montar_run_config(modelo: str = "") -> RunConfig:
 @app.websocket("/ws/live_adk")
 async def live_adk(
     websocket: WebSocket,
-    usuario: str = Query("local"),
-    sessao: str = Query("sessao-principal"),
+    sessao: Optional[str] = Query(None),
     origem: str = Query(""),
 ):
     """Sessão de voz Live bidirecional nativa do Google ADK com handshake autenticado."""
@@ -1037,6 +1086,15 @@ async def live_adk(
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
+    if not _sessao_aceita(sessao):
+        try:
+            await safe_send_json({"tipo": "erro", "mensagem": "Sessão explícita e válida obrigatória no /ws/live_adk."})
+        except Exception:
+            pass
+        await websocket.close(code=1008, reason="InvalidSession")
+        return
+
+    usuario = sessao
     runner = obter_runner_adk("voz")
     try:
         await session_service_adk.create_session(
@@ -1227,14 +1285,11 @@ async def live_adk(
     except* (ServerError, ClientError) as grupo:
         erro_inst = grupo.exceptions[0]
         logger.warning("Falha na sessão Live ADK (%s). Rotacionando chave e/ou modelo.", erro_inst)
-        try:
-            trocar_modelo(runner, MODELO_LIVE_RESERVA)
-        except Exception:
-            pass
         girou = girar_chave_adk()
         if girou:
             # A rotação limpa o cache de runners; aplica a reserva ao runner recriado
             # para que a próxima conexão já use o modelo reserva (mensagem abaixo verdadeira).
+            # Sem revert: o objec runner velho foi descartado; nao se troca modelo dele.
             novo_runner = obter_runner_adk("voz")
             try:
                 trocar_modelo(novo_runner, MODELO_LIVE_RESERVA)
@@ -1709,8 +1764,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     try:
                                         if inspect.iscoroutinefunction(executor):
                                             res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
+                                        elif func_name in _TOOLS_MUTANTES:
+                                            res = executor(**args)
                                         else:
-                                            res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
+                                            with _SEM_TOOL_THREADS:
+                                                res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
                                     except asyncio.TimeoutError:
                                         res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
                                     except Exception as exc:

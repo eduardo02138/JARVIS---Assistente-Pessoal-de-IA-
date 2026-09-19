@@ -29,6 +29,13 @@ PALAVRAS_NAO = {
     "nao", "não", "negar", "negado", "cancelar", "cancela",
     "recusar", "recuso", "no",
 }
+# Verbos/frases que o modelo usa para PEDIR informação, não para autorizar.
+# "pode repetir?" ou "pode continuar?" não são confirmações de ação pendente.
+VERBOS_PEDIDO = {
+    "repetir", "repete", "continuar", "continua", "dizer", "falar",
+    "explicar", "explica", "mostrar", "mostra", "listar", "aguardar",
+    "esperar", "perguntar", "pergunta", "informar", "detalhe", "detalhar",
+}
 
 
 def _limpar(texto: str) -> str:
@@ -47,6 +54,8 @@ def palavra_confirma(texto: str) -> bool:
 
     Confirmação exige palavra de aceite sem nenhuma palavra de recusa:
     "sim, pode autorizar" confirma; "sim, cancelar" não confirma.
+    Frase que o modelo usa para PEDIR informação não confirma:
+    "pode repetir?" ou "pode continuar?" retornam False (verbo de pedido).
     """
     if not texto:
         return False
@@ -55,6 +64,9 @@ def palavra_confirma(texto: str) -> bool:
         return False
     tokens = set(texto_limpo.split())
     negado = bool(tokens & PALAVRAS_NAO)
+    pedido = bool(tokens & VERBOS_PEDIDO)
+    if pedido:
+        return False
     return _tem_sim(texto_limpo, tokens) and not negado
 
 

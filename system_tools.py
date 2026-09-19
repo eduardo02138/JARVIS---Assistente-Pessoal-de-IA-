@@ -11,11 +11,13 @@ import glob
 import json
 import shlex
 import time
+import threading
 import preferences_manager
 import controller_engine
 
 _last_gpu_result = None
 _last_gpu_time = 0.0
+_last_gpu_lock = threading.Lock()
 
 def get_gpu_status() -> dict:
     """Verifica e retorna o uso, temperatura e memória VRAM da GPU dedicada."""
@@ -24,30 +26,34 @@ def get_gpu_status() -> dict:
     if _last_gpu_result is not None and (now - _last_gpu_time < 2.0):
         return _last_gpu_result
 
-    try:
-        res = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            parts = [p.strip() for p in res.stdout.strip().split(",")]
-            if len(parts) >= 6:
-                _last_gpu_result = {
-                    "disponivel": True,
-                    "modelo": parts[0],
-                    "uso_gpu": f"{parts[1]}%",
-                    "vram_usada_mb": f"{parts[3]} MB",
-                    "vram_total_mb": f"{parts[4]} MB",
-                    "temperatura": f"{parts[5]}°C",
-                    "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
-                }
-                _last_gpu_time = now
-                return _last_gpu_result
-    except Exception:
-        pass
-    _last_gpu_result = {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
-    _last_gpu_time = now
-    return _last_gpu_result
+    with _last_gpu_lock:
+        now = time.monotonic()
+        if _last_gpu_result is not None and (now - _last_gpu_time < 2.0):
+            return _last_gpu_result
+        try:
+            res = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                parts = [p.strip() for p in res.stdout.strip().split(",")]
+                if len(parts) >= 6:
+                    _last_gpu_result = {
+                        "disponivel": True,
+                        "modelo": parts[0],
+                        "uso_gpu": f"{parts[1]}%",
+                        "vram_usada_mb": f"{parts[3]} MB",
+                        "vram_total_mb": f"{parts[4]} MB",
+                        "temperatura": f"{parts[5]}°C",
+                        "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
+                    }
+                    _last_gpu_time = now
+                    return _last_gpu_result
+        except Exception:
+            pass
+        _last_gpu_result = {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
+        _last_gpu_time = now
+        return _last_gpu_result
 
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
 
@@ -117,6 +123,49 @@ def get_current_datetime() -> dict:
         "mensagem": f"Hoje é {dia_semana}, dia {now.strftime('%d de %B de %Y')}, e são {now.strftime('%H horas e %M minutos')}."
     }
 
+_mounts_cache: set = set()
+_mounts_cache_time: float = 0.0
+_mounts_cache_lock = threading.Lock()
+MOUNTS_CACHE_TTL_S = 60.0
+
+
+def _discover_slow_mounts() -> set:
+    """Descobre pontos de montagem externos com cache TTL.
+
+    Stat/glob em /run/media, /media e /mnt podem bloquear segundos em discos
+    lentos/desconectados; a varredura roda no máximo uma vez por TTL.
+    """
+    global _mounts_cache, _mounts_cache_time
+    now = time.monotonic()
+    if _mounts_cache and (now - _mounts_cache_time) < MOUNTS_CACHE_TTL_S:
+        return set(_mounts_cache)
+    with _mounts_cache_lock:
+        now = time.monotonic()
+        if _mounts_cache and (now - _mounts_cache_time) < MOUNTS_CACHE_TTL_S:
+            return set(_mounts_cache)
+        discovered = set()
+        try:
+            with open("/proc/mounts", "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        mp = parts[1].replace("\\040", " ")
+                        if mp.startswith("/run/media/") or mp.startswith("/media/") or mp.startswith("/mnt/"):
+                            if os.path.isdir(mp):
+                                discovered.add(mp)
+        except Exception:
+            pass
+        for base in ["/run/media", "/media", "/mnt"]:
+            if os.path.exists(base):
+                for pattern in [os.path.join(base, "*"), os.path.join(base, "*", "*")]:
+                    for d in glob.glob(pattern):
+                        if os.path.isdir(d):
+                            discovered.add(d)
+        _mounts_cache = discovered
+        _mounts_cache_time = now
+        return set(discovered)
+
+
 def list_installed_games(filter_name: str = "") -> dict:
     """
     Varre e lista todos os jogos e aplicativos instalados no computador,
@@ -125,26 +174,8 @@ def list_installed_games(filter_name: str = "") -> dict:
     """
     games = []
 
-    # 1. Descoberta dinâmica de pontos de montagem (SSDs, HDs e mídias externas)
-    discovered_mounts = set()
-    try:
-        with open("/proc/mounts", "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 2:
-                    mp = parts[1].replace("\\040", " ")
-                    if mp.startswith("/run/media/") or mp.startswith("/media/") or mp.startswith("/mnt/"):
-                        if os.path.isdir(mp):
-                            discovered_mounts.add(mp)
-    except Exception:
-        pass
-
-    for base in ["/run/media", "/media", "/mnt"]:
-        if os.path.exists(base):
-            for pattern in [os.path.join(base, "*"), os.path.join(base, "*", "*")]:
-                for d in glob.glob(pattern):
-                    if os.path.isdir(d):
-                        discovered_mounts.add(d)
+    # 1. Descoberta dinâmica de pontos de montagem (SSDs, HDs e mídias externas) com cache
+    discovered_mounts = _discover_slow_mounts()
 
     # 2. Descoberta de bibliotecas Steam locais e em outros discos/SSDs
     vdf_paths = [

@@ -13,6 +13,7 @@ Gates Auditados:
 import asyncio
 import inspect
 import json
+import os
 import time
 from unittest.mock import patch, AsyncMock
 import pytest
@@ -28,23 +29,27 @@ from server import app, JARVIS_SECRET_TOKEN
 # ==============================================================================
 
 def test_gate1_session_a_cannot_approve_session_b():
-    """Gate 1: Uma sessão/usuário jamais pode aprovar a ação pendente de outra sessão."""
+    """Gate 1: Uma sessão jamais pode aprovar a ação pendente de outra sessão.
+
+    Identity é server-side: user_id deriva da sessão autorizada; o campo 'user_id'
+    do client é ignorado. Aprovação legítima exige a sessão dona da pendência.
+    """
     client = TestClient(app)
     policy_engine.cleanup_expired_actions()
 
-    # Sessão A cria pendência legítima
+    # Sessão A cria pendência legítima (user_id derivado = sessão)
     pending = policy_engine.create_pending_action(
         tool_name="open_website",
         args={"url": "https://alvo-seguro.local"},
         session_id="sessao_A",
-        user_id="alice",
+        user_id="sessao_A",
     )
     action_id = pending.action_id
 
     # 1. Sessão B tenta aprovar ação de A
     resp_b = client.post(
         "/api/confirmar_acao",
-        json={"action_id": action_id, "session_id": "sessao_B", "user_id": "alice"},
+        json={"action_id": action_id, "session_id": "sessao_B", "user_id": "sessao_A"},
         headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN},
     )
     assert resp_b.status_code in (400, 403, 404), (
@@ -52,21 +57,21 @@ def test_gate1_session_a_cannot_approve_session_b():
     )
     assert pending.status == "pending", "FALHA GATE 1: Status da ação foi alterado por Sessão B!"
 
-    # 2. Mesmo session_id com usuário divergente (Bob tentando aprovar ação de Alice)
+    # 2. Sessão C alega o mesmo user_id do dono; identity vem da sessão, não do client
     resp_usr = client.post(
         "/api/confirmar_acao",
-        json={"action_id": action_id, "session_id": "sessao_A", "user_id": "bob"},
+        json={"action_id": action_id, "session_id": "sessao_C", "user_id": "sessao_A"},
         headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN},
     )
     assert resp_usr.status_code in (400, 403, 404), (
-        f"FALHA GATE 1: Usuário Bob conseguiu aprovar ação de Alice: {resp_usr.text}"
+        f"FALHA GATE 1: Sessão C conseguiu aprovar ação da sessão A alegando user_id dela: {resp_usr.text}"
     )
-    assert pending.status == "pending", "FALHA GATE 1: Status da ação foi alterado por usuário divergente!"
+    assert pending.status == "pending", "FALHA GATE 1: Status da ação foi alterado por sessão divergente!"
 
-    # 3. Aprovação legítima por Sessão A e Alice
+    # 3. Aprovação legítima pela Sessão A (user_id do client é irrelevante)
     resp_ok = client.post(
         "/api/confirmar_acao",
-        json={"action_id": action_id, "session_id": "sessao_A", "user_id": "alice"},
+        json={"action_id": action_id, "session_id": "sessao_A", "user_id": "usuario_impostor"},
         headers={"X-Jarvis-Token": JARVIS_SECRET_TOKEN},
     )
     assert resp_ok.status_code == 200 and resp_ok.json().get("status") == "ok", (
@@ -271,6 +276,94 @@ def test_gate5_frontend_widget_sends_token_on_provider_select():
     # 3. Verifica que valida resp.ok antes de assumir o provedor
     assert "resp.ok" in set_provider_code or "res.ok" in set_provider_code, (
         "FALHA GATE 5: setProvider assume sucesso sem verificar se a resposta HTTP foi bem-sucedida (resp.ok)!"
+    )
+
+
+def test_gate5_widget_setprovider_contracto_executado_em_node():
+    """Gate 5 (comportamental): setProvider roda de VERDADE em Node VM.
+
+    Substitui o source-grep puro por execução: carrega widget.js num sandbox
+    node:vm, captura o fetch, e comprova que a mutação de provedor envia
+    /api/providers/select com X-Jarvis-Token do /api/auth/session.
+    """
+    import shutil
+    import tempfile
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node não disponível no ambiente")
+
+    harness = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const path = require("node:path");
+const src = fs.readFileSync(process.env.WIDGET_PATH, "utf8");
+
+const fetchCalls = [];
+const ctx2d = { clearRect(){}, fillRect(){}, arc(){}, fill(){}, beginPath(){}, moveTo(){}, lineTo(){}, stroke(){}, setTransform(){}, getImageData: () => ({ data: [] }), putImageData(){}, drawImage(){} };
+const mk = () => { const e = { classList: { add(){}, remove(){}, contains: () => false, toggle(){} }, style: {}, dataset: {}, value:"", checked:false, addEventListener(){}, removeEventListener(){}, appendChild(){}, setAttribute(){}, removeAttribute(){}, getContext: () => ctx2d, play: () => ({ catch(){} }), pause(){}, innerHTML: "", textContent: "", removeChild(){}, insertBefore(){}, focus(){}, blur(){}, click(){}, scrollIntoView(){} }; return e; };
+const doc = { title: "", readyState: "complete", addEventListener(){}, removeEventListener(){}, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createElement: mk, body: null, documentElement: null, defaultView: null };
+doc.getElementById = () => mk();
+doc.body = mk(); doc.documentElement = mk(); doc.defaultView = {};
+const WS = class { constructor(url){} send(){} close(){} };
+const sandbox = {
+  window: null, document: doc, navigator: { userAgent: "gate5", mediaDevices: {} },
+  location: { search: "", pathname: "/", protocol: "http:", host: "localhost" },
+  localStorage: { getItem: () => null, setItem(){}, removeItem(){} },
+  fetch: async (u, o) => {
+    fetchCalls.push({ url: typeof u === "string" ? u : u.url, init: o || {} });
+    if (String(u).includes("auth/session")) return { ok: true, status: 200, json: async () => ({ token: "GATE5_TOKEN", sessao_id: "S" }) };
+    return { ok: false, status: 401, json: async () => ({}) };
+  },
+  console, alert(){}, addEventListener(){}, removeEventListener(){}, requestAnimationFrame: () => 0,
+  cancelAnimationFrame(){}, setTimeout, clearTimeout, setInterval, clearInterval,
+  URL, Blob, File, performance, crypto,
+  matchMedia: () => ({ matches: false, addListener(){}, removeListener(){} }),
+  WebSocket: WS,
+};
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox, { timeout: 5000 });
+
+(async () => {
+  try {
+    await vm.runInContext("initSessionToken()", sandbox);
+    await vm.runInContext("setProvider('google_studio')", sandbox);
+  } catch (e) {}
+  const select = fetchCalls.find(f => f.url.includes("api/providers/select"));
+  const out = {
+    hasSelect: Boolean(select),
+    method: select ? (select.init.method || "GET") : null,
+    hasTokenHeader: select ? Boolean((select.init.headers || {})["X-Jarvis-Token"] === "GATE5_TOKEN") : false,
+    allCalls: fetchCalls.map(f => f.url),
+  };
+  process.stdout.write(JSON.stringify(out));
+})().catch(e => { process.stdout.write(JSON.stringify({ fatal: e.message })); process.exit(1); });
+"""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with tempfile.TemporaryDirectory() as tmp:
+        harness_path = os.path.join(tmp, "gate5_harness.cjs")
+        with open(harness_path, "w", encoding="utf-8") as f:
+            f.write(harness)
+        proc = subprocess.run(
+            [node, harness_path], capture_output=True, text=True, timeout=60,
+            cwd=repo_root,
+            env={**os.environ, "WIDGET_PATH": os.path.join(repo_root, "gemini-live-widget", "widget.js")},
+        )
+        assert proc.returncode == 0, f"FALHA GATE 5: node harness terminou com erro: {proc.stderr}"
+
+    import json as _json
+    resultado = _json.loads(proc.stdout.strip().splitlines()[-1])
+    assert not resultado.get("fatal"), f"FALHA GATE 5: execução do widget falhou no sandbox: {resultado}"
+    assert resultado.get("hasSelect"), (
+        f"FALHA GATE 5: setProvider não executou fetch para /api/providers/select. Chamadas: {resultado.get('allCalls')}"
+    )
+    assert resultado.get("method") in ("POST", "PUT"), (
+        f"FALHA GATE 5: /api/providers/select deveria ser mutação (POST/PUT), veio {resultado.get('method')}"
+    )
+    assert resultado.get("hasTokenHeader"), (
+        "FALHA GATE 5: setProvider não enviou X-Jarvis-Token do /api/auth/session na mutação de provedor!"
     )
 
 
@@ -744,25 +837,34 @@ def test_gate7_adk_tool_wrappers_are_asynchronous():
 
 
 def test_gate7_system_status_cpu_check_is_non_blocking():
-    """Gate 7.2: Obtenção de status não pode conter pausas síncronas bloqueantes (interval=None)."""
+    """Gate 7.2: status usa cpu_percent(interval=None) — sem pausa bloqueante.
+
+    Assert no argumento passado à API, não em wall-clock (flaky em máquinas
+    lentas/ocupadas): a garantia é o contrato de não-bloqueio, não a veloz.
+    """
     import system_tools
     import agentes.ferramentas as af
+    from unittest.mock import patch
 
-    # Pré-aquecimento da GPU para aferir estritamente a telemetria do sistema operacional
-    system_tools.get_system_status()
-    
-    t0 = time.perf_counter()
-    st_sys = system_tools.get_system_status()
-    dt_sys = time.perf_counter() - t0
-    
-    t1 = time.perf_counter()
-    st_af = af.status_do_sistema()
-    dt_af = time.perf_counter() - t1
-    
-    # Ambas devem executar em menos de 80ms (interval=0.1 ou 0.3 levava >100ms e >300ms)
-    assert dt_sys < 0.08, f"FALHA GATE 7: system_tools.get_system_status demorou {dt_sys:.3f}s (esperado < 0.08s)"
-    assert dt_af < 0.08, f"FALHA GATE 7: agentes.ferramentas.status_do_sistema demorou {dt_af:.3f}s (esperado < 0.08s)"
+    chamadas = []
+
+    def fake_cpu_percent(interval=None, percpu=None):
+        chamadas.append({"interval": interval, "percpu": percpu})
+        return 7.0
+
+    with patch.object(system_tools.psutil, "cpu_percent", side_effect=fake_cpu_percent):
+        st_sys = system_tools.get_system_status()
+    assert chamadas and chamadas[0]["interval"] is None, (
+        "FALHA GATE 7: system_tools.get_system_status não usa cpu_percent(interval=None)!"
+    )
     assert "cpu_percent" in st_sys
+
+    chamadas.clear()
+    with patch.object(af.psutil, "cpu_percent", side_effect=fake_cpu_percent):
+        st_af = af.status_do_sistema()
+    assert chamadas and chamadas[0]["interval"] is None, (
+        "FALHA GATE 7: agentes.ferramentas.status_do_sistema não usa cpu_percent(interval=None)!"
+    )
     assert "cpu_percentual" in st_af
 
 

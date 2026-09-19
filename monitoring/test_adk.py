@@ -178,22 +178,21 @@ def test_autenticacao_e_confirmacao_live_adk_por_texto():
     from server import app, JARVIS_SECRET_TOKEN
     client = TestClient(app)
     session_id = "sessao-live-texto-test"
-    user_id = "local"
 
-    # Cria ação pendente na sessão de teste
+    # Cria ação pendente na sessão de teste (identity server-side: user_id = sessão)
     args = {"url": "https://brave.com"}
-    pending = policy_engine.create_pending_action("abrir_site", args, session_id=session_id, user_id=user_id)
+    pending = policy_engine.create_pending_action("abrir_site", args, session_id=session_id, user_id=session_id)
     assert pending.status == "pending"
 
     # Conexão não autorizada ao WebSocket -> Rejeitada com 1008
-    with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario={user_id}&origem=teste") as ws_unauth:
+    with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario=local&origem=teste") as ws_unauth:
         ws_unauth.send_json({"type": "init", "token": "token-falso-invalido"})
         msg_err = ws_unauth.receive_json()
         assert msg_err.get("tipo") == "erro"
 
     # Conexão autorizada com handshake
     try:
-        with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario={user_id}") as ws:
+        with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario=local") as ws:
             ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN})
             msg_ready = ws.receive_json()
             assert msg_ready.get("tipo") == "pronto"
@@ -208,7 +207,7 @@ def test_autenticacao_e_confirmacao_live_adk_por_texto():
         pass
 
     # Comprova que a aprovação refletiu no PolicyEngine e consome o token (one-shot)
-    consumido = policy_engine.consume_authorization("abrir_site", args, session_id=session_id, user_id=user_id)
+    consumido = policy_engine.consume_authorization("abrir_site", args, session_id=session_id, user_id=session_id)
     assert consumido is True
     print(" [✔ PASS] Handshake Seguro no Live ADK e Confirmação Digitada no Live")
 
@@ -218,11 +217,10 @@ def test_confirmacao_comportamental_voz_live_adk():
     from server import app, JARVIS_SECRET_TOKEN, obter_runner_adk
     client = TestClient(app)
     session_id = "sessao-live-voice-test"
-    user_id = "usuario-voz"
 
-    # 1. Cria ação sensível pendente vinculada à sessão e usuário
+    # 1. Cria ação sensível pendente vinculada à sessão (identity server-side)
     args = {"url": "https://github.com"}
-    pending = policy_engine.create_pending_action("abrir_site", args, session_id=session_id, user_id=user_id)
+    pending = policy_engine.create_pending_action("abrir_site", args, session_id=session_id, user_id=session_id)
     assert pending.status == "pending"
 
     # 2. Cria mock do evento de transcrição gerado pelo Gemini Live
@@ -242,7 +240,7 @@ def test_confirmacao_comportamental_voz_live_adk():
     runner = obter_runner_adk("voz")
     with patch.object(runner, "run_live", side_effect=mock_run_live):
         try:
-            with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario={user_id}") as ws:
+            with client.websocket_connect(f"/ws/live_adk?sessao={session_id}&usuario=local") as ws:
                 ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN})
                 msg_ready = ws.receive_json()
                 assert msg_ready.get("tipo") == "pronto"
@@ -262,7 +260,7 @@ def test_confirmacao_comportamental_voz_live_adk():
             pass
 
     # 4. Comprova que o PolicyEngine aprovou e consome o token one-shot
-    consumido = policy_engine.consume_authorization("abrir_site", args, session_id=session_id, user_id=user_id)
+    consumido = policy_engine.consume_authorization("abrir_site", args, session_id=session_id, user_id=session_id)
     assert consumido is True, "Ação autorizada por comando de voz não pôde ser consumida!"
     print(" [✔ PASS] Confirmação Comportamental por Comando de VOZ no Live ADK (origem: voz)")
 
@@ -286,7 +284,11 @@ def test_smoke_servidor_standalone():
 
 
 def test_confirmacao_chat_http_texto_com_isolamento_user_id():
-    """Valida que POST /api/chat ('sim') aprova a ação pendente usando session_id e user_id (P0.17.1)."""
+    """Valida que POST /api/chat ('sim') aprova a pendência usando identity server-side.
+
+    Identity = sessão (user_id derivado do servidor): o campo 'usuario' do client é
+    ignorado. Sessões diferentes não aprovam pendências umas das outras (P0.17.1).
+    """
     import server
     from unittest.mock import patch, MagicMock
 
@@ -295,9 +297,8 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     # 1. Teste na app unificada (server.py)
     client_server = TestClient(server.app)
     sess_1 = "sessao-chat-srv"
-    user_1 = "usuario-chat-srv"
     args_1 = {"url": "https://server.com"}
-    pending_1 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_1, user_id=user_1)
+    pending_1 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_1, user_id=sess_1)
     assert pending_1.status == "pending"
 
     async def mock_run_async(*a, **kw):
@@ -310,31 +311,30 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     with patch("server.obter_runner_adk", return_value=mock_runner_obj):
         resp_1 = client_server.post(
             "/api/chat",
-            json={"texto": "sim", "sessao": sess_1, "usuario": user_1},
+            json={"texto": "sim", "sessao": sess_1, "usuario": "usuario-impostor-ignorado"},
             headers=auth_headers
         )
         assert resp_1.status_code == 200
 
-    # Valida aprovação e consumo one-shot
-    consumido_1 = policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_1, user_id=user_1)
-    assert consumido_1 is True, "server.py /api/chat -> 'sim' falhou em aprovar ação com user_id!"
+    # Valida aprovação e consumo one-shot com identity derivada da sessão
+    consumido_1 = policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_1, user_id=sess_1)
+    assert consumido_1 is True, "server.py /api/chat -> 'sim' falhou em aprovar ação com identity de sessão!"
 
-    # 2. Teste de rejeição por incompatibilidade de user_id
-    sess_3 = "sessao-chat-fail"
-    user_dono = "usuario-legitimo"
-    user_invasor = "usuario-invasor"
-    pending_3 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_3, user_id=user_dono)
+    # 2. Teste de rejeição por incompatibilidade de sessão
+    sess_3 = "sessao-chat-dono"
+    sess_invasor = "sessao-chat-invasor"
+    pending_3 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_3, user_id=sess_3)
 
     with patch("server.obter_runner_adk", return_value=mock_runner_obj):
         client_server.post(
             "/api/chat",
-            json={"texto": "sim", "sessao": sess_3, "usuario": user_invasor},
+            json={"texto": "sim", "sessao": sess_invasor, "usuario": sess_3},
             headers=auth_headers
         )
-    # Não deve ter aprovado para o dono nem para o invasor
-    assert policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_3, user_id=user_dono) is False
+    # Sessão invasora não aprovou a pendência do dono real
+    assert policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_3, user_id=sess_3) is False
 
-    print(" [✔ PASS] Confirmação via POST /api/chat ('sim') na app unificada com user_id (P0.17.1)")
+    print(" [✔ PASS] Confirmação via POST /api/chat ('sim') na app unificada com identity de sessão (P0.17.1)")
 
 
 def test_todas_ferramentas_conectadas_ao_agente():

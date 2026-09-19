@@ -6,6 +6,7 @@ Classifica cada ferramenta em níveis de risco e gerencia autorização prévia 
 import logging
 import os
 import re
+import threading
 import time
 from enum import Enum
 from dataclasses import dataclass, field
@@ -195,10 +196,12 @@ class PolicyEngine:
         self._ide_lease_owner: Optional[str] = None
         self._ide_lease_user_id: Optional[str] = None
         self._pending_actions: Dict[str, PendingAction] = {}
+        self._lock = threading.RLock()
 
     def register_tool_policy(self, tool_name: str, risk_level: RiskLevel):
         """Registra ou atualiza o nível de risco de uma ferramenta (ex: via plug-in)."""
-        self._custom_policies[tool_name] = risk_level
+        with self._lock:
+            self._custom_policies[tool_name] = risk_level
 
     def get_risk_level(self, tool_name: str) -> Optional[RiskLevel]:
         """Retorna o nível de risco da ferramenta, ou None se ela não tiver política."""
@@ -210,8 +213,9 @@ class PolicyEngine:
 
     def grant_control_lease(self, owner: str = "hud", ttl_s: int = CONTROL_LEASE_TTL_S) -> Dict[str, Any]:
         """Concede autoridade temporária de controle físico após confirmação do usuário."""
-        self._control_lease_expira_em = time.monotonic() + ttl_s
-        self._control_lease_owner = owner
+        with self._lock:
+            self._control_lease_expira_em = time.monotonic() + ttl_s
+            self._control_lease_owner = owner
         logger.info(f"Lease de controle concedida a '{owner}' por {ttl_s}s.")
         return self.control_lease_status()
 
@@ -221,11 +225,12 @@ class PolicyEngine:
         Com session_id, só a sessão dona da lease pode revogá-la: assim uma segunda
         conexão não derruba o Modo Controle de quem realmente recebeu a autoridade.
         """
-        if session_id is not None and self._control_lease_owner not in (None, session_id):
-            logger.info("Revogação ignorada: a lease pertence a outra sessão.")
-            return self.control_lease_status()
-        self._control_lease_expira_em = 0.0
-        self._control_lease_owner = None
+        with self._lock:
+            if session_id is not None and self._control_lease_owner not in (None, session_id):
+                logger.info("Revogação ignorada: a lease pertence a outra sessão.")
+                return self.control_lease_status()
+            self._control_lease_expira_em = 0.0
+            self._control_lease_owner = None
         logger.info("Lease de controle revogada.")
         return self.control_lease_status()
 
@@ -251,8 +256,9 @@ class PolicyEngine:
 
     def grant_computer_lease(self, owner: str = "sessao-principal", ttl_s: int = COMPUTER_LEASE_TTL_S) -> Dict[str, Any]:
         """Concede autoridade temporária de operação do navegador (Computer Use)."""
-        self._computer_lease_expira_em = time.monotonic() + ttl_s
-        self._computer_lease_owner = owner
+        with self._lock:
+            self._computer_lease_expira_em = time.monotonic() + ttl_s
+            self._computer_lease_owner = owner
         logger.info(f"Lease do Modo Computador concedida a '{owner}' por {ttl_s}s.")
         return self.computer_lease_status()
 
@@ -262,11 +268,12 @@ class PolicyEngine:
         Com session_id, só a sessão dona da lease pode revogá-la, igual ao
         Modo Controle: outra conexão não derruba o navegador de quem opera.
         """
-        if session_id is not None and self._computer_lease_owner not in (None, session_id):
-            logger.info("Revogação ignorada: a lease do computador pertence a outra sessão.")
-            return self.computer_lease_status()
-        self._computer_lease_expira_em = 0.0
-        self._computer_lease_owner = None
+        with self._lock:
+            if session_id is not None and self._computer_lease_owner not in (None, session_id):
+                logger.info("Revogação ignorada: a lease do computador pertence a outra sessão.")
+                return self.computer_lease_status()
+            self._computer_lease_expira_em = 0.0
+            self._computer_lease_owner = None
         logger.info("Lease do Modo Computador revogada.")
         return self.computer_lease_status()
 
@@ -296,9 +303,10 @@ class PolicyEngine:
         ttl_s: int = IDE_LEASE_TTL_S
     ) -> Dict[str, Any]:
         """Concede autoridade temporária ao agente Antigravity (Modo IDE)."""
-        self._ide_lease_expira_em = time.monotonic() + ttl_s
-        self._ide_lease_owner = owner
-        self._ide_lease_user_id = user_id
+        with self._lock:
+            self._ide_lease_expira_em = time.monotonic() + ttl_s
+            self._ide_lease_owner = owner
+            self._ide_lease_user_id = user_id
         logger.info(f"Lease do Modo IDE concedida a '{owner}' (user: {user_id}) por {ttl_s}s.")
         return self.ide_lease_status()
 
@@ -314,9 +322,10 @@ class PolicyEngine:
         if user_id is not None and self._ide_lease_user_id not in (None, user_id):
             logger.info("Revogação ignorada: a lease do Modo IDE pertence a outro usuário.")
             return self.ide_lease_status()
-        self._ide_lease_expira_em = 0.0
-        self._ide_lease_owner = None
-        self._ide_lease_user_id = None
+        with self._lock:
+            self._ide_lease_expira_em = 0.0
+            self._ide_lease_owner = None
+            self._ide_lease_user_id = None
         logger.info("Lease do Modo IDE revogada.")
         return self.ide_lease_status()
 
@@ -526,13 +535,14 @@ class PolicyEngine:
 
     def cleanup_expired_actions(self) -> int:
         """Expurga periodicamente ações expiradas ou consumidas para evitar vazamento de memória."""
-        now = time.monotonic()
-        removidas = 0
-        for action_id, action in list(self._pending_actions.items()):
-            if now > action.expires_at or action.status in ("consumed", "rejected"):
-                del self._pending_actions[action_id]
-                removidas += 1
-        return removidas
+        with self._lock:
+            now = time.monotonic()
+            removidas = 0
+            for action_id, action in list(self._pending_actions.items()):
+                if now > action.expires_at or action.status in ("consumed", "rejected"):
+                    del self._pending_actions[action_id]
+                    removidas += 1
+            return removidas
 
     def create_pending_action(
         self,
@@ -543,22 +553,23 @@ class PolicyEngine:
         ttl: float = 60.0
     ) -> PendingAction:
         import secrets
-        self.cleanup_expired_actions()
-        action_id = secrets.token_hex(6)
-        now = time.monotonic()
-        args_hash = self._compute_args_hash(args)
-        pending = PendingAction(
-            action_id=action_id,
-            tool_name=tool_name,
-            args=args,
-            args_hash=args_hash,
-            session_id=session_id,
-            user_id=user_id,
-            created_at=now,
-            expires_at=now + ttl,
-            status="pending"
-        )
-        self._pending_actions[action_id] = pending
+        with self._lock:
+            self.cleanup_expired_actions()
+            action_id = secrets.token_hex(6)
+            now = time.monotonic()
+            args_hash = self._compute_args_hash(args)
+            pending = PendingAction(
+                action_id=action_id,
+                tool_name=tool_name,
+                args=args,
+                args_hash=args_hash,
+                session_id=session_id,
+                user_id=user_id,
+                created_at=now,
+                expires_at=now + ttl,
+                status="pending"
+            )
+            self._pending_actions[action_id] = pending
         logger.info(f"Ação pendente criada: {action_id} -> {tool_name} (Sessão: {session_id}, TTL {ttl}s monotônico)")
         return pending
 
@@ -568,27 +579,28 @@ class PolicyEngine:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None
     ) -> bool:
-        self.cleanup_expired_actions()
-        pending = self._pending_actions.get(action_id)
-        if not pending:
-            return False
-        if time.monotonic() > pending.expires_at:
-            pending.status = "rejected"
-            return False
-        # Isolamento obrigatório: se a ação foi associada a uma sessão/usuário, eles são indispensáveis
-        if not session_id:
-            logger.warning(f"Tentativa de aprovação de ação sem informar session_id obrigatório: {action_id}")
-            return False
-        if pending.session_id and pending.session_id != session_id:
-            logger.warning(f"Tentativa de aprovação de ação por sessão alheia: {session_id} != {pending.session_id}")
-            return False
-        if pending.user_id and not user_id:
-            logger.warning(f"Tentativa de aprovação de ação sem informar user_id obrigatório: {action_id}")
-            return False
-        if pending.user_id and user_id and pending.user_id != user_id:
-            logger.warning(f"Tentativa de aprovação de ação por usuário alheio: {user_id} != {pending.user_id}")
-            return False
-        pending.status = "approved"
+        with self._lock:
+            self.cleanup_expired_actions()
+            pending = self._pending_actions.get(action_id)
+            if not pending:
+                return False
+            if time.monotonic() > pending.expires_at:
+                pending.status = "rejected"
+                return False
+            # Isolamento obrigatório: se a ação foi associada a uma sessão/usuário, eles são indispensáveis
+            if not session_id:
+                logger.warning(f"Tentativa de aprovação de ação sem informar session_id obrigatório: {action_id}")
+                return False
+            if pending.session_id and pending.session_id != session_id:
+                logger.warning(f"Tentativa de aprovação de ação por sessão alheia: {session_id} != {pending.session_id}")
+                return False
+            if pending.user_id and not user_id:
+                logger.warning(f"Tentativa de aprovação de ação sem informar user_id obrigatório: {action_id}")
+                return False
+            if pending.user_id and user_id and pending.user_id != user_id:
+                logger.warning(f"Tentativa de aprovação de ação por usuário alheio: {user_id} != {pending.user_id}")
+                return False
+            pending.status = "approved"
         logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
         return True
 
@@ -603,20 +615,21 @@ class PolicyEngine:
         if not session_id:
             logger.warning("Tentativa de approve_latest_pending sem session_id obrigatório.")
             return None
-        now = time.monotonic()
-        for action_id in reversed(list(self._pending_actions.keys())):
-            action = self._pending_actions[action_id]
-            if action.status == "pending" and now <= action.expires_at:
-                if action.session_id != session_id:
-                    continue
-                if action.user_id and not user_id:
-                    continue
-                if action.user_id and user_id and action.user_id != user_id:
-                    continue
-                action.status = "approved"
-                logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
-                return action
-        return None
+        with self._lock:
+            now = time.monotonic()
+            for action_id in reversed(list(self._pending_actions.keys())):
+                action = self._pending_actions[action_id]
+                if action.status == "pending" and now <= action.expires_at:
+                    if action.session_id != session_id:
+                        continue
+                    if action.user_id and not user_id:
+                        continue
+                    if action.user_id and user_id and action.user_id != user_id:
+                        continue
+                    action.status = "approved"
+                    logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
+                    return action
+            return None
 
     def reject_action(
         self,
@@ -624,20 +637,21 @@ class PolicyEngine:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None
     ) -> bool:
-        pending = self._pending_actions.get(action_id)
-        if not pending:
-            return False
-        if not session_id:
-            return False
-        if pending.session_id and pending.session_id != session_id:
-            return False
-        if pending.user_id and not user_id:
-            return False
-        if pending.user_id and user_id and pending.user_id != user_id:
-            return False
-        pending.status = "rejected"
-        del self._pending_actions[action_id]
-        return True
+        with self._lock:
+            pending = self._pending_actions.get(action_id)
+            if not pending:
+                return False
+            if not session_id:
+                return False
+            if pending.session_id and pending.session_id != session_id:
+                return False
+            if pending.user_id and not user_id:
+                return False
+            if pending.user_id and user_id and pending.user_id != user_id:
+                return False
+            pending.status = "rejected"
+            del self._pending_actions[action_id]
+            return True
 
     def consume_authorization(
         self,
@@ -649,23 +663,24 @@ class PolicyEngine:
         """Verifica se há autorização válida, aprovada e com hash de argumentos correspondente.
         Ao encontrar, consome imediatamente (one-shot), revogando para execuções futuras.
         """
-        now = time.monotonic()
-        args_hash = self._compute_args_hash(args)
-        for action_id, action in list(self._pending_actions.items()):
-            if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
-                if action.args_hash == args_hash:
-                    if action.session_id is not None:
-                        if not session_id or action.session_id != session_id:
-                            continue
-                    if action.user_id is not None:
-                        if not user_id or action.user_id != user_id:
-                            continue
-                    # Consumo estritamente único (one-shot): revoga e apaga imediatamente
-                    action.status = "consumed"
-                    del self._pending_actions[action_id]
-                    logger.info(f"Autorização one-shot consumida com sucesso: {action_id} -> {tool_name}")
-                    return True
-        return False
+        with self._lock:
+            now = time.monotonic()
+            args_hash = self._compute_args_hash(args)
+            for action_id, action in list(self._pending_actions.items()):
+                if action.tool_name == tool_name and action.status == "approved" and now <= action.expires_at:
+                    if action.args_hash == args_hash:
+                        if action.session_id is not None:
+                            if not session_id or action.session_id != session_id:
+                                continue
+                        if action.user_id is not None:
+                            if not user_id or action.user_id != user_id:
+                                continue
+                        # Consumo estritamente único (one-shot): revoga e apaga imediatamente
+                        action.status = "consumed"
+                        del self._pending_actions[action_id]
+                        logger.info(f"Autorização one-shot consumida com sucesso: {action_id} -> {tool_name}")
+                        return True
+            return False
 
     def list_pending_actions(
         self,

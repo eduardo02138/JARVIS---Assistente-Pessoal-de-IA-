@@ -44,6 +44,14 @@ def test_confirma_com_negacao_sem_recusa_intencional():
     assert palavra_confirma("pode prosseguir") is True
 
 
+def test_verbo_de_pedido_nao_autoriza():
+    assert palavra_confirma("pode repetir") is False
+    assert palavra_confirma("pode continuar") is False
+    assert palavra_confirma("sim, pode explicar") is False
+    assert palavra_confirma("pode repetir a pergunta?") is False
+    assert palavra_confirma("ok, mas pode detalhar?") is False
+
+
 def test_vazios_e_nulos():
     assert palavra_confirma("") is False
     assert palavra_confirma(None) is False
