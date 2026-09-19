@@ -734,6 +734,22 @@ async function connectWebSocket() {
                 fetchSystemTelemetry();
                 break;
 
+            case 'fallback_text':
+                // Contingência de voz: o modelo encerrou o turno em silêncio após
+                // uma ferramenta e o servidor devolveu a resposta como texto.
+                if (msg.text) appendJarvisText(msg.text);
+                break;
+
+            case 'policy_verbal_confirmation_approved':
+                appendToolLog('CONFIRMAÇÃO', 'success', 'Autorização por voz reconhecida pelo JARVIS.');
+                break;
+
+            case 'superseded':
+                // Outra janela assumiu a sessão Live única: esta janela ficou órfã.
+                alert('JARVIS: ' + (msg.message || 'Esta janela foi substituída por outra conexão do assistente.'));
+                disconnectWebSocket();
+                break;
+
             case 'error':
                 alert('Aviso do JARVIS: ' + msg.message);
                 setJarvisState('error', 'ERRO NOS SISTEMAS');

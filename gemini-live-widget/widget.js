@@ -943,6 +943,30 @@ async function connectLiveBackend() {
                 }
                 break;
 
+            case "computer_mode":
+                dom.liveStatusText.textContent = msg.active
+                    ? "Modo Computador (Computer Use) ativo..."
+                    : "Ouvindo você...";
+                break;
+
+            case "ide_mode":
+                dom.liveStatusText.textContent = msg.active
+                    ? "Modo IDE ativo (Antigravity)..."
+                    : "Ouvindo você...";
+                break;
+
+            case "fallback_text":
+                // Contingência de voz: turno encerrado em silêncio após ferramenta
+                if (msg.text) {
+                    appendChatMessage("gemini", msg.text, { source: "voice", appendExisting: true });
+                    dom.liveStatusText.textContent = msg.text.slice(0, 50) + (msg.text.length > 50 ? "..." : "");
+                }
+                break;
+
+            case "policy_verbal_confirmation_approved":
+                appendChatMessage("tool", "Autorização por voz reconhecida.", { source: "tool" });
+                break;
+
             case "toggle_telemetry":
                 toggleTelemetryDrawer(msg.active, msg.telemetry);
                 break;
