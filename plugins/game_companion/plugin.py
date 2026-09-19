@@ -13,9 +13,8 @@ import os
 from typing import Optional, Dict, List
 from plugin_sdk import JarvisPlugin, PluginMeta
 
-logger = logging.getLogger("jarvis.plugins.game_companion")
-
-ASSETS_ESTRATEGIAS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "estrategias.json")
+RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ASSETS_ESTRATEGIAS = os.path.join(RAIZ, "skills", "game-companion", "assets", "estrategias.json")
 
 # Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
 DICAS_FALLBACK = [

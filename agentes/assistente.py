@@ -26,11 +26,9 @@ from google.adk.tools.base_tool import BaseTool
 
 from policy_engine import policy_engine, RiskLevel
 from .ferramentas import (
-    abrir_site,
     consultar_preferencias,
     hora_atual,
     lembrar_preferencia,
-    pesquisar_na_web,
     status_do_sistema,
     obter_todas_ferramentas_adk,
     obter_dicionario_ferramentas_adk,
@@ -42,7 +40,7 @@ MODELO_LIVE_RESERVA = os.environ.get("LIVE_MODEL_FALLBACK", "gemini-2.5-flash-na
 MODELO_TEXTO = os.environ.get("TEXT_MODEL", "gemini-flash-latest")
 MODELO_TEXTO_RESERVA = os.environ.get("TEXT_MODEL_FALLBACK", "gemini-2.5-flash")
 
-INSTRUCAO_BASE = """Você é o J.A.R.V.I.S., assistente pessoal inteligente em português do Brasil, falado e escrito.
+INSTRUCAO_BASE = f"""Você é o J.A.R.V.I.S., assistente pessoal inteligente em português do Brasil, falado e escrito.
 
 Conversa:
 - Respostas concisas, de uma ou duas frases curtas. Quem ouve não consegue reler.
@@ -50,7 +48,7 @@ Conversa:
 - Nunca afirme ter feito algo que a ferramenta não confirmou.
 
 Ferramentas e Governança:
-- Você possui 56 ferramentas integradas do ecossistema: telemetria de hardware (GPU NVIDIA, CPU, RAM), controle de volume, janelas, modo IDE, inicialização de jogos Steam, automação residencial, Google Workspace, Deep Research, finanças e controle de periféricos.
+- Você possui {len(obter_todas_ferramentas_adk())} ferramentas integradas do ecossistema: telemetria de hardware (GPU NVIDIA, CPU, RAM), controle de volume, janelas, modo IDE, inicialização de jogos Steam, automação residencial, Google Workspace, Deep Research, finanças e controle de periféricos.
 - Use as ferramentas imediatamente quando o usuário solicitar informações ou ações do sistema.
 - Ações de risco são bloqueadas automaticamente pelo Policy Engine. Se uma ferramenta retornar status bloqueado aguardando confirmação, peça autorização ao usuário de forma clara.
 - Você NUNCA pode conceder a sua própria autorização; a confirmação precisa ser emitida pelo usuário.
@@ -186,8 +184,6 @@ def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
         tools=[
             hora_atual,
             status_do_sistema,
-            abrir_site,
-            pesquisar_na_web,
             load_memory,
             *ferramentas,
         ],
@@ -217,7 +213,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
         before_tool_callback=guarda_de_ferramentas,
     )
 
-    tools_especialista_navegador = [abrir_site, pesquisar_na_web]
+    tools_especialista_navegador: list = []
     for nome in ("open_website", "search_web"):
         if nome in ferramentas_map:
             tools_especialista_navegador.append(ferramentas_map[nome])
@@ -239,13 +235,11 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
     return Agent(
         name="assistente",
         model=modelo or MODELO_TEXTO,
-        description="Assistente J.A.R.V.I.S. com 56 ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
+        description=f"Assistente J.A.R.V.I.S. com {len(obter_todas_ferramentas_adk())} ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
         instruction=INSTRUCAO_COORDENADOR + ("" if skill_toolset is not None else _instrucoes_das_skills()),
         tools=[
             hora_atual,
             status_do_sistema,
-            abrir_site,
-            pesquisar_na_web,
             lembrar_preferencia,
             consultar_preferencias,
             load_memory,

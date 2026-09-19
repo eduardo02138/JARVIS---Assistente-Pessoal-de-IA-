@@ -1030,7 +1030,7 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
             cwd="/home/edu/Documentos/assistente",
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=85
         )
         ans = res.stdout.strip() or res.stderr.strip()
         resumo = ans[:350] + ("..." if len(ans) > 350 else "")

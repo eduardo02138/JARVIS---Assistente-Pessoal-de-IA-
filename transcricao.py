@@ -169,7 +169,7 @@ class LiveTranscriber:
                 if not self._running:
                     break
 
-                sc = response.server_content
+                sc = getattr(response, "server_content", None)
                 if not sc:
                     continue
 

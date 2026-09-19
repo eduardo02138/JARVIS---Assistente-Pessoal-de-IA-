@@ -12,7 +12,8 @@ from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.google_finance")
 
-ASSETS_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "portfolio_default.json")
+RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ASSETS_PADRAO = os.path.join(RAIZ, "skills", "google-finance", "assets", "portfolio_default.json")
 
 # Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
 PORTFOLIO_FALLBACK: List[Dict] = [

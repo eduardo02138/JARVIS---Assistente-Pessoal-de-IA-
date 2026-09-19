@@ -6,9 +6,6 @@ modelo, então os tipos e a descrição aqui são parte da interface com o Gemin
 
 import asyncio
 import datetime
-import shutil
-import subprocess
-import urllib.parse
 
 import psutil
 from google.adk.tools import ToolContext
@@ -39,30 +36,6 @@ def status_do_sistema() -> dict:
         "ram_total_gb": round(memoria.total / 1024**3, 1),
         "ligado_ha_horas": round(ligado_ha.total_seconds() / 3600, 1),
     }
-
-
-def abrir_site(url: str) -> dict:
-    """Abre um endereço da web no navegador padrão do usuário.
-
-    Args:
-        url: Endereço completo ou domínio, por exemplo "youtube.com".
-    """
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-    if not shutil.which("xdg-open"):
-        return {"status": "erro", "mensagem": "xdg-open não está disponível neste sistema."}
-    subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
-    return {"status": "ok", "url": url, "mensagem": f"Abri {url} no navegador."}
-
-
-def pesquisar_na_web(consulta: str) -> dict:
-    """Abre uma busca no navegador do usuário.
-
-    Args:
-        consulta: O que pesquisar, em linguagem natural.
-    """
-    return abrir_site(f"https://www.google.com/search?q={urllib.parse.quote(consulta)}")
 
 
 def lembrar_preferencia(chave: str, valor: str, tool_context: ToolContext) -> dict:

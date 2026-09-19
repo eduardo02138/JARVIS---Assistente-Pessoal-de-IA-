@@ -1,17 +1,19 @@
 """
 ADK Skill Loader do ecossistema J.A.R.V.I.S.
 
-Carrega os SKILL.md declarados pelos plug-ins em plugins/<id>/ como Skills ADK
-(camadas L1 frontmatter, L2 instruções e L3 recursos do modelo google.adk.skills).
+Carrega os SKILL.md declarados em skills/<skill-name>/ como Skills ADK (camadas L1
+frontmatter, L2 instruções e L3 recursos do modelo google.adk.skills). skills/ é a
+fonte única: plugin.py (plugins/<id>/) contém só o código runtime; SKILL.md e
+assets/ vivem apenas em skills/.
 
-Conformidade: cada plug-in declara um SKILL.md com cabecalho YAML (name kebab-case,
+Conformidade: cada skill declara um SKILL.md com cabecalho YAML (name kebab-case,
 description) e corpo Markdown. Recursos opcionais vivem em references/ e assets/,
 lidos sob demanda e injetados no modelo Skill.
 
 Limitação conhecida: `load_skill_from_dir` exige que o nome do diretório coincida
-exatamente com o `name:` kebab-case do frontmatter. Os plug-ins usam IDs com
-underscore (game_companion), então o loader tenta a API oficial primeiro e recai
-para um parser local equivalente que preserva o modelo Skill do ADK.
+exatamente com o `name:` kebab-case do frontmatter. As skills usam dirs kebab-case
+oficiais, então o loader tenta a API oficial primeiro e recai para um parser local
+equivalente que preserva o modelo Skill do ADK.
 """
 
 import os
@@ -142,7 +144,7 @@ class ADKSkillLoader:
     """
 
     def __init__(self, dir_plugin: Optional[str] = None):
-        self.dir_plugin = dir_plugin or (SKILLS_DIR if os.path.isdir(SKILLS_DIR) else PLUGINS_DIR)
+        self.dir_plugin = dir_plugin or SKILLS_DIR
         self._skills: dict[str, Skill] = {}
         self._dirs: dict[str, str] = {}
         self._erros: dict[str, str] = {}
@@ -158,16 +160,12 @@ class ADKSkillLoader:
             logger.warning("google-adk ausente: loader de skills inativo.")
             return
 
+        if not os.path.isdir(SKILLS_DIR):
+            logger.error("skills/ ausente: diretório canônico de skills não encontrado.")
+            return
+
         padrao_busca = os.path.join(self.dir_plugin, "*", "SKILL.md")
         arquivos_skill = sorted(glob.glob(padrao_busca))
-
-        # Se não encontrou no diretório alvo e skills/ existe, busca em skills/
-        if not arquivos_skill and os.path.isdir(SKILLS_DIR) and self.dir_plugin != SKILLS_DIR:
-            arquivos_skill = sorted(glob.glob(os.path.join(SKILLS_DIR, "*", "SKILL.md")))
-
-        # Fallback de busca em plugins/
-        if not arquivos_skill and os.path.isdir(PLUGINS_DIR) and self.dir_plugin != PLUGINS_DIR:
-            arquivos_skill = sorted(glob.glob(os.path.join(PLUGINS_DIR, "*", "SKILL.md")))
 
         for skill_md in arquivos_skill:
             dir_skill = os.path.dirname(skill_md)

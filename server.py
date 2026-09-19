@@ -49,6 +49,14 @@ import system_tools
 from plugin_manager import plugin_manager
 import gemini_bridge
 import transcricao
+from live_protocolo import (
+    PALAVRAS_NAO,
+    PALAVRAS_SIM,
+    EncerramentoLimpoDaSessao,
+    desativar_ping_timeout,
+    palavra_confirma,
+    palavra_recusa,
+)
 from provider_router import provider_router, GoogleStudioProvider, OmniRouteProvider
 from monitoring.logger import (
     logger, record_event, get_recent_events,
@@ -69,6 +77,11 @@ MIC_GRACE_S = float(os.environ.get("JARVIS_MIC_GRACE", "0.3"))
 
 # Caminho interno do agente de Computer Use (navegador Chromium via Playwright)
 CAMINHO_COMPUTADOR = "computador"
+CAMINHO_VOZ = "voz"
+
+# Configuração da sessão Live injetada no RunConfig (fontes do servidor ADK unificado)
+VOZ = os.environ.get("VOICE_NAME") or os.environ.get("JARVIS_VOICE", "Charon")
+IDIOMA = os.environ.get("LANGUAGE_CODE") or os.environ.get("JARVIS_LANGUAGE", "pt-BR")
 
 # Retenção de tarefas de background do servidor contra Garbage Collection (Python 3.14)
 _server_background_tasks: Set[asyncio.Task] = set()
@@ -129,6 +142,21 @@ async def get_session_token(request: Request):
 @app.on_event("startup")
 async def startup_event():
     _schedule_server_task(gemini_bridge.gemini_file_watcher_task())
+    try:
+        from mcp_client_manager import mcp_client_manager
+        toolsets = mcp_client_manager.carregar_toolsets()
+        if toolsets:
+            logger.info("MCP Client: %d servidor(es) MCP carregado(s) no boot.", len(toolsets))
+    except Exception as e:
+        logger.warning("Falha ao inicializar clientes MCP no boot: %s", e)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        from mcp_client_manager import mcp_client_manager
+        await mcp_client_manager.close_all()
+    except Exception as e:
+        logger.warning("Erro ao encerrar conexões MCP no shutdown: %s", e)
 
 # Servir arquivos estáticos do HUD e do Widget
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -136,6 +164,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 WIDGET_DIR = os.path.join(os.path.dirname(__file__), "gemini-live-widget")
 app.mount("/widget", StaticFiles(directory=WIDGET_DIR, html=True), name="gemini-live-widget")
+
+# Cliente próprio do servidor ADK unificado (antes servido por servidor_adk.py)
+STATIC_ADK_DIR = os.path.join(os.path.dirname(__file__), "static_adk")
+app.mount("/static_adk", StaticFiles(directory=STATIC_ADK_DIR), name="static_adk")
 
 MONITORING_DIR = os.path.join(os.path.dirname(__file__), "monitoring")
 
@@ -157,9 +189,9 @@ def check_omniroute_status() -> dict:
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
+    from mcp_client_manager import mcp_client_manager
+    key_pool = GoogleStudioProvider.get_keys()
+    has_key = bool(key_pool)
     omni = check_omniroute_status()
     return {
         "status": "online",
@@ -170,14 +202,33 @@ async def health_check():
         "active_provider": provider_router.active_provider,
         "omniroute_online": omni["online"],
         "omniroute_combo": omni["combo"],
-        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
+        "modelo_live": MODELO_LIVE,
+        "modelo_live_reserva": MODELO_LIVE_RESERVA,
+        "modelo_texto": MODELO_TEXTO,
+        "modelo_texto_reserva": MODELO_TEXTO_RESERVA,
+        "modelo_computador": MODELO_COMPUTER,
+        "chave_configurada": has_key,
+        "chaves_no_pool": len(key_pool) if key_pool else (1 if has_key else 0),
+        "sessoes": type(session_service_adk).__name__,
+        "voz": VOZ,
+        "modo_computador": policy_engine.computer_lease_status(),
+        "mcp_servers": mcp_client_manager.status(),
+    }
+
+@app.get("/api/mcp/servers")
+async def listar_servidores_mcp(_=Depends(verify_jarvis_token)):
+    """Lista os servidores MCP externos conectados ao assistente."""
+    from mcp_client_manager import mcp_client_manager
+    return {
+        "status": "ok",
+        "servers": mcp_client_manager.status(),
     }
 
 @app.get("/api/providers")
 async def get_providers_endpoint():
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    has_key = bool(os.environ.get("GEMINI_API_KEY")) or bool(key_pool)
+    key_pool = GoogleStudioProvider.get_keys()
+    has_key = bool(key_pool)
     omni = check_omniroute_status()
     act = provider_router.active_provider
 
@@ -295,11 +346,7 @@ async def clear_system_logs(_=Depends(verify_jarvis_token)):
 
 @app.get("/api/debug/test-accounts")
 async def test_all_accounts():
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    single = os.environ.get("GEMINI_API_KEY")
-    if single and single not in key_pool:
-        key_pool.insert(0, single)
+    key_pool = GoogleStudioProvider.get_keys()
 
     results = []
     valid_count = 0
@@ -310,10 +357,8 @@ async def test_all_accounts():
         masked = k[:6] + "..." + k[-4:] if len(k) > 10 else "***"
         try:
             cl = genai.Client(api_key=k)
-            # Desativa timeout de ping
-            if hasattr(cl, "_api_client") and hasattr(cl._api_client, "_websocket_ssl_ctx"):
-                cl._api_client._websocket_ssl_ctx["ping_interval"] = None
-                cl._api_client._websocket_ssl_ctx["ping_timeout"] = None
+            # Desativa timeout de ping que derrubava conexões após ~45s de silêncio
+            desativar_ping_timeout(cl)
 
             test_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
             # Modelos native-audio só aceitam áudio; exigir TEXT gera falso "chave inválida".
@@ -481,11 +526,7 @@ _indice_chave_adk = 0
 
 def girar_chave_adk() -> bool:
     global _indice_chave_adk
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    key_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    single = os.environ.get("GEMINI_API_KEY")
-    if single and single not in key_pool:
-        key_pool.insert(0, single)
+    key_pool = GoogleStudioProvider.get_keys()
     if len(key_pool) < 2:
         return False
     _indice_chave_adk = (_indice_chave_adk + 1) % len(key_pool)
@@ -497,13 +538,24 @@ def girar_chave_adk() -> bool:
     return True
 
 
+def trocar_modelo(runner: Runner, modelo: str) -> None:
+    """Plano B de indisponibilidade: troca o modelo do agente e dos sub-agentes."""
+    runner.agent.model = modelo
+    for ferramenta in getattr(runner.agent, "tools", []):
+        subagente = getattr(ferramenta, "agent", None)
+        if subagente is not None:
+            subagente.model = modelo
+
+
 def obter_runner_adk(tipo: str) -> Runner:
+    if tipo == CAMINHO_COMPLEXO:
+        tipo = "coordenador"
     if tipo not in runners_adk:
         if tipo == "rapido":
             agente = criar_agente_rapido()
         elif tipo == "coordenador":
             agente = criar_agente_coordenador()
-        elif tipo == "voz":
+        elif tipo == CAMINHO_VOZ:
             agente = criar_agente_de_voz()
         elif tipo == CAMINHO_COMPUTADOR:
             agente = criar_agente_computer_use(MODELO_COMPUTER)
@@ -533,6 +585,9 @@ def obter_runner_adk(tipo: str) -> Runner:
             memory_service=memory_service_adk,
         )
     return runners_adk[tipo]
+
+# Alias canônico: a mesma fábrica unificada sob o nome usado pelo servidor ADK antigo.
+obter_runner = obter_runner_adk
 
 
 @app.get("/api/acoes_pendentes")
@@ -675,13 +730,7 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     )
 
     # Verifica palavras de confirmação verbal ou digitada do usuário
-    palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
-    palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-    texto_limpo = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-    tokens = set(texto_limpo.split())
-    is_negado = bool(tokens & palavras_negacao)
-    is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
-    if is_confirmado:
+    if palavra_confirma(texto):
         pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
         if pending:
             logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
@@ -820,6 +869,71 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     }
 
 
+# ----------------- SESSÃO LIVE ADK (AGENTES) -----------------
+def _env_flag(nome: str) -> bool:
+    """Lê uma flag 0/1 do ambiente; tudo desligado sem a variável."""
+    return os.environ.get(nome, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_json(nome: str, padrao=None):
+    """Lê um valor JSON do ambiente; retorna o padrão se faltar ou for inválido."""
+    bruto = os.environ.get(nome)
+    if not bruto or not bruto.strip():
+        return padrao
+    try:
+        return json.loads(bruto)
+    except Exception:
+        logger.warning("Valor inválido em %s (JSON esperado): ignorado.", nome)
+        return padrao
+
+
+def montar_run_config() -> RunConfig:
+    """Modalidades, voz, transcrição e tuning opcional da sessão Live do ADK.
+
+    Recursos extras (proatividade, diálogo afetivo, VAD etc.) só entram na
+    configuração quando as variáveis de ambiente os ativam:
+      LIVE_PROATIVITY, LIVE_AFFECTIVE_DIALOG, LIVE_EXPLICIT_VAD,
+      LIVE_SAVE_BLOB, LIVE_VAD_DISABLED, LIVE_METADADOS.
+    """
+    cfg: dict = {
+        "response_modalities": ["AUDIO"],
+        "speech_config": types.SpeechConfig(
+            language_code=IDIOMA,
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOZ)
+            ),
+        ),
+        "input_audio_transcription": transcricao.build_input_transcription_config(),
+        "output_audio_transcription": transcricao.build_output_transcription_config(),
+        # Sessões longas exigem compressão de contexto (evita o corte por tamanho)
+        "context_window_compression": types.ContextWindowCompressionConfig(
+            sliding_window=types.SlidingWindow()
+        ),
+    }
+
+    if _env_flag("LIVE_PROATIVITY"):
+        cfg["proactivity"] = types.ProactivityConfig(proactive_audio=True)
+    if _env_flag("LIVE_AFFECTIVE_DIALOG"):
+        cfg["enable_affective_dialog"] = True
+    if _env_flag("LIVE_EXPLICIT_VAD"):
+        cfg["explicit_vad_signal"] = True
+    if _env_flag("LIVE_SAVE_BLOB"):
+        cfg["save_live_blob"] = True
+    if _env_flag("LIVE_VAD_DISABLED"):
+        cfg["realtime_input_config"] = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+        )
+    elif _env_flag("JARVIS_BARGE_IN") or _env_flag("LIVE_ALLOW_BARGE_IN"):
+        cfg["realtime_input_config"] = types.RealtimeInputConfig(
+            activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        )
+    metadados = _env_json("LIVE_METADADOS")
+    if metadados:
+        cfg["custom_metadata"] = metadados
+
+    return RunConfig(**cfg)
+
+
 @app.websocket("/ws/live_adk")
 async def live_adk(
     websocket: WebSocket,
@@ -881,7 +995,7 @@ async def live_adk(
 
     fila = LiveRequestQueue()
     logger.info("Cliente autenticado no Live ADK (sessão: %s, modelo: %s)", sessao, runner.agent.model)
-    await safe_send_json({"tipo": "pronto", "modelo": runner.agent.model})
+    await safe_send_json({"tipo": "pronto", "modelo": runner.agent.model, "voz": VOZ})
 
     async def do_cliente_para_o_agente():
         client_muted = False
@@ -918,14 +1032,8 @@ async def live_adk(
             elif tipo in ("fim_do_audio", "end_of_audio", "audio_stream_end"):
                 fila.send_audio_stream_end()
             elif tipo in ("texto", "text"):
-                texto_msg = msg.get("texto", "").strip()
-                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
-                palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-                texto_limpo = "".join(c for c in texto_msg.lower() if c.isalnum() or c.isspace()).strip()
-                tokens = set(texto_limpo.split())
-                is_negado = bool(tokens & palavras_negacao)
-                is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
-                if is_confirmado:
+                texto_msg = (msg.get("texto") or msg.get("text") or "").strip()
+                if palavra_confirma(texto_msg):
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por DIGITAÇÃO no Live ADK!", pending.action_id, pending.tool_name)
@@ -942,7 +1050,7 @@ async def live_adk(
                         ))
                         continue
                 fila.send_content(
-                    types.Content(role="user", parts=[types.Part(text=msg["texto"])])
+                    types.Content(role="user", parts=[types.Part(text=texto_msg)])
                 )
             elif tipo == "confirmar_acao":
                 action_id = msg.get("id_confirmacao")
@@ -968,16 +1076,7 @@ async def live_adk(
                     await safe_send_json({"tipo": "acao_rejeitada", "action_id": action_id})
 
     async def do_agente_para_o_cliente():
-        run_cfg = RunConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
-                )
-            ),
-            input_audio_transcription=transcricao.build_input_transcription_config(),
-            output_audio_transcription=transcricao.build_output_transcription_config(),
-        )
+        run_cfg = montar_run_config()
         async for evento in runner.run_live(
             user_id=usuario,
             session_id=sessao,
@@ -995,13 +1094,7 @@ async def live_adk(
                     {"tipo": "transcricao_usuario", "texto": transcricao_usuario}
                 )
                 # Hook de aprovação verbal por voz na sessão Live
-                palavras_confirmacao = {"sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode", "ok", "prosseguir", "positivo", "permitir"}
-                palavras_negacao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-                texto_limpo = "".join(c for c in transcricao_usuario.lower() if c.isalnum() or c.isspace()).strip()
-                tokens = set(texto_limpo.split())
-                is_negado = bool(tokens & palavras_negacao)
-                is_confirmado = (texto_limpo in palavras_confirmacao) or (bool(tokens & palavras_confirmacao) and not is_negado)
-                if is_confirmado:
+                if palavra_confirma(transcricao_usuario):
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
@@ -1047,6 +1140,18 @@ async def live_adk(
                         )
             if evento.interrupted:
                 await safe_send_json({"tipo": "interrompido"})
+            if _env_flag("LIVE_EXPLICIT_VAD"):
+                va = getattr(evento, "voice_activity", None)
+                if va is not None:
+                    try:
+                        estado = getattr(va, "is_speech", None)
+                        if estado is None:
+                            estado = getattr(va, "voice_in", None) or getattr(va, "response_in", None)
+                        await safe_send_json(
+                            {"tipo": "voz_ativa", "ativo": bool(estado), "detalhe": str(va)}
+                        )
+                    except Exception:
+                        pass
             if evento.turn_complete:
                 await safe_send_json({"tipo": "turno_concluido"})
                 try:
@@ -1065,9 +1170,20 @@ async def live_adk(
     except* (WebSocketDisconnect, asyncio.CancelledError):
         logger.info("Cliente Live ADK desconectou.")
     except* (ServerError, ClientError) as grupo:
-        logger.warning("Falha na sessão Live ADK (%s).", grupo.exceptions[0])
+        erro_inst = grupo.exceptions[0]
+        logger.warning("Falha na sessão Live ADK (%s). Rotacionando chave e/ou modelo.", erro_inst)
+        girou = girar_chave_adk()
         try:
-            await safe_send_json({"tipo": "erro", "mensagem": "Instabilidade na Live API. Reconecte para tentar novamente."})
+            trocar_modelo(runner, MODELO_LIVE_RESERVA)
+        except Exception:
+            pass
+        msg_erro = (
+            "Limite ou instabilidade na Live API. Chave rotacionada no pool. Reconecte para continuar."
+            if girou
+            else "Modelo Live indisponível. Reconecte para tentar o modelo reserva."
+        )
+        try:
+            await safe_send_json({"tipo": "erro", "mensagem": msg_erro})
         except Exception:
             pass
     finally:
@@ -1196,12 +1312,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     config = types.LiveConnectConfig(**live_connect_kwargs)
 
     # Isolamento de Segredos: Pool de contas lidas estritamente do backend (.env)
-    raw_keys = os.environ.get("GEMINI_API_KEYS", "")
-    parsed_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-    single_key = os.environ.get("GEMINI_API_KEY")
-    if single_key and single_key not in parsed_keys:
-        parsed_keys.insert(0, single_key)
-    key_pool = sorted(parsed_keys, key=lambda k: 0 if k.startswith("AIzaSy") else 1)
+    key_pool = sorted(GoogleStudioProvider.get_keys(), key=lambda k: 0 if k.startswith("AIzaSy") else 1)
     if not key_pool:
         err_msg = "Nenhuma chave no pool. Configure GEMINI_API_KEYS ou GEMINI_API_KEY no .env do servidor."
         record_event("error", {"message": err_msg})
@@ -1210,15 +1321,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
         return
 
     last_err = None
+    consecutive_failures = 0
     for idx, try_key in enumerate(key_pool):
         try:
             logger.info(f"Tentando conectar com conta {idx+1}/{len(key_pool)} do pool (modelo: {model_name})...")
             active_client = genai.Client(api_key=try_key)
 
             # Desativa timeout de ping que derrubava conexões após ~45s de silêncio
-            if hasattr(active_client, "_api_client") and hasattr(active_client._api_client, "_websocket_ssl_ctx"):
-                active_client._api_client._websocket_ssl_ctx["ping_interval"] = None
-                active_client._api_client._websocket_ssl_ctx["ping_timeout"] = None
+            desativar_ping_timeout(active_client)
 
             async with active_client.aio.live.connect(model=model_name, config=config) as session:
                 record_event("client_connected", {
@@ -1227,6 +1337,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "model": model_name,
                     "voice": voice_name
                 })
+                consecutive_failures = 0
                 # Identidade desta sessão: a lease de controle físico pertence a ela
                 sessao_id = secrets.token_urlsafe(12)
                 # A sessão Live nativa é a única identidade: dona E usuária das leases do Modo IDE
@@ -1409,24 +1520,21 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 # Se houver autorização pendente, palavras de confirmação/rejeição resolvem imediatamente
                                 if pending_confirmations:
                                     txt_lower = user_text.lower().strip()
-                                    palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder", "fazer teste"}
-                                    palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "no"}
-                                    
-                                    if any(txt_lower == p or txt_lower.startswith(p + " ") or txt_lower.endswith(" " + p) for p in palavras_sim):
+                                    if palavra_confirma(user_text):
                                         for cid, fut in list(pending_confirmations.items()):
                                             if not fut.done():
                                                 fut.set_result(True)
                                         logger.info(f"✅ [POLICY CONFIRMED BY TEXT]: '{user_text}'")
                                         record_event("user_confirmed_via_text", {"text": user_text})
-                                        if txt_lower in palavras_sim:
+                                        if txt_lower in PALAVRAS_SIM:
                                             continue
-                                    elif any(txt_lower == p or txt_lower.startswith(p + " ") for p in palavras_nao):
+                                    elif palavra_recusa(user_text):
                                         for cid, fut in list(pending_confirmations.items()):
                                             if not fut.done():
                                                 fut.set_result(False)
                                         logger.info(f"❌ [POLICY DENIED BY TEXT]: '{user_text}'")
                                         record_event("user_denied_via_text", {"text": user_text})
-                                        if txt_lower in palavras_nao:
+                                        if txt_lower in PALAVRAS_NAO:
                                             continue
                                 record_event("user_text", {"text": user_text})
                                 gemini_bridge.log_audit_event("USER", "chat_input", user_text)
@@ -1494,7 +1602,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     while True:
                         try:
                             async for response in session.receive():
-                                server_content = response.server_content
+                                server_content = getattr(response, "server_content", None)
                                 if server_content is not None:
                                     if server_content.interrupted:
                                         assistant_state["busy"] = False
@@ -1575,7 +1683,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         await safe_send_json({"type": "turn_complete"})
 
                                 # Tratamento de Function Calling (Ferramentas do SO)
-                                tool_call = response.tool_call
+                                tool_call = getattr(response, "tool_call", None)
                                 if tool_call is not None:
                                     assistant_state["busy"] = True
                                     function_responses = []
@@ -1606,13 +1714,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         else:
                                             executor = system_tools.TOOL_REGISTRY.get(func_name)
                                             if executor:
+                                                timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
                                                 try:
                                                     if inspect.iscoroutinefunction(executor):
-                                                        res = await asyncio.wait_for(executor(**args), timeout=30.0)
+                                                        res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
                                                     else:
-                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=30.0)
+                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
                                                 except asyncio.TimeoutError:
-                                                    res = {"sucesso": False, "erro": f"Timeout (30s) na execução da ferramenta {func_name}."}
+                                                    res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
                                                 except Exception as exc:
                                                     res = {"sucesso": False, "erro": str(exc)}
                                             else:
@@ -1683,9 +1792,13 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         await session.send_tool_response(function_responses=function_responses)
 
                         except Exception as gemini_err:
+                            codigo_fechamento = getattr(gemini_err, "code", None)
+                            if codigo_fechamento in (1000, 1001):
+                                logger.info("Conexão do Gemini Live encerrada de forma limpa pelo servidor (close %s).", codigo_fechamento)
+                                raise EncerramentoLimpoDaSessao() from gemini_err
                             # Propaga: o TaskGroup cancela os demais workers e o handler externo
                             # faz o failover de conta. Encerrar em silêncio deixava a sessão zumbi.
-                            logger.error(f"Erro no loop contínuo do Gemini Live: {gemini_err}")
+                            logger.exception("Erro no loop contínuo do Gemini Live: %s", gemini_err)
                             raise
 
                 # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
@@ -1716,6 +1829,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         tg.create_task(control_lease_worker())
                 except* WebSocketDisconnect:
                     logger.info("Cliente Web HUD desconectado.")
+                except* EncerramentoLimpoDaSessao:
+                    logger.info("Sessão do Gemini Live encerrada de forma limpa pela API (close 1000/1001).")
                 finally:
                     await transcritor_dedicado.close()
                     for t in list(_conn_background_tasks):
@@ -1731,17 +1846,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
             return
         except Exception as e:
             last_err = e
+            consecutive_failures += 1
+            espera = min(1 << (consecutive_failures - 1), 30)
             next_idx = (idx + 1) % len(key_pool)
             record_event("account_failover", {
                 "from_index": idx + 1,
                 "to_index": next_idx + 1,
                 "reason": str(e)
             })
-            logger.warning(f"Conta {idx+1} falhou ({e}). Tentando próxima do pool...")
+            logger.warning(f"Conta {idx+1} falhou ({e}). Tentando próxima do pool em {espera}s...")
             try:
                 await safe_send_json({"type": "warn", "message": f"Conta {idx+1} falhou, rotacionando para próxima..."})
             except Exception:
                 pass
+            await asyncio.sleep(espera)
             continue
 
     err_final = f"Todas as contas do pool falharam: {last_err}"

@@ -10,7 +10,8 @@ from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.smart_home")
 
-ASSETS_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "estado_padrao.json")
+RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ASSETS_PADRAO = os.path.join(RAIZ, "skills", "smart-home", "assets", "estado_padrao.json")
 
 # Fallback embutido caso o arquivo de camada L3 (assets/) seja removido.
 ESTADO_FALLBACK = {
