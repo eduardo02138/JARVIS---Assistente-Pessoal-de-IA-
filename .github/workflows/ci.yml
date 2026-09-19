@@ -29,11 +29,45 @@ jobs:
 
       - name: Static Syntax Compilation Check
         run: |
-          python -m py_compile server.py live_protocolo.py provider_router.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py mcp_client_manager.py monitoring/test_suite.py app.py servidor_adk.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
+          python -m py_compile server.py live_protocolo.py provider_router.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py mcp_client_manager.py monitoring/test_suite.py app.py agentes/assistente.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
 
       - name: Runtime Module Import Check (Smoke Test)
         run: |
-          python -c "import servidor_adk; import server; import live_protocolo; import provider_router; import policy_engine; import system_tools; import mcp_client_manager; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
+          python -c "import server; import live_protocolo; import provider_router; import policy_engine; import system_tools; import mcp_client_manager; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
+
+      - name: Guard - Toda funcao test_* deve estar no runner explicito das suites por script
+        env:
+          GEMINI_API_KEY: "ci-dummy-key-test"
+          JARVIS_TOKEN: "ci-secret-token-test-123"
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import inspect
+          from collections import defaultdict
+          import monitoring.test_suite as ts
+          import monitoring.test_adk as ta
+
+          PARES = [
+              ("monitoring.test_suite", ts, (ts.main, ts.run_p0_suite)),
+              ("monitoring.test_adk", ta, (ta.executar_todos_testes_adk,)),
+          ]
+          falhas = []
+          for rotulo, modulo, runners in PARES:
+              fonte_runners = "\n".join(inspect.getsource(r) for r in runners)
+              nomes_por_funcao = defaultdict(set)
+              for nome in dir(modulo):
+                  if nome.startswith("test_"):
+                      obj = getattr(modulo, nome, None)
+                      if callable(obj):
+                          nomes_por_funcao[id(obj)].add(nome)
+              for nomes in nomes_por_funcao.values():
+                  # Alias (ex.: test_game_timer_expiration = test_game_companion_timer)
+                  # valem se qualquer um dos nomes da função aparece no runner.
+                  if not any(n in fonte_runners for n in nomes):
+                      falhas.append(f"{rotulo}.{sorted(nomes)}")
+          if falhas:
+              raise SystemExit("Funcoes test_* fora da lista de execucao explicita: " + ", ".join(falhas))
+          print("OK: todas as funcoes test_* estao listadas nos runners manuais")
+          PY
 
       - name: Run R1 Trust Gates Suite
         env:

@@ -6,7 +6,7 @@ Testa:
 3. Execução de ferramentas via McpToolset com governança e PolicyEngine.
 4. Encerramento limpo e ordenado de conexões (close_all).
 5. Integração com agentes ADK (assistente_rapido e coordenador).
-6. Endpoints /api/mcp/servers e /api/health no servidor_adk.py.
+6. Endpoints /api/mcp/servers e /api/health na app unificada (server.py).
 """
 
 import asyncio
@@ -137,10 +137,10 @@ def test_agentes_incorporam_mcp_toolset():
     assert len(agente_coord.tools) > 0
 
 
-def test_endpoints_mcp_no_servidor_adk():
-    """Valida os endpoints /api/mcp/servers e /api/health no servidor_adk.py."""
-    import servidor_adk
-    client = TestClient(servidor_adk.app)
+def test_endpoints_mcp_app_unificada():
+    """Valida os endpoints /api/mcp/servers e /api/health na app unificada (server.py)."""
+    import server
+    client = TestClient(server.app)
 
     # Health check deve listar mcp_servers
     res_health = client.get("/api/health")

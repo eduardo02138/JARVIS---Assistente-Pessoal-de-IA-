@@ -9,7 +9,7 @@ Testa:
 5. Autenticação obrigatória nos endpoints HTTP do ADK (401 sem token / 200 com token).
 6. Handshake seguro no WebSocket /ws/live_adk e confirmação digitada no Live.
 7. Confirmação comportamental por VOZ no Live ADK (input_transcription -> 'sim' -> origem 'voz' -> consumo one-shot).
-8. Smoke test do servidor_adk.py standalone (garantindo ausência de erros de importação em runtime).
+8. Smoke test do server.py standalone (app unificada) garantindo ausência de erros de importação em runtime.
 """
 
 import sys
@@ -25,7 +25,7 @@ for venv_site in [
 
 # As suítes abrem vários TestClient(app) em sequência, e cada um cria e destrói
 # o próprio event loop. O DatabaseSessionService é um singleton de módulo criado
-# no import de server.py / servidor_adk.py, então o engine aiosqlite fica preso
+# no import de server.py, então o engine aiosqlite fica preso
 # ao primeiro loop: quando o segundo TestClient sobe, a worker thread do aiosqlite
 # chama call_soon_threadsafe num loop já fechado e o pool do SQLAlchemy despeja
 # "Event loop is closed", "no active connection" e avisos de coleta de lixo no
@@ -267,31 +267,32 @@ def test_confirmacao_comportamental_voz_live_adk():
     print(" [✔ PASS] Confirmação Comportamental por Comando de VOZ no Live ADK (origem: voz)")
 
 
-def test_smoke_servidor_adk_standalone():
-    """Valida que servidor_adk.py funciona de forma standalone sem falhas de importação em runtime."""
-    import servidor_adk
-    assert hasattr(servidor_adk, "app")
-    assert hasattr(servidor_adk, "verify_jarvis_token")
-    client = TestClient(servidor_adk.app)
+def test_smoke_servidor_standalone():
+    """Valida que server.py funciona de forma standalone sem falhas de importação em runtime."""
+    import server
+    assert hasattr(server, "app")
+    assert hasattr(server, "verify_jarvis_token")
+    assert hasattr(server, "obter_runner")
+    client = TestClient(server.app)
     resp_saude = client.get("/api/health")
     assert resp_saude.status_code == 200
     assert resp_saude.json().get("status") == "online"
+    assert "mcp_servers" in resp_saude.json()
 
     resp_auth = client.get("/api/auth/session")
     assert resp_auth.status_code == 200
     assert "token" in resp_auth.json()
-    print(" [✔ PASS] Smoke Test servidor_adk.py Standalone (Runtime e Endpoints)")
+    print(" [✔ PASS] Smoke Test server.py Standalone (App Unificada e Endpoints)")
 
 
 def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     """Valida que POST /api/chat ('sim') aprova a ação pendente usando session_id e user_id (P0.17.1)."""
     import server
-    import servidor_adk
     from unittest.mock import patch, MagicMock
 
     auth_headers = {"X-Jarvis-Token": server.JARVIS_SECRET_TOKEN}
 
-    # 1. Teste no server.py
+    # 1. Teste na app unificada (server.py)
     client_server = TestClient(server.app)
     sess_1 = "sessao-chat-srv"
     user_1 = "usuario-chat-srv"
@@ -300,7 +301,9 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     assert pending_1.status == "pending"
 
     async def mock_run_async(*a, **kw):
-        if False: yield
+        if False:
+            yield
+
     mock_runner_obj = MagicMock()
     mock_runner_obj.run_async = mock_run_async
 
@@ -316,27 +319,7 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     consumido_1 = policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_1, user_id=user_1)
     assert consumido_1 is True, "server.py /api/chat -> 'sim' falhou em aprovar ação com user_id!"
 
-    # 2. Teste no servidor_adk.py (standalone)
-    auth_headers_adk = {"X-Jarvis-Token": servidor_adk.JARVIS_SECRET_TOKEN}
-    client_adk = TestClient(servidor_adk.app)
-    sess_2 = "sessao-chat-adk"
-    user_2 = "usuario-chat-adk"
-    args_2 = {"url": "https://adk.com"}
-    pending_2 = policy_engine.create_pending_action("abrir_site", args_2, session_id=sess_2, user_id=user_2)
-    assert pending_2.status == "pending"
-
-    with patch("servidor_adk.obter_runner", return_value=mock_runner_obj):
-        resp_2 = client_adk.post(
-            "/api/chat",
-            json={"texto": "sim, pode executar", "sessao": sess_2, "usuario": user_2},
-            headers=auth_headers_adk
-        )
-        assert resp_2.status_code == 200
-
-    consumido_2 = policy_engine.consume_authorization("abrir_site", args_2, session_id=sess_2, user_id=user_2)
-    assert consumido_2 is True, "servidor_adk.py /api/chat -> 'sim' falhou em aprovar ação com user_id!"
-
-    # 3. Teste de rejeição por incompatibilidade de user_id
+    # 2. Teste de rejeição por incompatibilidade de user_id
     sess_3 = "sessao-chat-fail"
     user_dono = "usuario-legitimo"
     user_invasor = "usuario-invasor"
@@ -351,7 +334,7 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     # Não deve ter aprovado para o dono nem para o invasor
     assert policy_engine.consume_authorization("abrir_site", args_1, session_id=sess_3, user_id=user_dono) is False
 
-    print(" [✔ PASS] Confirmação via POST /api/chat ('sim') em server.py e servidor_adk.py com user_id (P0.17.1)")
+    print(" [✔ PASS] Confirmação via POST /api/chat ('sim') na app unificada com user_id (P0.17.1)")
 
 
 def test_todas_ferramentas_conectadas_ao_agente():
@@ -414,32 +397,33 @@ def test_todas_ferramentas_conectadas_ao_agente():
 
 
 def test_compaction_config_e_app():
-    """Valida que os Runners do server.py e servidor_adk.py utilizam App com EventsCompactionConfig e MemoryService."""
-    from server import obter_runner_adk
-    from servidor_adk import obter_runner
+    """Valida que a fábrica unificada do server.py usa App com EventsCompactionConfig, cache e MemoryService."""
+    from server import obter_runner_adk, obter_runner
 
     r_srv = obter_runner_adk("coordenador")
-    assert r_srv.app is not None, "Runner server.py deve ser instanciado via App"
+    assert r_srv.app is not None, "Runner deve ser instanciado via App"
     assert r_srv.app.events_compaction_config is not None, "App deve possuir EventsCompactionConfig"
     assert r_srv.app.events_compaction_config.token_threshold == 4000
     assert r_srv.app.events_compaction_config.event_retention_size == 5
-    assert r_srv.app.context_cache_config is not None, "App server.py deve possuir ContextCacheConfig"
+    assert r_srv.app.context_cache_config is not None, "App deve possuir ContextCacheConfig"
     assert r_srv.app.context_cache_config.min_tokens == 2048
     assert r_srv.app.context_cache_config.ttl_seconds == 600
     assert r_srv.app.context_cache_config.cache_intervals == 5
-    assert r_srv.memory_service is not None, "Runner server.py deve possuir memory_service injetado"
+    assert r_srv.memory_service is not None, "Runner deve possuir memory_service injetado"
 
+    # obter_runner (alias canônico do servidor ADK antigo) aponta para a mesma fábrica
     r_adk = obter_runner("complexo")
-    assert r_adk.app is not None, "Runner servidor_adk.py deve ser instanciado via App"
-    assert r_adk.app.events_compaction_config is not None, "App deve possuir EventsCompactionConfig"
+    assert r_adk is r_srv, "obter_runner e obter_runner_adk devem servir o mesmo runner unificado"
+    assert r_adk.app is not None, "Runner obter_runner deve ser instanciado via App"
+    assert r_adk.app.events_compaction_config is not None
     assert r_adk.app.events_compaction_config.token_threshold == 4000
     assert r_adk.app.events_compaction_config.event_retention_size == 5
-    assert r_adk.app.context_cache_config is not None, "App servidor_adk.py deve possuir ContextCacheConfig"
+    assert r_adk.app.context_cache_config is not None
     assert r_adk.app.context_cache_config.min_tokens == 2048
     assert r_adk.app.context_cache_config.ttl_seconds == 600
     assert r_adk.app.context_cache_config.cache_intervals == 5
-    assert r_adk.memory_service is not None, "Runner servidor_adk.py deve possuir memory_service injetado"
-    print(" [✔ PASS] Compactação de Contexto (EventsCompactionConfig), Cache (ContextCacheConfig) & Injeção de App nos Runners")
+    assert r_adk.memory_service is not None, "Runner obter_runner deve possuir memory_service injetado"
+    print(" [✔ PASS] Compactação de Contexto (EventsCompactionConfig), Cache (ContextCacheConfig) & Injeção de App na Fábrica Unificada")
 
 
 def _executar_coro(coro):
@@ -558,7 +542,7 @@ def executar_todos_testes_adk():
     test_autenticacao_e_confirmacao_live_adk_por_texto()
     test_confirmacao_comportamental_voz_live_adk()
     test_confirmacao_chat_http_texto_com_isolamento_user_id()
-    test_smoke_servidor_adk_standalone()
+    test_smoke_servidor_standalone()
     test_todas_ferramentas_conectadas_ao_agente()
     test_compaction_config_e_app()
     test_memoria_longo_prazo_persistente()

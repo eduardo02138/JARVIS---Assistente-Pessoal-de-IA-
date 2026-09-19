@@ -720,6 +720,40 @@ body {
     color: #66b2ff;
 }
 
+.thought-block {
+    align-self: flex-start;
+    max-width: 85%;
+    font-size: 12px;
+    line-height: 1.45;
+    border: 1px dashed rgba(255, 187, 0, 0.35);
+    border-radius: 8px;
+    background: rgba(120, 90, 0, 0.08);
+    overflow: hidden;
+    animation: fadeIn 0.3s ease;
+}
+
+.thought-header {
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: rgba(255, 187, 0, 0.85);
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.thought-header:hover {
+    background: rgba(255, 187, 0, 0.08);
+}
+
+.thought-body {
+    color: rgba(230, 230, 230, 0.55);
+    padding: 0 12px 10px 12px;
+    font-style: italic;
+    white-space: pre-wrap;
+}
+
 .quick-commands-box {
     margin-top: 8px;
     display: flex;

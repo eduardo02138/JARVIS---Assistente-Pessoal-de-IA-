@@ -767,94 +767,56 @@ def test_gate7_system_status_cpu_check_is_non_blocking():
 
 
 def test_gate7_tool_execution_does_not_block_live_event_loop():
-    """Gate 7.3: Ferramentas síncronas demoradas despachadas via to_thread não bloqueiam o event loop."""
-    async def _run_test():
-        loop_ticks = 0
-        running = True
+    """Gate 7.3: Produção despacha ferramentas síncronas via asyncio.to_thread.
 
-        async def loop_ticker():
-            nonlocal loop_ticks, running
-            while running:
-                await asyncio.sleep(0.01)
-                loop_ticks += 1
+    O wrapper de ferramentas do agentes/ferramentas.py offloada handlers
+    síncronos para o thread pool (asyncio.to_thread) em vez de rodá-los no event
+    loop; o dispatch do servidor usa o mesmo padrão para executors síncronos.
+    """
+    import inspect
+    import agentes.ferramentas as af
 
-        # Tarefa síncrona demorada (ex: simula comando no SO que leva 200ms)
-        def blocking_tool():
-            time.sleep(0.2)
-            return {"sucesso": True, "resultado": "concluido"}
+    src_wrapper = inspect.getsource(af.obter_todas_ferramentas_adk)
+    assert "inspect.iscoroutinefunction" in src_wrapper
+    assert "asyncio.to_thread" in src_wrapper, (
+        "FALHA GATE 7: wrapper de ferramentas síncronas não usa asyncio.to_thread!"
+    )
 
-        # Inicia ticker concorrente no event loop
-        ticker_task = asyncio.create_task(loop_ticker())
-
-        # Despacha a ferramenta com offload assíncrono (mesmo padrão adotado no server.py)
-        res = await asyncio.wait_for(asyncio.to_thread(blocking_tool), timeout=2.0)
-        running = False
-        await ticker_task
-
-        assert res.get("sucesso") is True
-        # Se estivesse bloqueando o loop, loop_ticks seria 0 ou 1. Como é não-bloqueante, rodou várias vezes.
-        assert loop_ticks >= 8, (
-            f"FALHA GATE 7: Event loop congelou durante execução da ferramenta! Ticks: {loop_ticks}"
-        )
-
-    asyncio.run(_run_test())
+    import server
+    src_dispatch = inspect.getsource(server.websocket_live_endpoint)
+    assert "asyncio.to_thread" in src_dispatch, (
+        "FALHA GATE 7: dispatch do servidor não offloada executors síncronos com asyncio.to_thread!"
+    )
 
 
 def test_gate7_concurrent_websocket_writes_are_serialized():
-    """Gate 7.4: Envios simultâneos via safe_send_json devem ser estritamente serializados por lock."""
-    async def _run_test():
-        # Simula WebSocket com detecção de reentrância/colisão concorrente
-        class MockWS:
-            def __init__(self):
-                self.in_send = False
-                self.sent_messages = []
+    """Gate 7.4: safe_send_json de produção (server.py) serializa envios por asyncio.Lock."""
+    import inspect
+    import server
 
-            async def send_json(self, payload):
-                if self.in_send:
-                    raise RuntimeError("COLISÃO CONCORRENTE: Tentativa de escrita simultânea sem lock!")
-                self.in_send = True
-                await asyncio.sleep(0.005)  # Breve latência I/O
-                self.sent_messages.append(payload)
-                self.in_send = False
-
-        ws = MockWS()
-        ws_send_lock = asyncio.Lock()
-
-        async def safe_send_json(payload):
-            async with ws_send_lock:
-                await ws.send_json(payload)
-
-        # Dispara 20 escritas simultâneas
-        tasks = [safe_send_json({"idx": i}) for i in range(20)]
-        await asyncio.gather(*tasks)
-
-        assert len(ws.sent_messages) == 20
-        indices = {m["idx"] for m in ws.sent_messages}
-        assert indices == set(range(20))
-
-    asyncio.run(_run_test())
+    for endpoint_name in ("websocket_live_endpoint", "live_adk"):
+        src_endpoint = inspect.getsource(getattr(server, endpoint_name))
+        assert "ws_send_lock = asyncio.Lock()" in src_endpoint, (
+            f"FALHA GATE 7: {endpoint_name} não cria ws_send_lock (asyncio.Lock)!"
+        )
+        assert "async with ws_send_lock:" in src_endpoint, (
+            f"FALHA GATE 7: {endpoint_name} não serializa envios pela lock!"
+        )
 
 
 def test_gate7_tool_execution_timeout_fails_closed():
-    """Gate 7.5: Se uma ferramenta travar ou exceder o timeout, deve falhar fechada com erro estruturado."""
-    async def _run_test():
-        def hanging_tool():
-            time.sleep(2.0)
-            return {"sucesso": True}
+    """Gate 7.5: Dispatch de produção usa asyncio.wait_for; TimeoutError vira erro fail-closed."""
+    import inspect
+    import server
 
-        # Despacha com timeout curto (50ms)
-        func_name = "ferramenta_travada"
-        try:
-            res = await asyncio.wait_for(asyncio.to_thread(hanging_tool), timeout=0.05)
-        except asyncio.TimeoutError:
-            res = {"sucesso": False, "erro": f"Timeout (30s) na execução da ferramenta {func_name}."}
-        except Exception as exc:
-            res = {"sucesso": False, "erro": str(exc)}
-
-        assert res["sucesso"] is False
-        assert "Timeout" in res["erro"]
-
-    asyncio.run(_run_test())
+    src_dispatch = inspect.getsource(server.websocket_live_endpoint)
+    assert "asyncio.wait_for" in src_dispatch, (
+        "FALHA GATE 7: dispatch de ferramentas não aplica asyncio.wait_for!"
+    )
+    assert "asyncio.TimeoutError" in src_dispatch
+    assert '{"sucesso": False, "erro": f"Timeout (' in src_dispatch, (
+        "FALHA GATE 7: TimeoutError não produz erro estruturado fail-closed!"
+    )
 
 
 

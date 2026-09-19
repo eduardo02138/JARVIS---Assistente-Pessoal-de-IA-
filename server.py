@@ -39,6 +39,7 @@ from agentes.assistente import (
     MODELO_LIVE,
     MODELO_TEXTO_RESERVA,
     MODELO_LIVE_RESERVA,
+    MODELO_LIVE_EXTENDED,
 )
 from agentes.roteador import escolher_caminho, CAMINHO_RAPIDO, CAMINHO_COMPLEXO
 from agentes.computer_use.agente import MODELO_COMPUTER, criar_agente_computer_use
@@ -165,9 +166,9 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 WIDGET_DIR = os.path.join(os.path.dirname(__file__), "gemini-live-widget")
 app.mount("/widget", StaticFiles(directory=WIDGET_DIR, html=True), name="gemini-live-widget")
 
-# Cliente próprio do servidor ADK unificado (antes servido por servidor_adk.py)
+# Cliente próprio do servidor ADK unificado
 STATIC_ADK_DIR = os.path.join(os.path.dirname(__file__), "static_adk")
-app.mount("/static_adk", StaticFiles(directory=STATIC_ADK_DIR), name="static_adk")
+app.mount("/static_adk", StaticFiles(directory=STATIC_ADK_DIR, html=True), name="static_adk")
 
 MONITORING_DIR = os.path.join(os.path.dirname(__file__), "monitoring")
 
@@ -186,10 +187,18 @@ def check_omniroute_status() -> dict:
     """Verifica se o OmniRoute (segundo provedor) está operacional via OmniRouteProvider."""
     return OmniRouteProvider.check_status()
 
+
+def _status_mcp_sanitizado() -> list:
+    """Status dos servidores MCP sem expor binários, URLs ou filtros (health é público)."""
+    from mcp_client_manager import mcp_client_manager
+    return [
+        {"nome": s["nome"], "tipo": s["tipo"], "ativo": s["ativo"]}
+        for s in mcp_client_manager.status()
+    ]
+
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    from mcp_client_manager import mcp_client_manager
     key_pool = GoogleStudioProvider.get_keys()
     has_key = bool(key_pool)
     omni = check_omniroute_status()
@@ -205,6 +214,7 @@ async def health_check():
         "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
         "modelo_live": MODELO_LIVE,
         "modelo_live_reserva": MODELO_LIVE_RESERVA,
+        "modelo_live_extended": MODELO_LIVE_EXTENDED,
         "modelo_texto": MODELO_TEXTO,
         "modelo_texto_reserva": MODELO_TEXTO_RESERVA,
         "modelo_computador": MODELO_COMPUTER,
@@ -213,7 +223,7 @@ async def health_check():
         "sessoes": type(session_service_adk).__name__,
         "voz": VOZ,
         "modo_computador": policy_engine.computer_lease_status(),
-        "mcp_servers": mcp_client_manager.status(),
+        "mcp_servers": _status_mcp_sanitizado(),
     }
 
 @app.get("/api/mcp/servers")
@@ -483,26 +493,34 @@ Diretrizes fundamentais:
    - Ao executar a ferramenta, confirme em voz alta os dados principais de CPU, RAM e GPU e assegure ao Senhor que o painel de telemetria em tempo real foi aberto diretamente na janela do assistente sobreposta na tela.
 """
 
-def build_gemini_tools():
-    return [
-        types.Tool(
-            function_declarations=[
-                types.FunctionDeclaration(
-                    name=decl["name"],
-                    description=decl["description"],
-                    parameters=types.Schema(
-                        type=decl["parameters"].get("type", "OBJECT"),
-                        properties={
-                            k: types.Schema(type=v["type"], description=v.get("description", ""))
-                            for k, v in decl["parameters"].get("properties", {}).items()
-                        },
-                        required=decl["parameters"].get("required", [])
-                    )
-                )
-                for decl in system_tools.GEMINI_FUNCTION_DECLARATIONS
-            ]
+def build_gemini_tools(behavior_nao_bloqueante: bool = False):
+    """Monta as ferramentas para a sessão Live a partir do registro central.
+
+    `behavior_nao_bloqueante=True` (obrigatório para `gemini-3.8-live-extended-thinking`)
+    marca toda FunctionDeclaration com behavior="NON_BLOCKING": a chamada vira
+    assíncrona e o modelo segue falando enquanto a ferramenta executa.
+    """
+    declaracoes = []
+    for decl in system_tools.GEMINI_FUNCTION_DECLARATIONS:
+        kwargs = {}
+        if behavior_nao_bloqueante:
+            kwargs["behavior"] = "NON_BLOCKING"
+        declaracoes.append(
+            types.FunctionDeclaration(
+                name=decl["name"],
+                description=decl["description"],
+                parameters=types.Schema(
+                    type=decl["parameters"].get("type", "OBJECT"),
+                    properties={
+                        k: types.Schema(type=v["type"], description=v.get("description", ""))
+                        for k, v in decl["parameters"].get("properties", {}).items()
+                    },
+                    required=decl["parameters"].get("required", [])
+                ),
+                **kwargs,
+            )
         )
-    ]
+    return [types.Tool(function_declarations=declaracoes)]
 
 # ----------------- WEBSOCKET BRIDGE COM GEMINI LIVE -----------------
 
@@ -887,18 +905,43 @@ def _env_json(nome: str, padrao=None):
         return padrao
 
 
-def montar_run_config() -> RunConfig:
+def montar_thinking_config(model_name: str) -> dict:
+    """Raciocínio da LiveConnectConfig por modelo.
+
+    - `gemini-3.8-live`: docs instruem omitir thinking_config (raciocínio
+      intercalado nativo por padrão).
+    - `gemini-3.8-live-extended-thinking`: raciocínio em segundo plano,
+      nível configurável via LIVE_THINKING_LEVEL (low|medium|high).
+    - Modelos legados (2.5): budget zerado para resposta imediata.
+    """
+    if "extended-thinking" in model_name:
+        nivel = os.environ.get("LIVE_THINKING_LEVEL", "low").strip().lower()
+        if nivel not in ("low", "medium", "high"):
+            nivel = "low"
+        return {"thinking_config": types.ThinkingConfig(thinking_level=nivel)}
+    if "3.8" not in model_name:
+        return {"thinking_config": types.ThinkingConfig(thinking_budget=0)}
+    return {}
+
+
+def montar_run_config(modelo: str = "") -> RunConfig:
     """Modalidades, voz, transcrição e tuning opcional da sessão Live do ADK.
 
     Recursos extras (proatividade, diálogo afetivo, VAD etc.) só entram na
     configuração quando as variáveis de ambiente os ativam:
       LIVE_PROATIVITY, LIVE_AFFECTIVE_DIALOG, LIVE_EXPLICIT_VAD,
-      LIVE_SAVE_BLOB, LIVE_VAD_DISABLED, LIVE_METADADOS.
+      LIVE_SAVE_BLOB, LIVE_VAD_DISABLED, LIVE_METADADOS, LIVE_AUTO_LANG.
+
+    Limitação do caminho ADK: o RunConfig do ADK instalado não aceita
+    thinking_config nem behavior nas tools. Para `gemini-3.8-live-extended-thinking`
+    completo (raciocínio em 2º plano + tools NON_BLOCKING), use o caminho nativo
+    /ws/live. Aqui o modelo extended segue utilizável com os defaults da API.
     """
+    modelado = modelo or ""
     cfg: dict = {
         "response_modalities": ["AUDIO"],
         "speech_config": types.SpeechConfig(
-            language_code=IDIOMA,
+            **({} if _env_flag("LIVE_AUTO_LANG") else {"language_code": IDIOMA}),
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOZ)
             ),
@@ -914,7 +957,11 @@ def montar_run_config() -> RunConfig:
     if _env_flag("LIVE_PROATIVITY"):
         cfg["proactivity"] = types.ProactivityConfig(proactive_audio=True)
     if _env_flag("LIVE_AFFECTIVE_DIALOG"):
-        cfg["enable_affective_dialog"] = True
+        # Diálogo afetivo foi removido da API nos modelos 3.8 (config = erro).
+        if "3.8" in modelado:
+            logger.warning("LIVE_AFFECTIVE_DIALOG ignorado: recurso removido nos modelos Gemini 3.8.")
+        else:
+            cfg["enable_affective_dialog"] = True
     if _env_flag("LIVE_EXPLICIT_VAD"):
         cfg["explicit_vad_signal"] = True
     if _env_flag("LIVE_SAVE_BLOB"):
@@ -926,6 +973,11 @@ def montar_run_config() -> RunConfig:
     elif _env_flag("JARVIS_BARGE_IN") or _env_flag("LIVE_ALLOW_BARGE_IN"):
         cfg["realtime_input_config"] = types.RealtimeInputConfig(
             activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        )
+    if "extended-thinking" in modelado:
+        logger.info(
+            "Modelo extended no caminho ADK: thinking_config e tools NON_BLOCKING "
+            "não são suportados pelo RunConfig do ADK; usando defaults da API."
         )
     metadados = _env_json("LIVE_METADADOS")
     if metadados:
@@ -1076,13 +1128,16 @@ async def live_adk(
                     await safe_send_json({"tipo": "acao_rejeitada", "action_id": action_id})
 
     async def do_agente_para_o_cliente():
-        run_cfg = montar_run_config()
+        run_cfg = montar_run_config(modelo=getattr(runner.agent, "model", ""))
         async for evento in runner.run_live(
             user_id=usuario,
             session_id=sessao,
             live_request_queue=fila,
             run_config=run_cfg,
         ):
+            status_interacao = getattr(evento, "interaction_status", None)
+            if status_interacao:
+                await safe_send_json({"tipo": "interaction_status", "status": status_interacao})
             parcial = getattr(evento, "interim_input_transcription", None)
             if parcial and parcial.text:
                 await safe_send_json(
@@ -1172,11 +1227,19 @@ async def live_adk(
     except* (ServerError, ClientError) as grupo:
         erro_inst = grupo.exceptions[0]
         logger.warning("Falha na sessão Live ADK (%s). Rotacionando chave e/ou modelo.", erro_inst)
-        girou = girar_chave_adk()
         try:
             trocar_modelo(runner, MODELO_LIVE_RESERVA)
         except Exception:
             pass
+        girou = girar_chave_adk()
+        if girou:
+            # A rotação limpa o cache de runners; aplica a reserva ao runner recriado
+            # para que a próxima conexão já use o modelo reserva (mensagem abaixo verdadeira).
+            novo_runner = obter_runner_adk("voz")
+            try:
+                trocar_modelo(novo_runner, MODELO_LIVE_RESERVA)
+            except Exception:
+                pass
         msg_erro = (
             "Limite ou instabilidade na Live API. Chave rotacionada no pool. Reconecte para continuar."
             if girou
@@ -1273,6 +1336,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
     model_name = req_model or os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+    is_extended = "extended-thinking" in model_name
+    # LIVE_AUTO_LANG: detecta e alterna idioma sozinho durante a conversa.
+    # Sem a flag, o idioma fixo (JARVIS_LANGUAGE) evita troca por ruído.
+    auto_lang = os.environ.get("LIVE_AUTO_LANG", "0").strip().lower() in ("1", "true", "yes", "on")
     req_provider = (init_data.get("provider") or "").strip() or provider_router.active_provider
     allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
     activity_handling = (
@@ -1281,10 +1348,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
         else types.ActivityHandling.NO_INTERRUPTION
     )
 
+    speech_lang_kwargs = {} if auto_lang else {"language_code": os.environ.get("JARVIS_LANGUAGE", "pt-BR")}
     live_connect_kwargs = {
         "response_modalities": [types.Modality.AUDIO],
         "speech_config": types.SpeechConfig(
-            language_code=os.environ.get("JARVIS_LANGUAGE", "pt-BR"),
+            **speech_lang_kwargs,
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
             )
@@ -1292,7 +1360,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         "system_instruction": types.Content(
             parts=[types.Part(text=JARVIS_SYSTEM_INSTRUCTION)]
         ),
-        "tools": build_gemini_tools(),
+        "tools": build_gemini_tools(behavior_nao_bloqueante=is_extended),
         # Dica pt-BR + interim: transcrição parcial chega enquanto fala.
         "input_audio_transcription": transcricao.build_input_transcription_config(),
         "output_audio_transcription": transcricao.build_output_transcription_config(),
@@ -1306,8 +1374,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
     }
 
     # Modelos como gemini-3.8-live instruem explicitamente a omitir thinking_config
-    if "3.8" not in model_name:
-        live_connect_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    live_connect_kwargs.update(montar_thinking_config(model_name))
 
     config = types.LiveConnectConfig(**live_connect_kwargs)
 
@@ -1383,6 +1450,14 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 }
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
+
+                # Rastreio de estado do Extended Thinking (gemini-3.8-live-extended-thinking).
+                # O modelo roda o raciocínio em background e sinaliza a sessão via
+                # interaction_status (IN_PROGRESS/IDLE). turno_concluido evita dupla
+                # finalização quando turn_complete e IDLE chegam juntos.
+                interaction_state = {"status": None}
+                turno_concluido = {"done": False}
+                ferramentas_em_voo = {"n": 0}
 
                 # Transcritor dedicado em tempo real (gemini-3.5-transcribe-live)
                 ultima_transcricao_usuario = {"texto": "", "tempo": 0.0}
@@ -1539,6 +1614,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 record_event("user_text", {"text": user_text})
                                 gemini_bridge.log_audit_event("USER", "chat_input", user_text)
                                 assistant_state["busy"] = True
+                                turno_concluido["done"] = False
                                 assistant_state["ultimo_envio_usuario"] = time.time()
                                 assistant_state["audio_recebido_no_turno"] = 0
                                 assistant_state["texto_recebido_no_turno"] = 0
@@ -1584,6 +1660,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         inj_text = await active_session_queue.get()
                         logger.info(f"Injetando prompt na sessão ativa: '{inj_text}'")
                         assistant_state["busy"] = True
+                        turno_concluido["done"] = False
                         assistant_state["ultimo_envio_usuario"] = time.time()
                         assistant_state["audio_recebido_no_turno"] = 0
                         assistant_state["texto_recebido_no_turno"] = 0
@@ -1599,9 +1676,156 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                 # Worker 3: Lê respostas da Gemini Live API continuamente para todos os turnos
                 async def from_gemini_worker():
+                    # Lock do envio de tool response: a sessão Live não aceita chamadas
+                    # concorrentes de send_tool_response quando ferramentas rodam em background.
+                    tool_resp_lock = asyncio.Lock()
+
+                    async def executar_ferramenta(func_name: str, call_id: str, args: dict):
+                        """Pipeline de Function Calling em modo assíncrono (ferramentas NON_BLOCKING).
+
+                        Roda em background (asyncio.create_task): o receive loop continua
+                        consumindo áudio/raciocínio enquanto a ferramenta trabalha. No
+                        gemini-3.8-live default (flip async), as tools chegam em lote; o
+                        lock serializa o send_tool_response para respeitar a sessão.
+                        """
+                        ferramentas_em_voo["n"] += 1
+                        try:
+                            # Avaliação de autorização pelo Policy Engine
+                            decision = policy_engine.evaluate(func_name, args, session_id=sessao_id, user_id=usuario_id)
+                            approved = True
+                            if decision.allowed and decision.requires_confirmation:
+                                approved = await request_user_confirmation(call_id, func_name, args, decision)
+
+                            if not decision.allowed:
+                                res = {"sucesso": False, "erro": f"Execução bloqueada pelo Policy Engine: {decision.reason}"}
+                                record_event("policy_blocked", {"name": func_name, "decision": decision.reason, "risk": decision.risk_level.value})
+                            elif not approved:
+                                res = {"sucesso": False, "erro": "Execução negada: o usuário não confirmou esta ação."}
+                                record_event("policy_denied_by_user", {"name": func_name, "risk": decision.risk_level.value, "args": args})
+                            else:
+                                executor = system_tools.TOOL_REGISTRY.get(func_name)
+                                if executor:
+                                    timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
+                                    try:
+                                        if inspect.iscoroutinefunction(executor):
+                                            res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
+                                        else:
+                                            res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
+                                    except asyncio.TimeoutError:
+                                        res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
+                                    except Exception as exc:
+                                        res = {"sucesso": False, "erro": str(exc)}
+                                else:
+                                    res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
+
+                            assistant_state["ultima_ferramenta"] = func_name
+                            assistant_state["ultimo_resultado_ferramenta"] = res
+                            record_event("tool_result", {"name": func_name, "result": res})
+                            gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
+                            await safe_send_json({"type": "tool_result", "name": func_name, "result": res})
+
+                            if func_name == "set_ide_mode":
+                                await safe_send_json({"type": "ide_mode", "active": res.get("ide_mode", False)})
+
+                            if func_name == "toggle_telemetry_overlay":
+                                await safe_send_json({
+                                    "type": "toggle_telemetry",
+                                    "active": res.get("active", True),
+                                    "telemetry": res.get("telemetry", {})
+                                })
+
+                            if func_name == "set_control_mode":
+                                # A lease dá autoridade temporária ao mouse e ao teclado virtuais
+                                if res.get("sucesso") and res.get("control_mode"):
+                                    lease = policy_engine.grant_control_lease(owner=sessao_id)
+                                    record_event("control_lease_granted", lease)
+                                else:
+                                    lease = policy_engine.revoke_control_lease(session_id=sessao_id)
+                                    record_event("control_lease_revoked", lease)
+                                await safe_send_json({
+                                    "type": "control_mode",
+                                    "active": res.get("control_mode", False),
+                                    "lease": lease,
+                                    "data": res
+                                })
+
+                            if func_name == "set_ide_mode":
+                                # A lease dá autoridade temporária ao agente Antigravity
+                                if res.get("sucesso") and res.get("ide_mode"):
+                                    lease = policy_engine.grant_ide_lease(owner=sessao_id, user_id=usuario_id)
+                                    record_event("ide_lease_granted", lease)
+                                else:
+                                    lease = policy_engine.revoke_ide_lease(session_id=sessao_id, user_id=usuario_id)
+                                    record_event("ide_lease_revoked", lease)
+                                await safe_send_json({
+                                    "type": "ide_mode",
+                                    "active": res.get("ide_mode", False),
+                                    "lease": lease,
+                                    "data": res
+                                })
+
+                            async with tool_resp_lock:
+                                await session.send_tool_response(function_responses=[
+                                    types.FunctionResponse(name=func_name, id=call_id, response={"result": res})
+                                ])
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            logger.exception("Falha no pipeline assíncrono da ferramenta %s: %s", func_name, exc)
+                            try:
+                                async with tool_resp_lock:
+                                    await session.send_tool_response(function_responses=[
+                                        types.FunctionResponse(name=func_name, id=call_id, response={"result": {"sucesso": False, "erro": str(exc)}})
+                                    ])
+                            except Exception:
+                                pass
+                        finally:
+                            ferramentas_em_voo["n"] -= 1
+
+                    async def finalizar_turno():
+                        """Limpa o estado de turno após conclusão (turn_complete ou IDLE)."""
+                        if turno_concluido["done"]:
+                            return
+                        turno_concluido["done"] = True
+                        assistant_state["texto_recebido_no_turno"] = 0
+                        # Resiliência de voz: ferramenta concluída mas o modelo fechou o turno em silêncio
+                        if (assistant_state.get("ultima_ferramenta")
+                                and assistant_state.get("audio_recebido_no_turno", 0) == 0
+                                and assistant_state.get("texto_recebido_no_turno", 0) == 0):
+                            res_ferramenta = assistant_state.get("ultimo_resultado_ferramenta") or {}
+                            msg_fala = res_ferramenta.get("mensagem")
+                            if not msg_fala:
+                                if isinstance(res_ferramenta, dict):
+                                    itens = [f"{k}: {v}" for k, v in res_ferramenta.items() if k != "sucesso"]
+                                    msg_fala = f"Resultado de {assistant_state['ultima_ferramenta']}: {', '.join(itens)}"
+                                else:
+                                    msg_fala = str(res_ferramenta)
+                            logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
+                            record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
+                            await safe_send_json({"type": "fallback_text", "text": msg_fala})
+
+                        assistant_state["busy"] = False
+                        assistant_state["ultima_ferramenta"] = None
+                        assistant_state["ultimo_resultado_ferramenta"] = None
+                        record_event("turn_complete")
+                        await safe_send_json({"type": "turn_complete"})
+
                     while True:
                         try:
                             async for response in session.receive():
+                                # Estado de iteração do Extended Thinking (IN_PROGRESS/IDLE).
+                                # Chega como campo do topo em LiveServerMessage.
+                                status_interacao = getattr(response, "interaction_status", None)
+                                if status_interacao and status_interacao != interaction_state["status"]:
+                                    interaction_state["status"] = status_interacao
+                                    record_event("interaction_status", {"status": status_interacao})
+                                    await safe_send_json({"type": "interaction_status", "status": status_interacao})
+                                    if status_interacao == "IN_PROGRESS":
+                                        assistant_state["busy"] = True
+                                        turno_concluido["done"] = False
+                                    elif status_interacao == "IDLE" and is_extended:
+                                        await finalizar_turno()
+
                                 server_content = getattr(response, "server_content", None)
                                 if server_content is not None:
                                     if server_content.interrupted:
@@ -1638,7 +1862,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             if part.text:
                                                 is_thought = getattr(part, "thought", False) or False
                                                 record_event("model_text", {"text": part.text, "thought": is_thought})
-                                                if not is_thought:
+                                                if is_thought:
+                                                    # Raciocínio explícito do Extended Thinking: exibido no HUD como blur/collapse
+                                                    await safe_send_json({"type": "thought", "text": part.text})
+                                                else:
                                                     assistant_state["texto_recebido_no_turno"] += len(part.text)
                                                     await safe_send_json({
                                                         "type": "text",
@@ -1656,37 +1883,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         await on_transcricao_final(user_trans)
 
                                     if server_content.turn_complete:
-                                        assistant_state["texto_recebido_no_turno"] = 0
-                                        # Resiliência de voz: se uma ferramenta foi concluída mas o modelo fechou o turno em silêncio
-                                        if (assistant_state.get("ultima_ferramenta") 
-                                                and assistant_state.get("audio_recebido_no_turno", 0) == 0 
-                                                and assistant_state.get("texto_recebido_no_turno", 0) == 0):
-                                            res_ferramenta = assistant_state.get("ultimo_resultado_ferramenta") or {}
-                                            msg_fala = res_ferramenta.get("mensagem")
-                                            if not msg_fala:
-                                                if isinstance(res_ferramenta, dict):
-                                                    itens = [f"{k}: {v}" for k, v in res_ferramenta.items() if k != "sucesso"]
-                                                    msg_fala = f"Resultado de {assistant_state['ultima_ferramenta']}: {', '.join(itens)}"
-                                                else:
-                                                    msg_fala = str(res_ferramenta)
-                                            logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
-                                            record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
-                                            await safe_send_json({
-                                                "type": "fallback_text",
-                                                "text": msg_fala
-                                            })
-
-                                        assistant_state["busy"] = False
-                                        assistant_state["ultima_ferramenta"] = None
-                                        assistant_state["ultimo_resultado_ferramenta"] = None
-                                        record_event("turn_complete")
-                                        await safe_send_json({"type": "turn_complete"})
+                                        # No gemini-3.8-live o turn_complete encerra o turno; no
+                                        # extended-thinking o fim real chega com status IDLE
+                                        # (turn_complete pode vir ainda com ferramentas em voo).
+                                        if not is_extended or interaction_state["status"] == "IDLE":
+                                            await finalizar_turno()
 
                                 # Tratamento de Function Calling (Ferramentas do SO)
                                 tool_call = getattr(response, "tool_call", None)
                                 if tool_call is not None:
                                     assistant_state["busy"] = True
-                                    function_responses = []
+                                    turno_concluido["done"] = False
                                     for call in tool_call.function_calls:
                                         func_name = call.name
                                         call_id = call.id
@@ -1699,105 +1906,17 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             "args": args
                                         })
 
-                                        # Avaliação de autorização pelo Policy Engine
-                                        decision = policy_engine.evaluate(func_name, args, session_id=sessao_id, user_id=usuario_id)
-                                        approved = True
-                                        if decision.allowed and decision.requires_confirmation:
-                                            approved = await request_user_confirmation(call_id, func_name, args, decision)
-
-                                        if not decision.allowed:
-                                            res = {"sucesso": False, "erro": f"Execução bloqueada pelo Policy Engine: {decision.reason}"}
-                                            record_event("policy_blocked", {"name": func_name, "decision": decision.reason, "risk": decision.risk_level.value})
-                                        elif not approved:
-                                            res = {"sucesso": False, "erro": "Execução negada: o usuário não confirmou esta ação."}
-                                            record_event("policy_denied_by_user", {"name": func_name, "risk": decision.risk_level.value, "args": args})
-                                        else:
-                                            executor = system_tools.TOOL_REGISTRY.get(func_name)
-                                            if executor:
-                                                timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
-                                                try:
-                                                    if inspect.iscoroutinefunction(executor):
-                                                        res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
-                                                    else:
-                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
-                                                except asyncio.TimeoutError:
-                                                    res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
-                                                except Exception as exc:
-                                                    res = {"sucesso": False, "erro": str(exc)}
-                                            else:
-                                                res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
-
-                                        assistant_state["ultima_ferramenta"] = func_name
-                                        assistant_state["ultimo_resultado_ferramenta"] = res
-                                        record_event("tool_result", {"name": func_name, "result": res})
-                                        gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
-                                        await safe_send_json({
-                                            "type": "tool_result",
-                                            "name": func_name,
-                                            "result": res
-                                        })
-
-                                        if func_name == "set_ide_mode":
-                                            await safe_send_json({
-                                                "type": "ide_mode",
-                                                "active": res.get("ide_mode", False)
-                                            })
-
-                                        if func_name == "toggle_telemetry_overlay":
-                                            await safe_send_json({
-                                                "type": "toggle_telemetry",
-                                                "active": res.get("active", True),
-                                                "telemetry": res.get("telemetry", {})
-                                            })
-
-                                        if func_name == "set_control_mode":
-                                            # A lease dá autoridade temporária ao mouse e ao teclado virtuais
-                                            if res.get("sucesso") and res.get("control_mode"):
-                                                lease = policy_engine.grant_control_lease(owner=sessao_id)
-                                                record_event("control_lease_granted", lease)
-                                            else:
-                                                lease = policy_engine.revoke_control_lease(session_id=sessao_id)
-                                                record_event("control_lease_revoked", lease)
-                                            await safe_send_json({
-                                                "type": "control_mode",
-                                                "active": res.get("control_mode", False),
-                                                "lease": lease,
-                                                "data": res
-                                            })
-
-                                        if func_name == "set_ide_mode":
-                                            # A lease dá autoridade temporária ao agente Antigravity
-                                            if res.get("sucesso") and res.get("ide_mode"):
-                                                lease = policy_engine.grant_ide_lease(owner=sessao_id, user_id=usuario_id)
-                                                record_event("ide_lease_granted", lease)
-                                            else:
-                                                lease = policy_engine.revoke_ide_lease(session_id=sessao_id, user_id=usuario_id)
-                                                record_event("ide_lease_revoked", lease)
-                                            await safe_send_json({
-                                                "type": "ide_mode",
-                                                "active": res.get("ide_mode", False),
-                                                "lease": lease,
-                                                "data": res
-                                            })
-
-                                        function_responses.append(
-                                            types.FunctionResponse(
-                                                name=func_name,
-                                                id=call_id,
-                                                response={"result": res}
-                                            )
-                                        )
-
-                                    if function_responses:
-                                        await session.send_tool_response(function_responses=function_responses)
+                                        # Execução assíncrona: não bloqueia o recebimento de
+                                        # raciocínio e áudio do Gemini enquanto a ferramenta roda.
+                                        asyncio.create_task(executar_ferramenta(func_name, call_id, args))
 
                         except Exception as gemini_err:
                             codigo_fechamento = getattr(gemini_err, "code", None)
-                            if codigo_fechamento in (1000, 1001):
+                            if codigo_fechamento == 1000:
                                 logger.info("Conexão do Gemini Live encerrada de forma limpa pelo servidor (close %s).", codigo_fechamento)
                                 raise EncerramentoLimpoDaSessao() from gemini_err
-                            # Propaga: o TaskGroup cancela os demais workers e o handler externo
-                            # faz o failover de conta. Encerrar em silêncio deixava a sessão zumbi.
+                            # 1001 (going-away) e demais códigos propagam: o TaskGroup cancela
+                            # os demais workers e o handler externo faz o failover de conta.
                             logger.exception("Erro no loop contínuo do Gemini Live: %s", gemini_err)
                             raise
 

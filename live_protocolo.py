@@ -1,12 +1,13 @@
 """Protocolo compartilhado da sessão Gemini Live do J.A.R.V.I.S.
 
-Centraliza lógica duplicada entre server.py e provider_router.py:
+Centraliza lógica antes duplicada em server.py (e no servidor ADK extinto):
 1. Interpretação de palavras de confirmação/recusa ditas ou digitadas pelo usuário.
-2. Carga do pool de chaves Gemini (delega ao GoogleStudioProvider canônico).
+2. Carga do pool de chaves Gemini — delega a GoogleStudioProvider (provider_router.py),
+   fonte canônica; aqui não há loader próprio.
 3. Desativação do timeout de ping do WebSocket Live (evita queda após silêncio).
-4. Encerramento limpo da sessão Live: close codes 1000/1001 são shutdown, não erro.
+4. Encerramento limpo da sessão Live: close code 1000 é shutdown normal, não erro.
 
-server.py e servidor_adk.py importam daqui: sem drift.
+server.py é o único importador: sem drift.
 """
 
 import logging
@@ -21,8 +22,9 @@ except Exception:
 #  bloco 1412-1430 usa palavras_sim/nao — união cobre ambos).
 PALAVRAS_SIM = {
     "sim", "confirmar", "confirmado", "autorizar", "autorizado", "pode",
-    "ok", "prosseguir", "positivo", "permitir", "yes", "conceder", "fazer teste",
+    "ok", "prosseguir", "positivo", "permitir", "yes", "conceder",
 }
+FRASES_SIM = {"fazer teste"}
 PALAVRAS_NAO = {
     "nao", "não", "negar", "negado", "cancelar", "cancela",
     "recusar", "recuso", "no",
@@ -33,10 +35,17 @@ def _limpar(texto: str) -> str:
     return "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
 
 
+def _tem_sim(texto_limpo: str, tokens: set) -> bool:
+    """Palavra única de aceite OU frase multi-word embutida (ex.: 'fazer teste'))."""
+    if tokens & PALAVRAS_SIM:
+        return True
+    return any(frase in texto_limpo for frase in FRASES_SIM)
+
+
 def palavra_confirma(texto: str) -> bool:
     """True se o texto confirma expressamente uma ação pendente.
 
-    Confirmação exige palavra de PALAVRAS_SIM sem nenhuma palavra de recusa:
+    Confirmação exige palavra de aceite sem nenhuma palavra de recusa:
     "sim, pode autorizar" confirma; "sim, cancelar" não confirma.
     """
     if not texto:
@@ -46,7 +55,7 @@ def palavra_confirma(texto: str) -> bool:
         return False
     tokens = set(texto_limpo.split())
     negado = bool(tokens & PALAVRAS_NAO)
-    return (texto_limpo in PALAVRAS_SIM) or (bool(tokens & PALAVRAS_SIM) and not negado)
+    return _tem_sim(texto_limpo, tokens) and not negado
 
 
 def palavra_recusa(texto: str) -> bool:
@@ -57,9 +66,10 @@ def palavra_recusa(texto: str) -> bool:
 
 
 class EncerramentoLimpoDaSessao(Exception):
-    """Sessão Live fechada pela API com close code limpo (1000/1001).
+    """Sessão Live fechada pela API com close code 1000 (shutdown limpo).
 
     Sinaliza shutdown normal: o handler externo não faz failover de conta.
+    Close 1001 (going-away) NÃO é limpo: propaga para o failover rotacionar.
     """
 
 

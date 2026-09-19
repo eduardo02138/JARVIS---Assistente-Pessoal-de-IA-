@@ -19,7 +19,7 @@ load_dotenv(ENV_PATH, override=True)
 
 # As suítes abrem vários TestClient(app) em sequência, e cada um cria e destrói
 # o próprio event loop. O DatabaseSessionService é um singleton de módulo criado
-# no import de server.py / servidor_adk.py, então o engine aiosqlite fica preso
+# no import de server.py, então o engine aiosqlite fica preso
 # ao primeiro loop: quando o segundo TestClient sobe, a worker thread do aiosqlite
 # chama call_soon_threadsafe num loop já fechado e o pool do SQLAlchemy despeja
 # "Event loop is closed", "no active connection" e avisos de coleta de lixo no
@@ -69,6 +69,16 @@ async def test_system_tools():
         return False
 
 async def test_gemini_live_handshake(key):
+    """Handshake bidirecional real com a Gemini Live API.
+
+    Requer rede e conta válida: nunca executa em CI. O runner P0 (--p0) também
+    não chama este cenário; o guard abaixo impede execução acidental quando a
+    variável CI está definida (ex.: pipa do GitHub Actions).
+    """
+    if os.environ.get("CI"):
+        log_test("Gemini Multimodal Live API (Bidirecional)", False,
+                 "Pulada no CI: handshake real exige rede e conta Gemini válida.")
+        return False
     from google import genai
     from google.genai import types
 
@@ -834,7 +844,7 @@ def test_configuracao_de_voz_e_texto():
     import plugin_manager as pm
 
     fonte = inspect.getsource(server)
-    idioma_fixo = "language_code=os.environ.get(\"JARVIS_LANGUAGE\"" in fonte
+    idioma_fixo = 'os.environ.get("JARVIS_LANGUAGE", "pt-BR")' in fonte
     sem_duplicata = fonte.count('"type": "text"') in (1, 2)
     tolerancia_microfone = "MIC_GRACE_S" in fonte
     # Instância nova: mede o padrão de carga, respeitando o estado intencional de JARVIS_ATIVAR_MOCKS
@@ -1023,8 +1033,8 @@ def test_native_ws_ide_lease_branch():
                 ),
                 tool_call=chamada_ide,
             )
-            for _ in range(40):
-                if self.enviados:
+            for _ in range(400):
+                if any(x[0] == "tool_response" for x in self.enviados):
                     break
                 await asyncio_mod.sleep(0.05)
             yield SimpleNamespace(
@@ -1135,13 +1145,13 @@ def test_exact_args_authorization():
     return True
 
 
-def test_servidor_adk_acoes_pendentes_standalone():
-    """Garante que /api/acoes_pendentes executa com time.monotonic() sem NameError."""
+def test_acoes_pendentes_standalone():
+    """Garante que /api/acoes_pendentes executa com time.monotonic() sem NameError na app unificada (server.py)."""
     from fastapi.testclient import TestClient
-    import servidor_adk
+    import server
 
-    client = TestClient(servidor_adk.app)
-    token = servidor_adk.JARVIS_SECRET_TOKEN
+    client = TestClient(server.app)
+    token = server.JARVIS_SECRET_TOKEN
     headers = {"Authorization": f"Bearer {token}"}
 
     resp = client.get("/api/acoes_pendentes?sessao=sessao-teste", headers=headers)
@@ -1150,33 +1160,187 @@ def test_servidor_adk_acoes_pendentes_standalone():
     assert "pendentes" in dados
     assert isinstance(dados["pendentes"], list)
 
-    log_test("Servidor ADK Standalone /api/acoes_pendentes Runtime (P0.18)", True, "time.monotonic() executado sem erro")
+    log_test("Servidor Unificado Standalone /api/acoes_pendentes Runtime (P0.18)", True, "time.monotonic() executado sem erro")
     return True
 
 
 def test_gemini_38_live_config():
-    """Garante que modelos 3.8 omitem thinking_config na LiveConnectConfig."""
+    """Garante que modelos 3.8 omitem thinking_config e montar_run_config respeita flags de ambiente."""
+    import inspect
+    import server
+    from google.genai import types
+
+    # O builder real da LiveConnectConfig do endpoint usa a decisão extraída.
+    src_endpoint = inspect.getsource(server.websocket_live_endpoint)
+    assert 'montar_thinking_config(model_name)' in src_endpoint
+
+    # Comportamental sobre a função de produção: 3.8 omite; demais recebem budget zerado.
+    assert "thinking_config" not in server.montar_thinking_config("gemini-3.8-live")
+    cfg_25 = server.montar_thinking_config("gemini-2.5-flash")
+    assert "thinking_config" in cfg_25
+    assert cfg_25["thinking_config"].thinking_budget == 0
+
+    # montar_run_config (RunConfig do Live ADK unificado): flags do ambiente.
+    BASE = dict(os.environ)
+    LIVE_FLAGS = (
+        "LIVE_PROATIVITY", "LIVE_AFFECTIVE_DIALOG", "LIVE_EXPLICIT_VAD",
+        "LIVE_SAVE_BLOB", "LIVE_VAD_DISABLED", "LIVE_ALLOW_BARGE_IN",
+        "JARVIS_BARGE_IN", "LIVE_METADADOS",
+    )
+
+    def _limpar_flags():
+        for k in LIVE_FLAGS:
+            os.environ.pop(k, None)
+
+    try:
+        _limpar_flags()
+        d_base = server.montar_run_config().model_dump(exclude_unset=True)
+        assert "proactivity" not in d_base
+        assert "enable_affective_dialog" not in d_base
+        assert "save_live_blob" not in d_base
+        assert "realtime_input_config" not in d_base
+        assert "custom_metadata" not in d_base
+        assert d_base["response_modalities"] == [types.Modality.AUDIO]
+
+        for k, v in (
+            ("LIVE_PROATIVITY", "1"),
+            ("LIVE_AFFECTIVE_DIALOG", "1"),
+            ("LIVE_SAVE_BLOB", "1"),
+            ("LIVE_ALLOW_BARGE_IN", "1"),
+            ("LIVE_METADADOS", '{"app":"teste"}'),
+        ):
+            os.environ[k] = v
+        d_on = server.montar_run_config().model_dump(exclude_unset=True)
+        assert d_on["proactivity"] == {"proactive_audio": True}
+        assert d_on["enable_affective_dialog"] is True
+        assert d_on["save_live_blob"] is True
+        assert d_on["custom_metadata"] == {"app": "teste"}
+        assert d_on["realtime_input_config"]["activity_handling"] == (
+            types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        )
+
+        # LIVE_VAD_DISABLED vence sobre barge-in (elif no builder)
+        os.environ["LIVE_VAD_DISABLED"] = "1"
+        d_vad = server.montar_run_config().model_dump(exclude_unset=True)
+        assert "activity_handling" not in d_vad["realtime_input_config"]
+        assert d_vad["realtime_input_config"]["automatic_activity_detection"]["disabled"] is True
+    finally:
+        os.environ.clear()
+        os.environ.update(BASE)
+
+    log_test("Conformidade Gemini 3.8 Live (Omissão de ThinkingConfig) (P0.18)", True,
+             "thinking_config omitido em 3.8; montar_run_config respeita flags")
+    return True
+
+
+def test_gemini_38_extended_thinking_config():
+    """Gate P0.19: modelo extended monta thinking_config com nível válido e
+    marca todas as ferramentas com behavior NON_BLOCKING; diálogo afetivo é
+    barrado nos modelos 3.8."""
+    import inspect
+    import server
+    from google.genai import types
+
+    # thinking_config explícito com thinking_level válido (low|medium|high)
+    cfg_ext = server.montar_thinking_config("gemini-3.8-live-extended-thinking")
+    assert "thinking_config" in cfg_ext
+    assert cfg_ext["thinking_config"].thinking_level in (
+        types.ThinkingLevel.LOW, types.ThinkingLevel.MEDIUM, types.ThinkingLevel.HIGH,
+    )
+
+    # Todas as FunctionDeclarations viram NON_BLOCKING no modo extended
+    tools_async = [
+        decl
+        for tool in server.build_gemini_tools(behavior_nao_bloqueante=True)
+        for decl in tool.function_declarations
+    ]
+    assert tools_async
+    assert all(getattr(t, "behavior", None) == types.Behavior.NON_BLOCKING for t in tools_async)
+    tools_normal = [
+        decl
+        for tool in server.build_gemini_tools(behavior_nao_bloqueante=False)
+        for decl in tool.function_declarations
+    ]
+    assert tools_normal
+    assert all(getattr(t, "behavior", None) is None for t in tools_normal)
+
+    # O endpoint nativo passa a flag baseada no modelo escolhido
+    src_endpoint = inspect.getsource(server.websocket_live_endpoint)
+    assert "build_gemini_tools(behavior_nao_bloqueante=is_extended)" in src_endpoint
+    assert "montar_thinking_config(model_name)" in src_endpoint
+
+    # LIVE_AFFECTIVE_DIALOG é ignorado nos modelos 3.8 (recurso removido da API)
+    BASE = dict(os.environ)
+    try:
+        for k in ("LIVE_PROATIVITY", "LIVE_EXPLICIT_VAD", "LIVE_SAVE_BLOB",
+                  "LIVE_VAD_DISABLED", "LIVE_ALLOW_BARGE_IN", "JARVIS_BARGE_IN",
+                  "LIVE_METADADOS", "LIVE_AUTO_LANG", "LIVE_AFFECTIVE_DIALOG"):
+            os.environ.pop(k, None)
+        os.environ["LIVE_AFFECTIVE_DIALOG"] = "1"
+        d_38 = server.montar_run_config(modelo="gemini-3.8-live").model_dump(exclude_unset=True)
+        assert "enable_affective_dialog" not in d_38
+        d_antigo = server.montar_run_config(modelo="gemini-2.5-flash").model_dump(exclude_unset=True)
+        assert d_antigo["enable_affective_dialog"] is True
+    finally:
+        os.environ.clear()
+        os.environ.update(BASE)
+
+    log_test("Extended Thinking Gemini 3.8 Live (thinking_config + NON_BLOCKING) (P0.19)", True,
+             "thinking_level válido; tools NON_BLOCKING; affine barrado nos 3.8")
+    return True
+
+
+def test_interaction_status_encaminhado():
+    """Gate P0.20: interaction_status e raciocínio explícito (thought) do modelo
+    extended são encaminhados ao cliente; ferramentas rodam em background
+    (asyncio.create_task) sem bloquear o receive loop."""
     import inspect
     import server
 
-    src = inspect.getsource(server.websocket_live_endpoint)
-    # Guarda explícita obrigatória, sem OR fraco: ambas precisam existir.
-    assert '"3.8" not in model_name' in src
-    assert 'thinking_config' in src
-    assert 'live_connect_kwargs' in src
-    # Prova comportamental: kwargs para 3.8 não contêm thinking_config.
-    model_name = "gemini-3.8-live"
-    live_connect_kwargs: dict = {}
-    if "3.8" not in model_name:
-        live_connect_kwargs["thinking_config"] = True
-    assert "thinking_config" not in live_connect_kwargs
-    model_name2 = "gemini-2.5-flash"
-    kwargs2: dict = {}
-    if "3.8" not in model_name2:
-        kwargs2["thinking_config"] = True
-    assert "thinking_config" in kwargs2
+    src_worker = inspect.getsource(server.websocket_live_endpoint)
+    for marca in (
+        '"interaction_status"',
+        '"type": "thought"',
+        "asyncio.create_task(executar_ferramenta(",
+        "interaction_state",
+        "getattr(response, \"interaction_status\", None)",
+    ):
+        assert marca in src_worker, f"Marca ausente no worker nativo: {marca}"
 
-    log_test("Conformidade Gemini 3.8 Live (Omissão de ThinkingConfig) (P0.18)", True, "thinking_config omitido em modelos 3.8")
+    # O worker da sessão Live ADK também encaminha interaction_status
+    src_adk = inspect.getsource(server.live_adk)
+    assert "getattr(evento, \"interaction_status\", None)" in src_adk
+
+    log_test("Forward interaction_status + raciocínio explícito (P0.20)", True,
+             "IN_PROGRESS/IDLE e thoughts encaminhados ao HUD; tools em background")
+    return True
+
+
+def test_auto_lang_omite_language_code():
+    """Gate P0.21: LIVE_AUTO_LANG=1 remove a dica fixa de idioma (detecção nativa
+    multilíngue configuravelmente ativa); sem o flag, pt-BR permanece travado."""
+    import server
+    from google.genai import types
+
+    BASE = dict(os.environ)
+    try:
+        for k in ("LIVE_AUTO_LANG", "LIVE_AFFECTIVE_DIALOG", "LIVE_PROATIVITY",
+                  "LIVE_EXPLICIT_VAD", "LIVE_SAVE_BLOB", "LIVE_VAD_DISABLED",
+                  "LIVE_ALLOW_BARGE_IN", "JARVIS_BARGE_IN", "LIVE_METADADOS"):
+            os.environ.pop(k, None)
+
+        d_off = server.montar_run_config().model_dump(exclude_unset=True)
+        assert d_off["speech_config"]["language_code"] == server.IDIOMA
+
+        os.environ["LIVE_AUTO_LANG"] = "1"
+        d_on = server.montar_run_config().model_dump(exclude_unset=True)
+        assert "language_code" not in d_on["speech_config"]
+    finally:
+        os.environ.clear()
+        os.environ.update(BASE)
+
+    log_test("Detecção automática de língua Live (LIVE_AUTO_LANG) (P0.21)", True,
+             "flag ativo omite language_code; fixação pt-BR preservada por padrão")
     return True
 
 
@@ -1209,7 +1373,6 @@ async def test_omniroute_failover_reachable():
     """Garante que o failover do OmniRoute é alcançável e retorna a resposta formatada."""
     import inspect
     import json
-    import servidor_adk
     import server as server_mod
     from provider_router import OmniRouteProvider
     from unittest.mock import patch, MagicMock
@@ -1221,13 +1384,10 @@ async def test_omniroute_failover_reachable():
     mock_resp.__enter__.return_value = mock_resp
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
-        res = await servidor_adk.chamar_omniroute_chat("olá em contingência")
-        assert res == "Resposta de contingência OmniRoute"
         res2 = await server_mod.chamar_omniroute_chat("olá em contingência")
         assert res2 == "Resposta de contingência OmniRoute"
 
-    # Sem drift: ambos wrappers delegam à implementação canônica única.
-    assert "OmniRouteProvider.chat" in inspect.getsource(servidor_adk.chamar_omniroute_chat)
+    # Sem drift: wrapper do servidor unificado delega à implementação canônica única.
     assert "OmniRouteProvider.chat" in inspect.getsource(server_mod.chamar_omniroute_chat)
     # Canônica respeita OMNIROUTE_MODEL/TIMEOUT via env.
     src_canon = inspect.getsource(OmniRouteProvider.chat)
@@ -1359,8 +1519,11 @@ async def run_p0_suite():
     test_ide_lease_security()
     test_native_ws_ide_lease_branch()
     test_exact_args_authorization()
-    test_servidor_adk_acoes_pendentes_standalone()
+    test_acoes_pendentes_standalone()
     test_gemini_38_live_config()
+    test_gemini_38_extended_thinking_config()
+    test_interaction_status_encaminhado()
+    test_auto_lang_omite_language_code()
     test_providers_select_authentication()
     await test_omniroute_failover_reachable()
     test_omniroute_status_respects_url()

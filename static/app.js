@@ -228,6 +228,31 @@ function appendJarvisText(chunk) {
     }
 }
 
+function appendThought(texto) {
+    // Raciocínio explícito do gemini-3.8-live-extended-thinking: bloco recolhível
+    // por padrão para não poluir a conversa principal.
+    const thoughtEl = document.createElement('div');
+    thoughtEl.className = 'thought-block';
+
+    const header = document.createElement('div');
+    header.className = 'thought-header';
+    header.textContent = '🧠 Raciocínio interno (Extended Thinking)';
+
+    const body = document.createElement('div');
+    body.className = 'thought-body';
+    body.textContent = texto;
+    body.style.display = 'none';
+
+    header.addEventListener('click', () => {
+        body.style.display = body.style.display === 'none' ? 'block' : 'none';
+    });
+
+    thoughtEl.appendChild(header);
+    thoughtEl.appendChild(body);
+    dom.dialogueContainer.appendChild(thoughtEl);
+    dom.dialogueContainer.scrollTop = dom.dialogueContainer.scrollHeight;
+}
+
 function appendToolLog(name, status, details = '') {
     const item = document.createElement('div');
     item.className = `log-item ${status}`;
@@ -669,6 +694,19 @@ async function connectWebSocket() {
                 // Usuário falou enquanto o JARVIS falava
                 flushAudioQueue();
                 appendToolLog('BARGE-IN', 'idle', 'Fala interrompida pelo usuário.');
+                break;
+
+            case 'interaction_status':
+                if (msg.status === 'IN_PROGRESS') {
+                    setJarvisState('active', 'RACIOCINANDO EM SEGUNDO PLANO...');
+                } else if (msg.status === 'IDLE') {
+                    appendToolLog('RACIOCÍNIO', 'idle', 'Raciocínio explícito concluído.');
+                }
+                break;
+
+            case 'thought':
+                // Raciocínio explícito do Extended Thinking (bloco recolhível)
+                appendThought(msg.text);
                 break;
 
             case 'turn_complete':

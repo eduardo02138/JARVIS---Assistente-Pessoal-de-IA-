@@ -1,8 +1,7 @@
 """Configuração canônica de transcrição Live do J.A.R.V.I.S.
 
 Um só lugar define dica de idioma, vocabulário, modo e gerencia a sessão
-dedicada de baixa latência (gemini-3.5-transcribe-live). server.py e servidor_adk.py
-importam daqui: sem drift.
+dedicada de baixa latência (gemini-3.5-transcribe-live). server.py importa daqui: sem drift.
 
 Variáveis de ambiente:
   JARVIS_TRANSCRIBE_LANGS      lista separada por vírgula, padrão "pt-BR".
@@ -53,10 +52,17 @@ def is_dedicated_transcribe_enabled() -> bool:
 
 
 def build_input_transcription_config():
-    """Monta AudioTranscriptionConfig com dica pt-BR (Current SDK)."""
+    """Monta AudioTranscriptionConfig com dica de idioma (Current SDK).
+
+    Com LIVE_AUTO_LANG=1 a dica é omitida: o modelo detecta e alterna o
+    idioma sozinho durante a conversa (a dica fixa trava a detecção).
+    """
     from google.genai import types
 
-    kwargs: dict = {"language_codes": get_language_codes()}
+    se_auto_lang = os.environ.get("LIVE_AUTO_LANG", "0").strip().lower() in ("1", "true", "yes", "on")
+    kwargs: dict = {}
+    if not se_auto_lang:
+        kwargs["language_codes"] = get_language_codes()
     vocab = get_custom_vocabulary()
     if vocab:
         kwargs["custom_vocabulary"] = vocab

@@ -886,6 +886,21 @@ async function connectLiveBackend() {
                 flushAudioQueue();
                 break;
 
+            case "interaction_status":
+                if (msg.status === "IN_PROGRESS") {
+                    dom.liveStatusText.textContent = "Raciocinando em segundo plano...";
+                } else if (msg.status === "IDLE") {
+                    dom.liveStatusText.textContent = "Raciocínio concluído.";
+                }
+                break;
+
+            case "thought":
+                // Raciocínio explícito do gemini-3.8-live-extended-thinking
+                if (msg.text) {
+                    appendChatMessage("tool", `🧠 ${msg.text}`, { source: "tool" });
+                }
+                break;
+
             case "turn_complete":
                 state.hasSpeechCaption = false;
                 state.speaking = false;

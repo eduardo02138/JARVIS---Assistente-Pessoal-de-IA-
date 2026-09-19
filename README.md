@@ -149,8 +149,8 @@ Além da bridge customizada do JARVIS, o projeto conta com um módulo nativo bas
 ### 🧩 Habilidades ADK (`adk_skill_loader.py`)
 
 Cada plug-in traz uma **Skill ADK** no padrão oficial (L1 frontmatter, L2 corpo, L3 recursos):
-- **L1/L2**: `plugins/<id>/SKILL.md` — frontmatter YAML validado e instruções de uso para o modelo.
-- **L3**: `plugins/<id>/assets/*.json` — dados de referência (carteira padrão, estado da casa, dicas táticas) carregados com fallback embutido.
+- **L1/L2**: `skills/<name>/SKILL.md` — frontmatter YAML validado e instruções de uso para o modelo.
+- **L3**: `skills/<name>/assets/*.json` — dados de referência (carteira padrão, estado da casa, dicas táticas) carregados com fallback embutido.
 - **`ADKSkillLoader`**: usa `load_skill_from_dir` do ADK quando o diretório segue o padrão kebab-case; caso contrário faz *parser* local com os mesmos modelos (`Skill`, `Frontmatter`, `Resources`) do SDK.
 - **`SkillToolset`**: as skills **ativas** são injetadas nos agentes ADK (`criar_agente_rapido`, `criar_agente_coordenador`) como `SkillToolset`, mantendo o contexto enxuto (apenas skills habilitadas). Configurando `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (com ADC autenticado), o mesmo toolset passa a usar **Google Cloud Skill Registry** para descoberta e carregamento sob demanda (`search_skills`/`load_skill`). Sem a configuração GCP, tudo segue local, sem custo de API.
 
@@ -172,8 +172,8 @@ O J.A.R.V.I.S. suporta o protocolo MCP nos dois sentidos, seguindo as diretrizes
 
 ### Como Iniciar o Servidor ADK
 ```bash
-# Executar o servidor de voz ADK (porta 8100)
-.venv/bin/python servidor_adk.py
+# Executar o servidor unificado (porta 8100 via PORT)
+.venv/bin/python server.py
 ```
 Acesse em: `http://127.0.0.1:8100`
 
@@ -182,11 +182,21 @@ Acesse em: `http://127.0.0.1:8100`
 | Variável | Efeito |
 | :--- | :--- |
 | `LIVE_PROATIVITY=1` | Áudio proativo: o modelo decide quando falar (específico do modelo). |
-| `LIVE_AFFECTIVE_DIALOG=1` | Diálogo afetivo: adaptação emocional ao tom (específico do modelo). |
+| `LIVE_AFFECTIVE_DIALOG=1` | Diálogo afetivo: adaptação emocional ao tom (ignorado nos modelos 3.8, recurso removido da API). |
 | `LIVE_EXPLICIT_VAD=1` | Emite eventos explícitos de voz (`event.voice_activity` → `voz_ativa` no WS). |
 | `LIVE_SAVE_BLOB=1` | Grava o áudio da sessão p/ auditoria (~1.92 MB/min, sem expiração automática). |
 | `LIVE_VAD_DISABLED=1` | Desliga VAD automático para clientes push-to-talk com sinais manuais. |
 | `LIVE_METADADOS='{"origem":"live_adk"}'` | Metadados anexados a cada evento da invocação (sem PII). |
+| `LIVE_MODEL_EXTENDED` | Modelo de raciocínio explícito selecionável no HUD (`gemini-3.8-live-extended-thinking`). |
+| `LIVE_THINKING_LEVEL=low` | Nível do raciocínio em 2º plano: `low` \| `medium` \| `high` ("minimal" não é suportado). |
+| `LIVE_AUTO_LANG=1` | Detecção automática e multilíngue nativa (70+ línguas) na voz; sem o flag, `JARVIS_LANGUAGE` trava o idioma por estabilidade. |
+
+**Extended Thinking (`gemini-3.8-live-extended-thinking`)**: no caminho nativo `/ws/live`
+o modelo raciocina em segundo plano, todas as ferramentas viram `NON_BLOCKING` (assíncronas:
+o JARVIS continua falando/ouvindo enquanto executa) e o estado `interaction_status`
+(IN_PROGRESS/IDLE) + o raciocínio explícito (`thought`) são encaminhados ao HUD como blocos
+recolhíveis. No caminho ADK `/ws/live_adk`, o `RunConfig` do ADK não aceita `thinking_config`
+nem `behavior` nas tools — o modelo extended segue utilizável com os defaults da API.
 
 ### 🖥️ Modo Computador (Gemini Computer Use)
 
@@ -247,12 +257,12 @@ O repositório inclui uma suíte de testes de integridade arquitetural e de segu
 ├── plugin_manager.py          # Carregamento dinâmico e catálogo da loja de habilidades
 ├── adk_skill_loader.py        # Carregador de Skills ADK (SKILL.md L1/L2/L3 + SkillToolset)
 ├── jarvis_mcp_server.py       # Servidor MCP (stdio) p/ IDE e agentes externos + plug-ins
-├── plugins/                   # Módulos de expansão (Workspace, Finance, Research, Jogos, etc.)
-│   └── <plug-in>/SKILL.md     # Skill ADK: frontmatter L1, corpo L2, assets/ L3
+├── plugins/                   # Código runtime dos plug-ins (plugin.py por módulo)
+├── skills/                    # Skills ADK canônicas (fonte única de L1/L2/L3)
+│   └── <skill>/SKILL.md       # Skill ADK: frontmatter L1, corpo L2, assets/ L3
 ├── gemini-live-widget/        # Frontend do widget flutuante e modo expandido "Ask Gemini"
 ├── static/                    # Frontend do HUD Holográfico Sci-Fi (Reator Arc)
 ├── monitoring/                # Logs estruturados (events.jsonl) e suíte de testes P0
-├── servidor_adk.py            # Servidor FastAPI com Google ADK Runner e DatabaseSessionService
 ├── agentes/                   # Agentes ADK (assistente.py, roteador.py, ferramentas.py)
 ├── agentes/computer_use/      # Agente Computer Use + PlaywrightComputer (navegador Chromium)
 ├── static_adk/                # Cliente web unificado para o agente ADK

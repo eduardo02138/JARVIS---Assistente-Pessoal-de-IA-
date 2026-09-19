@@ -37,6 +37,7 @@ from .ferramentas import (
 # Modelos: Live e texto são famílias diferentes.
 MODELO_LIVE = os.environ.get("LIVE_MODEL_PRIMARY", "gemini-3.8-live")
 MODELO_LIVE_RESERVA = os.environ.get("LIVE_MODEL_FALLBACK", "gemini-2.5-flash-native-audio-latest")
+MODELO_LIVE_EXTENDED = os.environ.get("LIVE_MODEL_EXTENDED", "gemini-3.8-live-extended-thinking")
 MODELO_TEXTO = os.environ.get("TEXT_MODEL", "gemini-flash-latest")
 MODELO_TEXTO_RESERVA = os.environ.get("TEXT_MODEL_FALLBACK", "gemini-2.5-flash")
 
