@@ -1,270 +1,331 @@
-# J.A.R.V.I.S. — Gemini 3.8 Live Personal AI Assistant & Linux Automation
+# JARVIS AI Assistant — Gemini Live + Google ADK for Linux
 
-**J.A.R.V.I.S.** é um assistente pessoal multimodal inspirado no conceito de um copiloto estilo Jarvis, construído para conversação por voz em tempo real, automação segura do Linux, visão de tela, execução de ferramentas e orquestração de agentes.
+<p align="center">
+  <strong>A multimodal, real-time personal AI assistant with voice, screen vision, secure tool calling, Linux automation and agent orchestration.</strong>
+</p>
 
-O projeto combina **Gemini 3.8 Live**, **Google Agent Development Kit (ADK)**, **FastAPI**, **WebSockets**, **Python**, **PySide6**, um ecossistema modular de **plug-ins** e um **Policy Engine fail-closed** para controlar ações sensíveis. A experiência pode ser usada pelo HUD web holográfico, pelo widget desktop flutuante ou pelos endpoints ADK de texto e voz.
+<p align="center">
+  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a>
+</p>
 
-### 🔎 Tecnologias e palavras-chave
+<p align="center">
+  <a href="https://github.com/eduardo02138/JARVIS---Assistente-Pessoal-de-IA-/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/eduardo02138/JARVIS---Assistente-Pessoal-de-IA-/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-blue">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-informational">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
 
-`Gemini 3.8 Live` · `Gemini Live API` · `Google ADK` · `JARVIS` · `Personal AI Assistant` · `Voice Assistant` · `AI Agent` · `Multimodal AI` · `Linux Automation` · `FastAPI` · `WebSocket` · `PySide6` · `Tool Calling` · `Policy Engine` · `Screen Vision` · `Open Source AI`
+<p align="center">
+  <img src="assets/jarvis-hud-interface.png" alt="JARVIS holographic web HUD with real-time AI assistant controls" width="49%">
+  <img src="assets/gemini-live-widget.png" alt="JARVIS Gemini Live desktop widget for Linux" width="49%">
+</p>
 
-> O modelo Live principal atualmente suportado pelo projeto é **`gemini-3.8-live`**. O runtime foi estruturado para permitir troca de modelos por configuração, sem afirmar suporte a modelos ainda não disponibilizados oficialmente.
+## What is JARVIS?
 
----
+**JARVIS** is an open-source personal AI assistant for Linux built around **Gemini Live**, the **Google Agent Development Kit (ADK)**, **FastAPI**, **WebSockets**, **PySide6** and a modular tool/plugin architecture.
 
-## ⚡ Principais Capacidades
+It is designed for more than chat. JARVIS can maintain a **full-duplex voice conversation**, inspect screen context, route requests between specialized AI agents, call local tools, automate desktop actions and expose capabilities to external agents through **MCP** — while keeping sensitive actions behind an explicit **Policy Engine** and temporary control leases.
 
-### 1. Conversação Bidirecional Full-Duplex
-- **Streaming de Áudio em Tempo Real**: Latência ultrabaixa com WebSockets e Web Audio API (PCM 16kHz in / 24kHz out).
-- **Interrupção Natural (*Barge-in*)**: Fale a qualquer instante e o JARVIS interrompe a fala anterior na hora para acatar a nova instrução.
-- **Personalidade Stark**: Tratamento refinado ("Senhor"), raciocínio ágil e síntese vocal personalizável (*Charon*, *Puck*, *Fenrir*, *Aoede*, *Kore*).
-- **Pool de Contas & Failover Resiliente**: Suporte ao OmniRoute e balanceamento de carga *round-robin* entre contas com transição transparente em caso de esgotamento de cota (*Rate Limit 429*).
+The project targets developers interested in **voice agents**, **multimodal AI**, **AI desktop assistants**, **agentic tool calling**, **Linux automation**, **Google ADK**, **Gemini Live API**, **Computer Use** and **Model Context Protocol (MCP)** integrations.
 
-### 2. Dupla Experiência de Interface
-- 🛸 **HUD Web Holográfico (`/`)**: Reator Arc reativo com espectrograma em tempo real no `<canvas>`, painéis em Glassmorphism, telemetria de hardware e suporte a microfone contínuo ou *Push-to-Talk* (`<Espaço>`).
-- 🪟 **App Desktop Nativo Flutuante (`app.py`)**: Janela transparente sem bordas, arraste nativo via Wayland/X11 (`startSystemMove`), botão de expansão "Ask Gemini" e atalho de ativação rápida:
-  - **`Alt + Espaço`**: Alterna a visibilidade com a janela em foco. Para funcionar em qualquer aplicativo, registre um atalho global do sistema apontando para `python app.py --toggle` (veja abaixo).
-  - **`Esc`**: Recolhe o widget rapidamente.
-- 🛠️ **Central de Depuração & Auditoria (`/debug`)**: Monitor de eventos em tempo real, logs estruturados (`events.jsonl`) e telemetria de hardware/GPU.
-
-### 3. Governança e Segurança Reforçada (Fase P0)
-- **Isolamento de Rede**: Servidor restrito ao loopback local (`127.0.0.1`), bloqueando varreduras na rede local.
-- **Autenticação por Token**: Proteção de endpoints e handshake WebSocket via `JARVIS_TOKEN` e sessão de curta duração (`/api/auth/session`).
-- **Motor de Políticas (Policy Engine)**: Cada uma das 55 ferramentas possui classificação de risco estrita (*fail-closed*):
-  - `READ`: Telemetria, cotações, consultas e listagens.
-  - `LOW_WRITE`: Ações locais benignas (volume, timers, rascunhos, anotações).
-  - `EXTERNAL_WRITE`: Interações externas que exigem confirmação explícita.
-  - `PRIVILEGED`: Automações de terminal e agentes de código.
-- **Lease Temporária de Controle Físico**: Mouse e teclado só são liberados sob autorização prévia por tempo limitado com revogação instantânea.
+> **Project status:** active development. Interfaces and runtime contracts may evolve while the architecture is being hardened.
 
 ---
 
-## 🧩 Catálogo de Plug-ins & Habilidades Ativas (55 Ferramentas)
+## Why this project is different
 
-O sistema possui uma arquitetura modular expansível gerenciada pelo `plugin_manager.py`:
-
-| Plug-in | Ícone | Ferramentas Chave | Descrição & Funcionalidades |
-| :--- | :---: | :--- | :--- |
-| **Google Workspace** | 📑 | `workspace_search_emails`<br>`workspace_create_draft`<br>`workspace_append_doc`<br>`workspace_create_keep_note` | Redigir documentos no Docs, pesquisar e-mails na caixa de entrada do Gmail e capturar notas no Keep por voz. |
-| **Pesquisa Profunda** | 🔬 | `deep_research_start`<br>`deep_research_get_report`<br>`deep_research_list` | Varreduras e dossiês aprofundados assíncronos em segundo plano com alerta automático por voz e no HUD ao concluir. |
-| **Google Finance** | 📈 | `finance_get_quote`<br>`finance_get_portfolio`<br>`finance_add_asset`<br>`finance_get_insights` | SIMULADO: cotações de demonstração… não consulta o Google Finance real. Demonstração de carteira e alocação de ativos. |
-| **Ginjutsu Motion AI**| 🎬 | `ginjutsu_create_motion_transfer`<br>`ginjutsu_generate_prompt`<br>`ginjutsu_list_jobs` | Transferência de coreografia, atuação e movimentos de vídeos para novos personagens via Higgsfield Ginjutsu. |
-| **Game Companion** | 🎮 | `game_companion_list_installed_games`<br>`game_companion_launch_game`<br>`game_companion_tactical_timer`<br>`game_companion_get_strategy` | Catálogo de jogos locais (Steam, Lutris, Heroic), inicializador direto por voz, timers táticos e conselhos de partida. |
-| **Casa Inteligente** | 🏠 | `smart_home_set_light`<br>`smart_home_activate_scene`<br>`smart_home_get_climate` | Automação residencial: controle de iluminação, climatização e acionamento de cenas (*Foco*, *Cinema*, *Descanso*). |
-| **Live Streaming** | 📡 | `live_stream_toggle_status`<br>`live_stream_read_chat_summary`<br>`live_stream_send_alert` | Assistência para transmissões ao vivo: leitura e resumo de chat em tempo real (Twitch/YouTube) e metas. |
-| **Mídias Sociais** | 💬 | `social_feed_check_notifications`<br>`social_feed_post_update` | Monitoramento inteligente de feeds e notificações urgentes (Discord, Telegram, X/Twitter). |
-| **Sistema & Hardware**| ⚙️ | `get_system_status`<br>`get_gpu_status`<br>`adjust_volume`<br>`open_application`<br>`take_screenshot`<br>`antigravity_open_workspace` | Telemetria completa (NVIDIA RTX, CPU, RAM, Disco), controle de mídia, gerenciamento de janelas e integração IDE. |
+- 🎙️ **Real-time voice agent** — bidirectional audio streaming, barge-in and continuous conversation.
+- 👁️ **Multimodal screen context** — screen vision and browser/Computer Use workflows.
+- 🧠 **Google ADK agent orchestration** — fast path, coordinator path and specialist agents.
+- 🛠️ **Secure tool calling** — local system tools and plugin actions are classified by risk.
+- 🔐 **Fail-closed policy layer** — sensitive operations require authorization/confirmation instead of trusting the model directly.
+- 🖥️ **Two user experiences** — holographic web HUD and native floating PySide6 desktop widget.
+- 🧩 **Plugin + Skill architecture** — reusable capabilities can be exposed to Gemini/ADK without putting everything in one prompt.
+- 🔌 **MCP server** — IDEs and external agents can discover and invoke JARVIS capabilities.
+- 🐧 **Linux-first automation** — hardware telemetry, applications, media, browser control and desktop workflows.
 
 ---
 
-## 🚀 Como Iniciar
+## Quick look
 
-### 1. Configurar Chaves de Ambiente
-Crie ou edite o arquivo `.env` na raiz do projeto:
-```env
-GEMINI_API_KEY="sua_chave_gemini"
-# Ou múltiplas chaves para pool de failover:
-# GEMINI_API_KEYS="chave_1,chave_2,chave_3"
-JARVIS_TOKEN="sua_chave_secreta_de_sessao"
-PORT=8000
-HOST="127.0.0.1"
+### Holographic web HUD
+
+`assets/jarvis-hud-interface.png` shows the browser experience served by FastAPI: voice controls, system telemetry, live assistant state and debugging information in a sci-fi HUD.
+
+### Desktop Gemini Live widget
+
+`assets/gemini-live-widget.png` shows the floating PySide6 widget designed for a lightweight “ask JARVIS” workflow on Linux/Wayland/X11.
+
+---
+
+## Example interactions
+
+```text
+“Jarvis, what is using the most CPU right now?”
+“Jarvis, open my browser and inspect the current page.”
+“Jarvis, search my workspace for the latest security email.”
+“Jarvis, start a tactical timer for 90 seconds.”
+“Jarvis, take a screenshot and tell me what is on screen.”
 ```
 
-### 2. Iniciar o Servidor Backend
-Você pode iniciar via script rápido:
+Tool availability depends on the enabled plugins and local configuration. Operations that can change external or privileged state are subject to the Policy Engine.
+
+---
+
+## Architecture
+
+```text
+                         ┌─────────────────────────┐
+                         │       User / Voice      │
+                         └────────────┬────────────┘
+                                      │
+                  ┌───────────────────┴───────────────────┐
+                  │                                       │
+          ┌───────▼────────┐                      ┌───────▼────────┐
+          │   Web HUD      │                      │ PySide6 Widget │
+          │ WebSocket/HTTP │                      │ Desktop Client │
+          └───────┬────────┘                      └───────┬────────┘
+                  └───────────────────┬───────────────────┘
+                                      │
+                             ┌────────▼─────────┐
+                             │ FastAPI Runtime  │
+                             │ server.py / ADK  │
+                             └────────┬─────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+            ┌───────▼───────┐ ┌──────▼──────┐ ┌──────▼────────┐
+            │ Gemini Live   │ │ Google ADK  │ │ Computer Use  │
+            │ Voice/Media   │ │ Agents      │ │ Playwright    │
+            └───────┬───────┘ └──────┬──────┘ └──────┬────────┘
+                    │                 │                 │
+                    └─────────────────┼─────────────────┘
+                                      │
+                             ┌────────▼─────────┐
+                             │  Policy Engine   │
+                             │ risk + leases +  │
+                             │ confirmation     │
+                             └────────┬─────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+             ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐
+             │System Tools │  │   Plugins   │  │ MCP Server  │
+             │Linux/OS/HW  │  │ADK Skills  │  │External AI │
+             └─────────────┘  └─────────────┘  └─────────────┘
+```
+
+### Main components
+
+| Component | Purpose |
+| --- | --- |
+| `server.py` | Main FastAPI runtime, HTTP/WebSocket endpoints and Gemini Live bridge |
+| `servidor_adk.py` | Native Google ADK text/voice server and session runtime |
+| `agentes/` | ADK agents, routing and tool integration |
+| `agentes/computer_use/` | Browser automation / Gemini Computer Use integration with Playwright |
+| `policy_engine.py` | Risk classification, confirmations and temporary control authority |
+| `system_tools.py` | Linux, hardware, media and local automation tools |
+| `plugin_manager.py` / `plugin_sdk.py` | Plugin discovery and extension contracts |
+| `adk_skill_loader.py` | ADK Skill loading and SkillToolset integration |
+| `jarvis_mcp_server.py` | MCP stdio server for IDEs and external agents |
+| `static/` | Holographic web HUD |
+| `gemini-live-widget/` | Floating desktop widget frontend |
+| `monitoring/` | Trust gates, regression tests and structured runtime auditing |
+
+---
+
+## Core capabilities
+
+### Real-time voice and Gemini Live
+
+JARVIS streams microphone audio and model audio over WebSockets, supports natural interruption (barge-in), configurable voices and live session controls. The runtime is built so model configuration can evolve without coupling the UI to one hard-coded execution path.
+
+### Google Agent Development Kit (ADK)
+
+The native ADK layer provides routing between low-latency and coordinated agent paths, durable session support and modular skills. Active skills can be injected through `SkillToolset`, keeping the agent context smaller than loading every capability eagerly.
+
+### Tool calling and Linux automation
+
+System tools expose hardware telemetry, application control, screenshots, media actions and local automation. Plugins extend the catalog with workspace, research, game companion, smart-home, streaming and other specialized capabilities.
+
+### Policy Engine and secure execution
+
+The model does not receive unrestricted authority over the machine. Tool requests are evaluated by a policy layer that can classify operations as read-only, local write, external write or privileged and require confirmation/leases for sensitive actions.
+
+### Screen vision and Computer Use
+
+A dedicated Computer Use agent can operate a Chromium browser through Playwright. Browser control is intentionally separated from the general-purpose agent/tool set so browser authority can be governed independently.
+
+### MCP integration
+
+`jarvis_mcp_server.py` exposes selected JARVIS capabilities over the **Model Context Protocol**, allowing compatible IDEs and AI agents to use JARVIS as a local tool server.
+
+---
+
+## Quick start
+
+### Requirements
+
+- Linux
+- Python **3.11+**
+- A Gemini API key
+- Microphone for voice mode
+- Chromium/Playwright only if using Computer Use
+
+### 1. Clone
+
+```bash
+git clone https://github.com/eduardo02138/JARVIS---Assistente-Pessoal-de-IA-.git
+cd JARVIS---Assistente-Pessoal-de-IA-
+```
+
+### 2. Create the environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+### 3. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+At minimum, configure your Gemini key and a local JARVIS session token:
+
+```env
+GEMINI_API_KEY="your_gemini_api_key"
+JARVIS_TOKEN="replace_with_a_long_random_secret"
+HOST="127.0.0.1"
+PORT=8000
+```
+
+Do not commit `.env` or real API keys.
+
+### 4. Start JARVIS
+
 ```bash
 ./run_jarvis.sh
 ```
-Ou manualmente no ambiente virtual:
+
+Or:
+
 ```bash
 .venv/bin/python server.py
 ```
 
-### 3. Iniciar o Aplicativo Desktop (Opcional)
-Para a interface flutuante transparente com arraste nativo e atalhos:
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+### Optional: desktop widget
+
 ```bash
 ./run_app.sh
 ```
-*Atalho global:* o Qt só captura teclas com a janela em foco (e no Wayland nem isso é garantido), então o atalho de sistema é registrado no ambiente de trabalho e conversa com a instância em execução:
+
+### Optional: Google ADK server
 
 ```bash
-python app.py --toggle
+.venv/bin/python servidor_adk.py
 ```
 
-No GNOME: **Configurações → Teclado → Atalhos personalizados**, crie um atalho `Alt+Space` com esse comando (use o caminho completo do projeto e do Python do `.venv`). Sem nenhuma instância aberta, o comando inicia o aplicativo.
+### Optional: Computer Use
 
-### 4. Acessar o HUD Web
-Caso prefira o navegador, acesse:
-```
-http://127.0.0.1:8000
-```
-- Clique em **"INICIAR JARVIS"** e autorize a captura de áudio.
-- Para acompanhar logs, telemetria e depuração: `http://127.0.0.1:8000/debug`.
-
----
-
-## 🗣️ Exemplos de Comandos por Voz
-
-### Produtividade & Workspace
-- *"Jarvis, procure no meu Gmail os e-mails recentes sobre segurança do sistema."*
-- *"Jarvis, anote no Google Keep: comprar componentes novos para a bancada."*
-- *"Jarvis, crie um rascunho de e-mail para a equipe apresentando o relatório semanal."*
-
-### Finanças & Portfólio
-- *"Jarvis, qual a cotação da Petrobras e do Bitcoin agora?"*
-- *"Jarvis, mostre o desempenho consolidado do meu portfólio no Google Finance."*
-- *"Jarvis, quais setores estão sub-representados na minha carteira de investimentos?"*
-
-### Pesquisa Profunda & Dossiês
-- *"Jarvis, inicie uma Pesquisa Profunda sobre as novas tecnologias de IA multimodal para 2026."*
-- *(Você pode continuar conversando normalmente; o JARVIS avisa por áudio assim que concluir o relatório).*
-
-### Jogos & Entretenimento
-- *"Jarvis, quais jogos estão instalados na minha máquina?"*
-- *"Jarvis, inicie o Marvel Rivals para mim."*
-- *"Jarvis, configure um cronômetro tático de 90 segundos para o respawn do Boss."*
-
-### Hardware & Casa Inteligente
-- *"Jarvis, como estão a temperatura e o uso da minha placa de vídeo RTX?"*
-- *"Jarvis, aumente o volume em 15% e ative a cena de trabalho no escritório."*
-
----
-
-
----
-
-## 🎙️ Arquitetura Nativa Google ADK (Voice Agent v0.1)
-
-Além da bridge customizada do JARVIS, o projeto conta com um módulo nativo baseado no **Google Agent Development Kit (ADK 2.9+)**:
-
-- **Cliente Único & Roteamento Interno**: O usuário interage por texto ou voz sem precisar selecionar versão do agente. O roteador (`agentes/roteador.py`) despacha heurística e semanticamente:
-  - *Caminho Rápido (`criar_agente_rapido`)*: Consultas diretas de baixa latência (hora, status, busca simples).
-  - *Caminho Coordenador (`criar_agente_coordenador`)*: Tarefas complexas orquestrando especialistas (`especialista_sistema`, `especialista_navegador`) via `AgentTool`.
-- **Persistência Durável com `DatabaseSessionService`**: Suporte a SQLite assíncrono (`sessoes.db`). As memórias gravadas sob a chave `user:` persistem mesmo com o reinício do servidor.
-- **Modelos Dedicados & Failover**:
-  - **Live (Voz Bidirecional)**: `gemini-3.8-live` ou `gemini-2.5-flash-native-audio-latest` através de `Runner.run_live()` e `LiveRequestQueue`.
-  - **Texto & Sub-agentes**: `gemini-flash-latest` com failover automático em caso de 503 para `gemini-2.5-flash`.
-- **Rotação Automática de Chaves**: Caso uma chave atinja a cota (HTTP 429), o sistema faz o failover transparente para a próxima chave configurada em `GEMINI_API_KEYS`.
-
-### 🧩 Habilidades ADK (`adk_skill_loader.py`)
-
-Cada plug-in traz uma **Skill ADK** no padrão oficial (L1 frontmatter, L2 corpo, L3 recursos):
-- **L1/L2**: `skills/<name>/SKILL.md` — frontmatter YAML validado e instruções de uso para o modelo.
-- **L3**: `skills/<name>/assets/*.json` — dados de referência (carteira padrão, estado da casa, dicas táticas) carregados com fallback embutido.
-- **`ADKSkillLoader`**: usa `load_skill_from_dir` do ADK quando o diretório segue o padrão kebab-case; caso contrário faz *parser* local com os mesmos modelos (`Skill`, `Frontmatter`, `Resources`) do SDK.
-- **`SkillToolset`**: as skills **ativas** são injetadas nos agentes ADK (`criar_agente_rapido`, `criar_agente_coordenador`) como `SkillToolset`, mantendo o contexto enxuto (apenas skills habilitadas). Configurando `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (com ADC autenticado), o mesmo toolset passa a usar **Google Cloud Skill Registry** para descoberta e carregamento sob demanda (`search_skills`/`load_skill`). Sem a configuração GCP, tudo segue local, sem custo de API.
-
-### 🔌 Integração MCP Bidirecional (Model Context Protocol)
-
-O J.A.R.V.I.S. suporta o protocolo MCP nos dois sentidos, seguindo as diretrizes oficiais do [Google ADK](https://adk.dev/tools-custom/mcp-tools/):
-
-1. **J.A.R.V.I.S. como Servidor MCP (`jarvis_mcp_server.py`)**:
-   - Transporte `stdio` para consumo direto pela **IDE Antigravity** e agentes externos.
-   - Ferramentas nativas: telemetria de hardware (GPU/CPU/RAM), notificações de voz, integridade (`jarvis_query_status`), lista de skills (`jarvis_list_skills`), lista de servidores conectados (`jarvis_list_mcp_servers`) e bridge Gemini.
-   - **Plug-ins expostos via MCP**: ferramentas de plug-ins ativos são registradas dinamicamente como `jarvis_plugin_<nome>`.
-
-2. **J.A.R.V.I.S. como Cliente MCP (`mcp_client_manager.py` & `McpToolset`)**:
-   - Conecta os agentes ADK (`assistente_rapido`, `assistente`) a ferramentas fornecidas por servidores MCP locais (Stdio) ou remotos (SSE/Streamable HTTP).
-   - Configuração declarativa via `mcp_servers.json` (veja modelo em `mcp_servers.example.json`) ou `MCP_SERVERS_CONFIG`.
-   - **Governança & Policy Engine**: suporte a filtros (`tool_filter`), prefixos (`tool_name_prefix`) e registro de níveis de risco por ferramenta (`policies`).
-   - **Ciclo de Vida Assíncrono**: encerramento ordenado com `close_all()` no `lifespan` do FastAPI para evitar processos zumbis ou conexões vazadas.
-   - Endpoint de monitoramento: `GET /api/mcp/servers`.
-
-### Como Iniciar o Servidor ADK
-```bash
-# Executar o servidor unificado (porta 8100 via PORT)
-.venv/bin/python server.py
-```
-Acesse em: `http://127.0.0.1:8100`
-
-### Configuração da Sessão Live (env, todas opcionais/default off)
-
-| Variável | Efeito |
-| :--- | :--- |
-| `LIVE_PROATIVITY=1` | Áudio proativo: o modelo decide quando falar (específico do modelo). |
-| `LIVE_AFFECTIVE_DIALOG=1` | Diálogo afetivo: adaptação emocional ao tom (ignorado nos modelos 3.8, recurso removido da API). |
-| `LIVE_EXPLICIT_VAD=1` | Emite eventos explícitos de voz (`event.voice_activity` → `voz_ativa` no WS). |
-| `LIVE_SAVE_BLOB=1` | Grava o áudio da sessão p/ auditoria (~1.92 MB/min, sem expiração automática). |
-| `LIVE_VAD_DISABLED=1` | Desliga VAD automático para clientes push-to-talk com sinais manuais. |
-| `LIVE_METADADOS='{"origem":"live_adk"}'` | Metadados anexados a cada evento da invocação (sem PII). |
-| `LIVE_MODEL_EXTENDED` | Modelo de raciocínio explícito selecionável no HUD (`gemini-3.8-live-extended-thinking`). |
-| `LIVE_THINKING_LEVEL=low` | Nível do raciocínio em 2º plano: `low` \| `medium` \| `high` ("minimal" não é suportado). |
-| `LIVE_AUTO_LANG=1` | Detecção automática e multilíngue nativa (70+ línguas) na voz; sem o flag, `JARVIS_LANGUAGE` trava o idioma por estabilidade. |
-
-**Extended Thinking (`gemini-3.8-live-extended-thinking`)**: no caminho nativo `/ws/live`
-o modelo raciocina em segundo plano, todas as ferramentas viram `NON_BLOCKING` (assíncronas:
-o JARVIS continua falando/ouvindo enquanto executa) e o estado `interaction_status`
-(IN_PROGRESS/IDLE) + o raciocínio explícito (`thought`) são encaminhados ao HUD como blocos
-recolhíveis. No caminho ADK `/ws/live_adk`, o `RunConfig` do ADK não aceita `thinking_config`
-nem `behavior` nas tools — o modelo extended segue utilizável com os defaults da API.
-
-### 🖥️ Modo Computador (Gemini Computer Use)
-
-O JARVIS inclui um agente dedicado que opera o navegador Chromium via Playwright sob o modelo
-`gemini-3.6-flash` (com suporte retrocompatível a `gemini-2.5-computer-use-preview-10-2025`) (`agentes/computer_use/`). É um agente **single-tool**:
-não compartilha as 56 ferramentas do ecossistema e por isso não contamina os agentes normais.
-
-Instalação do navegador (uma vez):
 ```bash
 .venv/bin/playwright install-deps chromium
 .venv/bin/playwright install chromium
 ```
 
-Ativação do Modo Computador (exige confirmação do usuário, como o Modo Controle):
+---
+
+## Plugins and ADK Skills
+
+JARVIS uses a modular plugin architecture rather than hard-coding every integration in the central agent. Current modules include areas such as:
+
+- Google Workspace workflows
+- Deep research
+- Finance/demo portfolio tools
+- Motion/video AI integrations
+- Game companion tools
+- Smart-home workflows
+- Live-stream assistance
+- Social integrations
+- Linux system and hardware tools
+
+Each capability can define an ADK `SKILL.md` so the model receives focused instructions only for enabled skills.
+
+---
+
+## Testing and trust gates
+
+The repository includes automated architecture, security and regression tests:
+
 ```bash
-# 1) Pede a ativação: retorna id_confirmacao
-curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
-  -d '{"ativo": true, "sessao": "sessao-principal"}'
-
-# 2) Confirma a pendência
-curl -X POST localhost:8100/api/confirmar_acao -H "Authorization: Bearer $JARVIS_TOKEN" \
-  -d '{"id_confirmacao": "<id>", "sessao": "sessao-principal", "aprovado": true}'
-
-# 3) Repete a ativação: concede a lease (padrão 900s)
-curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
-  -d '{"ativo": true, "sessao": "sessao-principal"}'
-```
-
-Depois disso, um turno com `caminho: "computador"` (ou texto contendo "use o navegador") é atendido
-pelo agente de Computer Use. Sem lease ativa, `guarda_computador` bloqueia toda tool do navegador.
-Desativar fecha o Chromium compartilhado:
-```bash
-curl -X POST localhost:8100/api/computer/mode -H "Authorization: Bearer $JARVIS_TOKEN" \
-  -d '{"ativo": false, "sessao": "sessao-principal"}'
-```
-
-Variáveis: `COMPUTER_USE_MODEL`, `COMPUTER_USE_HEADLESS`, `COMPUTER_USE_SCREEN_W/H`,
-`JARVIS_COMPUTER_LEASE_TTL`.
-
-## 🧪 Validação & Testes Automatizados
-
-O repositório inclui uma suíte de testes de integridade arquitetural e de segurança:
-```bash
-# Executa a verificação completa da Fase P0
+PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_reproduction_p0.py -v
 .venv/bin/python monitoring/test_suite.py --p0
+.venv/bin/python monitoring/test_adk.py
+```
+
+GitHub Actions runs the CI pipeline on repository changes.
+
+---
+
+## Project structure
+
+```text
+.
+├── agentes/                 # Google ADK agents and Computer Use
+├── assets/                  # README screenshots / project media
+├── gemini-live-widget/      # Desktop widget frontend
+├── monitoring/              # Trust gates, regressions and audit tooling
+├── plugins/                 # Modular tools and ADK skills
+├── static/                  # Main holographic web HUD
+├── static_adk/              # Unified ADK web client
+├── app.py                   # PySide6 desktop app
+├── server.py                # Main runtime
+├── servidor_adk.py          # Native ADK runtime
+├── policy_engine.py         # Tool governance and authorization
+├── system_tools.py          # Linux/system tools
+├── plugin_manager.py        # Plugin discovery
+├── plugin_sdk.py            # Plugin contracts
+├── adk_skill_loader.py      # ADK skill loader
+└── jarvis_mcp_server.py     # MCP server
 ```
 
 ---
 
-## 🏛️ Estrutura de Arquivos
+## Roadmap
 
-```
-├── app.py                     # App Desktop flutuante transparente (PySide6 / QtWebEngine)
-├── server.py                  # Servidor principal FastAPI + WebSocket Bridge Gemini Live
-├── policy_engine.py           # Motor de Governança e Controle de Políticas de Risco
-├── system_tools.py            # Habilidades centrais do SO e integração Antigravity IDE
-├── plugin_sdk.py              # SDK para criação e padronização de plug-ins
-├── plugin_manager.py          # Carregamento dinâmico e catálogo da loja de habilidades
-├── adk_skill_loader.py        # Carregador de Skills ADK (SKILL.md L1/L2/L3 + SkillToolset)
-├── jarvis_mcp_server.py       # Servidor MCP (stdio) p/ IDE e agentes externos + plug-ins
-├── plugins/                   # Código runtime dos plug-ins (plugin.py por módulo)
-├── skills/                    # Skills ADK canônicas (fonte única de L1/L2/L3)
-│   └── <skill>/SKILL.md       # Skill ADK: frontmatter L1, corpo L2, assets/ L3
-├── gemini-live-widget/        # Frontend do widget flutuante e modo expandido "Ask Gemini"
-├── static/                    # Frontend do HUD Holográfico Sci-Fi (Reator Arc)
-├── monitoring/                # Logs estruturados (events.jsonl) e suíte de testes P0
-├── agentes/                   # Agentes ADK (assistente.py, roteador.py, ferramentas.py)
-├── agentes/computer_use/      # Agente Computer Use + PlaywrightComputer (navegador Chromium)
-├── static_adk/                # Cliente web unificado para o agente ADK
-└── run_jarvis.sh              # Script utilitário para subida rápida do ambiente
-```
+See [`ROADMAP.md`](ROADMAP.md) for the public roadmap. Near-term priorities include runtime hardening, stronger integration tests, cleaner provider routing, broader Linux compatibility and easier installation.
+
+---
+
+## Contributing
+
+Contributions are welcome. If you want to improve the voice runtime, ADK agents, Linux automation, plugins, security tests, documentation or UI, read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
+
+For security-sensitive findings, see [`SECURITY.md`](SECURITY.md).
+
+---
+
+## Documentation
+
+- 🇧🇷 [`README.pt-BR.md`](README.pt-BR.md) — Portuguese overview and setup
+- 🧭 [`ESBOCO_PROJETO.md`](ESBOCO_PROJETO.md) — project design notes
+- 🛣️ [`ROADMAP.md`](ROADMAP.md) — planned work
+- 🤝 [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guide
+- 🔐 [`SECURITY.md`](SECURITY.md) — security reporting and trust model notes
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+If JARVIS is useful to you, consider **starring the repository** — it helps other developers discover the project.
