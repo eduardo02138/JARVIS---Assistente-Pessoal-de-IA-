@@ -634,6 +634,102 @@ def open_website(url: str) -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir o site: {str(e)}"}
 
+def read_web_page(url: str, max_chars: int = 4000) -> dict:
+    """
+    Lê e extrai o conteúdo textual legível de uma página ou artigo da web (notícias, documentação, artigos, etc.)
+    para que você possa ler, explicar ou resumir as informações diretamente ao senhor em áudio.
+    """
+    import gzip
+    import urllib.request
+    from html.parser import HTMLParser
+
+    clean_url = url.strip()
+    if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+        clean_url = "https://" + clean_url
+
+    req = urllib.request.Request(
+        clean_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate",
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read()
+            if resp.info().get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            charset = resp.headers.get_content_charset() or "utf-8"
+            html_text = raw.decode(charset, errors="ignore")
+
+        title = ""
+        text = ""
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html_text, "html.parser")
+            if soup.title and soup.title.string:
+                title = soup.title.string.strip()
+            for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "svg", "form"]):
+                tag.decompose()
+            text = " ".join(soup.get_text(separator=" ").split())
+        except Exception:
+            class SimpleExtractor(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.chunks = []
+                    self.in_title = False
+                    self.in_ignore = False
+                    self.title = ""
+                    self.ignore_tags = {"script", "style", "noscript", "header", "footer", "nav", "svg"}
+
+                def handle_starttag(self, tag, attrs):
+                    if tag.lower() in self.ignore_tags:
+                        self.in_ignore = True
+                    if tag.lower() == "title":
+                        self.in_title = True
+
+                def handle_endtag(self, tag):
+                    if tag.lower() in self.ignore_tags:
+                        self.in_ignore = False
+                    if tag.lower() == "title":
+                        self.in_title = False
+
+                def handle_data(self, data):
+                    if self.in_title:
+                        self.title += data.strip() + " "
+                    elif not self.in_ignore:
+                        s = data.strip()
+                        if s:
+                            self.chunks.append(s)
+
+            parser = SimpleExtractor()
+            parser.feed(html_text)
+            title = parser.title.strip()
+            text = " ".join(parser.chunks)
+
+        limit = max(500, min(int(max_chars), 12000))
+        conteudo_truncado = text[:limit]
+        if len(text) > limit:
+            conteudo_truncado += " ... [conteúdo resumido por limite de tamanho]"
+
+        return {
+            "sucesso": True,
+            "url": clean_url,
+            "titulo": title or "Página da Web",
+            "conteudo": conteudo_truncado,
+            "tamanho_total": len(text),
+            "mensagem": f"Conteúdo da página '{title or clean_url}' extraído com sucesso, senhor."
+        }
+    except Exception as e:
+        return {
+            "sucesso": False,
+            "url": clean_url,
+            "mensagem": f"Não foi possível ler o conteúdo da página '{clean_url}': {str(e)}"
+        }
+
 def play_music(query: str, platform: str = None) -> dict:
     """
     Busca e toca qualquer música, álbum ou artista na plataforma preferida do usuário (YouTube, Spotify, Deezer).
@@ -1325,6 +1421,24 @@ GEMINI_FUNCTION_DECLARATIONS = [
         }
     },
     {
+        "name": "read_web_page",
+        "description": "Lê e extrai o conteúdo textual legível de uma página ou artigo da web (notícias, documentação, artigos, etc.) para que você possa ler, explicar ou resumir as informações diretamente ao senhor em áudio.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "url": {
+                    "type": "STRING",
+                    "description": "Endereço da página web ou notícia a ser lida (ex: 'https://g1.globo.com', 'https://techcrunch.com/...')."
+                },
+                "max_chars": {
+                    "type": "INTEGER",
+                    "description": "Limite máximo de caracteres a extrair (padrão: 4000)."
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
         "name": "play_music",
         "description": "Busca e reproduz qualquer música, cantor, banda ou gênero musical. Se a plataforma não for especificada, utilizará a preferência salva pelo usuário ou perguntará educadamente na primeira vez se prefere YouTube ou Spotify.",
         "parameters": {
@@ -1540,6 +1654,7 @@ TOOL_REGISTRY = {
     "set_ide_mode": set_ide_mode,
     "antigravity_open_gemini_bridge": antigravity_open_gemini_bridge,
     "open_website": open_website,
+    "read_web_page": read_web_page,
     "play_music": play_music,
     "take_screenshot": take_screenshot,
     "manage_user_preference": manage_user_preference,

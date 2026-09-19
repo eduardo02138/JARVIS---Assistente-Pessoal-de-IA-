@@ -62,6 +62,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "get_current_datetime": RiskLevel.READ,
     "list_installed_games": RiskLevel.READ,
     "read_notes": RiskLevel.READ,
+    "read_web_page": RiskLevel.READ,
     "antigravity_list_mcps": RiskLevel.READ,
     "take_screenshot": RiskLevel.READ,
     "social_feed_check_notifications": RiskLevel.READ,

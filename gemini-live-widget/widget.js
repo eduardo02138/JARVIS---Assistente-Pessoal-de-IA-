@@ -1392,7 +1392,7 @@ function updateVoiceSelectionUI() {
     });
 }
 
-document.querySelectorAll(".voice-card").forEach(card => {
+document.querySelectorAll(".voice-card[data-voice]").forEach(card => {
     card.addEventListener("click", () => {
         state.voice = card.getAttribute("data-voice");
         localStorage.setItem("gemini_live_voice", state.voice);
