@@ -1542,7 +1542,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     "audio_recebido_no_turno": 0,
                     "texto_recebido_no_turno": 0,
                     "ultima_ferramenta": None,
-                    "ultimo_resultado_ferramenta": None
+                    "ultimo_resultado_ferramenta": None,
+                    "turno_texto_ativo": False,
                 }
                 # Confirmações pendentes de ferramentas de risco: call_id -> Future(bool)
                 pending_confirmations: Dict[str, asyncio.Future] = {}
@@ -1668,7 +1669,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                 # Repassa para a sessão do agente com controle refinado
                                 agora = time.time()
-                                esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 1.2)
+                                esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 10.0)
                                 falando_agora = (agora - assistant_state["ultimo_audio"] < MIC_GRACE_S)
                                 if allow_barge_in or (not esperando_resposta and not falando_agora):
                                     await session.send_realtime_input(
@@ -1719,6 +1720,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     )
                                 )
                                 assistant_state["busy"] = True
+                                assistant_state["turno_texto_ativo"] = True
                                 turno_concluido["done"] = False
                                 assistant_state["ultimo_envio_usuario"] = time.time()
                                 assistant_state["audio_recebido_no_turno"] = 0
@@ -1765,6 +1767,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         inj_text = await active_session_queue.get()
                         logger.info(f"Injetando prompt na sessão ativa: '{inj_text}'")
                         assistant_state["busy"] = True
+                        assistant_state["turno_texto_ativo"] = True
                         turno_concluido["done"] = False
                         assistant_state["ultimo_envio_usuario"] = time.time()
                         assistant_state["audio_recebido_no_turno"] = 0
@@ -1914,6 +1917,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             await safe_send_json({"type": "fallback_text", "text": msg_fala})
 
                         assistant_state["busy"] = False
+                        assistant_state["turno_texto_ativo"] = False
                         assistant_state["ultima_ferramenta"] = None
                         assistant_state["ultimo_resultado_ferramenta"] = None
                         record_event("turn_complete")
@@ -1954,6 +1958,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 if server_content is not None:
                                     if server_content.interrupted:
                                         assistant_state["busy"] = False
+                                        assistant_state["turno_texto_ativo"] = False
                                         record_event("interrupted")
                                         await safe_send_json({"type": "interrupted"})
                                         continue
@@ -2064,6 +2069,22 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 "data": {"sucesso": True, "mensagem": "Autoridade de controle expirada, senhor. Modo Controle desativado."}
                             })
 
+                # Worker 5: Watchdog para recuperação automática se a Live API silenciar sem resposta
+                async def turn_watchdog_worker():
+                    while True:
+                        await asyncio.sleep(5)
+                        if assistant_state.get("busy"):
+                            agora = time.time()
+                            ultimo_envio = assistant_state.get("ultimo_envio_usuario", 0.0)
+                            ultimo_aud = assistant_state.get("ultimo_audio", 0.0)
+                            decorrido = agora - max(ultimo_envio, ultimo_aud)
+                            if decorrido > 20.0:
+                                logger.warning("Watchdog: turno inerte por mais de 20s sem resposta. Destravando sessão.")
+                                assistant_state["busy"] = False
+                                assistant_state["turno_texto_ativo"] = False
+                                turno_concluido["done"] = True
+                                await safe_send_json({"type": "turn_complete"})
+
                 # TaskGroup garante o cancelamento dos demais workers quando um deles termina
                 # ou falha: sem isso, o injection_worker antigo continuaria consumindo a fila global.
                 try:
@@ -2072,6 +2093,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         tg.create_task(injection_worker())
                         tg.create_task(from_gemini_worker())
                         tg.create_task(control_lease_worker())
+                        tg.create_task(turn_watchdog_worker())
                 except* WebSocketDisconnect:
                     logger.info("Cliente Web HUD desconectado.")
                 except* EncerramentoLimpoDaSessao:

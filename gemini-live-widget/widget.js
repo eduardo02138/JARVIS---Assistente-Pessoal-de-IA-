@@ -379,8 +379,8 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala natural (0.003 calibrado para não podar voz normal/baixa; configurável via localStorage "gemini_vad_threshold" ou legado 0.012)
-            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.003;
+            // Limiar de fala natural (0.007 calibrado para não captar ruído ambiente/ventoinha e não podar voz normal/baixa; configurável via localStorage "gemini_vad_threshold")
+            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.007;
             const isSpeaking = rms >= vadThreshold;
             const currentRate = state.inputAudioCtx.sampleRate || 16000;
             const maxHoldover = Math.ceil((currentRate / 2048) * 0.8); // ~800ms de tolerância a pausas naturais
@@ -879,6 +879,8 @@ async function connectLiveBackend() {
                 state.hasSpeechCaption = false;
                 state.speaking = false;
                 state.processing = false;
+                state.pauseMicUntil = 0;
+                if (state.textWatchdogTimer) clearTimeout(state.textWatchdogTimer);
                 state.currentAiMsgElement = null;
                 state.currentUserVoiceMsgElement = null;
                 state.currentAiCaptionElement = null;
@@ -907,6 +909,8 @@ async function connectLiveBackend() {
                 state.hasSpeechCaption = false;
                 state.speaking = false;
                 state.processing = false;
+                state.pauseMicUntil = 0;
+                if (state.textWatchdogTimer) clearTimeout(state.textWatchdogTimer);
                 state.currentAiMsgElement = null;
                 state.currentUserVoiceMsgElement = null;
                 state.currentAiCaptionElement = null;
@@ -1000,6 +1004,8 @@ async function connectLiveBackend() {
             case "error":
                 state.speaking = false;
                 state.processing = false;
+                state.pauseMicUntil = 0;
+                if (state.textWatchdogTimer) clearTimeout(state.textWatchdogTimer);
                 dom.liveStatusText.textContent = "Aviso: " + msg.message;
                 break;
         }
@@ -1184,7 +1190,16 @@ async function sendTextPrompt(text) {
     }
 
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-        state.pauseMicUntil = Date.now() + 800;
+        state.pauseMicUntil = Date.now() + 15000;
+        if (state.textWatchdogTimer) clearTimeout(state.textWatchdogTimer);
+        state.textWatchdogTimer = setTimeout(() => {
+            if (state.processing) {
+                console.warn("Watchdog: timeout aguardando resposta do Gemini.");
+                state.processing = false;
+                state.pauseMicUntil = 0;
+                if (dom.liveStatusText) dom.liveStatusText.textContent = "Ouvindo você...";
+            }
+        }, 15000);
         state.ws.send(JSON.stringify({ type: "text", text: clean }));
     }
 }
