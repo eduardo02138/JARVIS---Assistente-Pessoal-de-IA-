@@ -378,15 +378,17 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala natural (0.012 por padrão, configurável via localStorage). Evita cortes de voz e filtra vazamento de áudio ambiente/vídeo
-            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.012;
+            // Limiar de fala natural (0.003 calibrado para não podar voz normal/baixa; configurável via localStorage "gemini_vad_threshold" ou legado 0.012)
+            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.003;
             const isSpeaking = rms >= vadThreshold;
+            const currentRate = state.inputAudioCtx.sampleRate || 16000;
+            const maxHoldover = Math.ceil((currentRate / 2048) * 0.8); // ~800ms de tolerância a pausas naturais
             if (isSpeaking) {
-                speechHoldover = 3; // Mantem envio por ~380ms adicionais
+                speechHoldover = maxHoldover;
             } else if (speechHoldover > 0) {
                 speechHoldover--;
                 if (speechHoldover === 0) {
-                    // VAD Híbrida da Live API: notifica término imediato de fala para reduzir latência
+                    // VAD Híbrida da Live API: notifica término de fala após pausa real e sustentada
                     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
                         state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
                     }
@@ -394,7 +396,6 @@ async function initAudio() {
             }
 
             if (!isSpeaking && speechHoldover <= 0) return;
-            const currentRate = state.inputAudioCtx.sampleRate || 16000;
 
             // Resample para 16kHz
             const inputData = downsampleBuffer(rawInput, currentRate, 16000);
