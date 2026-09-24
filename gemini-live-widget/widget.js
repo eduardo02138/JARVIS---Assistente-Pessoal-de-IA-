@@ -1406,7 +1406,7 @@ function renderTelemetryHUD(t) {
     if (dom.hudCpuBar) dom.hudCpuBar.style.width = t.cpu_percent || "0%";
     if (dom.hudCpuSub) dom.hudCpuSub.textContent = `Núcleos lógicos: ${t.cpu_cores || "--"}`;
 
-    if (dom.hudGpuModel) dom.hudGpuModel.textContent = t.gpu_modelo || "GPU NVIDIA RTX";
+    if (dom.hudGpuModel) dom.hudGpuModel.textContent = t.gpu_modelo || "GPU";
     if (dom.hudGpuTempVal) dom.hudGpuTempVal.textContent = t.gpu_temp || "--°C";
     if (dom.hudGpuBar) dom.hudGpuBar.style.width = t.gpu_uso || "0%";
     if (dom.hudGpuUso) dom.hudGpuUso.textContent = t.gpu_uso || "--%";

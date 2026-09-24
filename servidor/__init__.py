@@ -22,3 +22,28 @@ from dotenv import load_dotenv
 RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_PATH = os.path.join(RAIZ_PROJETO, ".env")
 load_dotenv(ENV_PATH, override=True)
+
+
+def porta_do_servidor() -> int:
+    """Porta HTTP configurada (PORT no .env; padrão 8000)."""
+    try:
+        return int(os.environ.get("PORT", "8000"))
+    except ValueError:
+        return 8000
+
+
+def host_local_do_servidor() -> str:
+    """Endereço que clientes desta máquina usam para falar com o servidor.
+
+    Servidor ouvindo em todas as interfaces (0.0.0.0 / ::) é alcançado pelo loopback.
+    """
+    host = os.environ.get("JARVIS_HOST", "127.0.0.1").strip()
+    return "127.0.0.1" if host in ("", "0.0.0.0", "::", "[::]") else host
+
+
+def url_local_do_servidor() -> str:
+    """URL base do servidor para o widget, o servidor MCP, a ponte gemini e o monitor."""
+    host = host_local_do_servidor()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"  # IPv6 literal
+    return f"http://{host}:{porta_do_servidor()}"

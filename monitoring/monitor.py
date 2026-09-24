@@ -3,13 +3,20 @@
 Monitor CLI de Telemetria e Depuração em Tempo Real para JARVIS / Gemini Live
 Exibe métricas ao vivo de áudio, transcrições, chamadas de tools e rotações de chaves no terminal.
 """
+import os
 import sys
 import time
 import json
 import urllib.request
 import urllib.error
 
-SERVER_URL = "http://127.0.0.1:8000"
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if RAIZ_PROJETO not in sys.path:
+    sys.path.insert(0, RAIZ_PROJETO)
+
+from servidor import url_local_do_servidor  # noqa: E402  (carrega PORT/JARVIS_HOST do .env)
+
+SERVER_URL = url_local_do_servidor()
 
 # Códigos ANSI para estilização no terminal
 RESET = "\033[0m"

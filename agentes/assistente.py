@@ -39,6 +39,15 @@ MODELO_LIVE_EXTENDED = os.environ.get("LIVE_MODEL_EXTENDED", "gemini-3.8-live-ex
 MODELO_TEXTO = os.environ.get("TEXT_MODEL", "gemini-flash-latest")
 MODELO_TEXTO_RESERVA = os.environ.get("TEXT_MODEL_FALLBACK", "gemini-2.5-flash")
 
+def _maquina_identificada() -> str:
+    """Resumo do hardware desta máquina, detectado ao iniciar (nunca impede o boot)."""
+    try:
+        import perfil_maquina
+        return perfil_maquina.resumo_da_maquina()
+    except Exception:
+        return "não identificada (use get_machine_profile)"
+
+
 INSTRUCAO_BASE = f"""Você é o J.A.R.V.I.S., assistente pessoal inteligente em português do Brasil, falado e escrito.
 
 Conversa:
@@ -47,8 +56,9 @@ Conversa:
 - Nunca afirme ter feito algo que a ferramenta não confirmou.
 
 Ferramentas e Governança:
-- Você possui {len(obter_todas_ferramentas_adk())} ferramentas integradas do ecossistema: telemetria de hardware (GPU NVIDIA, CPU, RAM), controle de volume, janelas, modo IDE, inicialização de jogos Steam, automação residencial, Google Workspace, Deep Research ("modo deep" com relatórios analíticos), mercado financeiro, leitura e extração de páginas web (read_web_page) e controle de periféricos.
+- Você possui {len(obter_todas_ferramentas_adk())} ferramentas integradas do ecossistema: telemetria de hardware (CPU, RAM, placa de vídeo e discos), identificação da máquina (get_machine_profile), controle de volume, janelas, modo IDE, inicialização de jogos Steam, automação residencial, Google Workspace, Deep Research ("modo deep" com relatórios analíticos), mercado financeiro, leitura e extração de páginas web (read_web_page) e controle de periféricos.
 - Você está totalmente integrado ao ecossistema de Servidores MCP e Skills do Google ADK. Quando o usuário pedir pesquisa aprofundada ou "modo deep", use 'deep_research_start'. Quando pedir para ler páginas da web ou artigos, use 'read_web_page'. NUNCA afirme que não possui essas capacidades.
+- Máquina do usuário, identificada automaticamente: {_maquina_identificada()}. Baseie respostas sobre hardware nestes dados, nunca em suposições.
 - Use as ferramentas imediatamente quando o usuário solicitar informações ou ações do sistema.
 - Ações de risco são bloqueadas automaticamente pelo Policy Engine. Se uma ferramenta retornar status bloqueado aguardando confirmação, peça autorização ao usuário de forma clara.
 - Você NUNCA pode conceder a sua própria autorização; a confirmação precisa ser emitida pelo usuário.
@@ -196,7 +206,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
 
     # Hora e telemetria vêm das mesmas ferramentas de sistema do catálogo (sem duplicatas para o modelo)
     tools_especialista_sistema: list = [consultar_preferencias]
-    for nome in ("get_current_datetime", "get_system_status", "get_gpu_status", "adjust_volume",
+    for nome in ("get_current_datetime", "get_system_status", "get_machine_profile", "get_gpu_status", "adjust_volume",
                  "toggle_telemetry_overlay", "list_installed_games", "list_open_windows"):
         if nome in ferramentas_map:
             tools_especialista_sistema.append(ferramentas_map[nome])
@@ -204,7 +214,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
     especialista_sistema = Agent(
         name="especialista_sistema",
         model=MODELO_TEXTO,
-        description="Analisa hardware, GPU NVIDIA, uso de CPU e memória, telemetria, hora e preferências salvas.",
+        description="Analisa hardware da máquina (CPU, memória, placa de vídeo, discos), telemetria, hora e preferências salvas.",
         instruction=(
             "Responda em uma frase curta, com o número mais relevante. "
             "Use as ferramentas em vez de estimar valores."

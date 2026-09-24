@@ -42,7 +42,7 @@ The project targets developers interested in **voice agents**, **multimodal AI**
 - 🖥️ **Two user experiences** — holographic web HUD and native floating PySide6 desktop widget.
 - 🧩 **Plugin + Skill architecture** — reusable capabilities can be exposed to Gemini/ADK without putting everything in one prompt.
 - 🔌 **MCP server** — IDEs and external agents can discover and invoke JARVIS capabilities.
-- 🐧 **Linux-first automation** — hardware telemetry, applications, media, browser control and desktop workflows.
+- 🐧 **Linux-first automation** — hardware telemetry, applications, media, browser control and desktop workflows, adapted automatically to each machine (any GPU vendor, Wayland or X11, Flatpak/Snap apps).
 
 ---
 
@@ -135,6 +135,7 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 | `agentes/computer_use/` | Browser automation / Gemini Computer Use integration with Playwright |
 | `policy_engine.py` | Risk classification, confirmations and temporary control/IDE/computer leases |
 | `system_tools.py` | Linux, hardware, media and local automation tools plus the Gemini function declarations |
+| `perfil_maquina.py` | Runtime machine identification: OS, desktop, CPU, RAM, GPUs, disks, screen, audio and installed apps |
 | `controller_engine.py` | Virtual mouse/keyboard via `evdev`/`uinput` (degrades gracefully when unavailable) |
 | `preferences_manager.py` | Persistent user preferences (default apps, music platform, game launchers) |
 | `plugin_manager.py` / `plugin_sdk.py` | Plugin discovery, lifecycle and extension contracts |
@@ -186,6 +187,24 @@ The native ADK layer provides routing between low-latency and coordinated agent 
 ### Tool calling and Linux automation
 
 System tools expose hardware telemetry, application control, screenshots, media actions and local automation. Plugins extend the catalog with workspace, research, game companion, smart-home, streaming and other specialized capabilities.
+
+### Works on any Linux machine
+
+Nothing about the hardware is hardcoded. `perfil_maquina.py` identifies the machine at runtime from standard Linux interfaces (`/sys`, `/proc`, `/etc/os-release`, XDG and the `PATH`), and every probe degrades to a neutral value instead of failing — a headless server, a VM or a laptop without a dedicated GPU keep working.
+
+| What | How it is detected |
+| --- | --- |
+| System | Distribution (`/etc/os-release`), kernel, desktop environment and session type (Wayland/X11) |
+| CPU and RAM | Model from `/proc/cpuinfo`, cores and memory via `psutil` |
+| Graphics cards | Every PCI display controller and SoC GPU, named via `lspci` or `pci.ids`; live usage/VRAM/temperature through `nvidia-smi` (NVIDIA) or `amdgpu` sysfs (AMD); Intel and others report the model |
+| Disks | NVMe, SATA SSD, HDD, USB and virtual disks with model, capacity and label — through partitions, LUKS/LVM and btrfs subvolumes |
+| Screen | `xrandr`/`xdpyinfo` on X11, or each connected monitor's native mode from the kernel (Wayland) |
+| Apps | Default browser/file manager (`xdg-settings`/`xdg-mime`), known binaries per category and every `.desktop` entry, including Flatpak and Snap |
+| Screenshots | `grim`, `spectacle` or `gnome-screenshot` on Wayland; `maim`, `scrot`, ImageMagick, `ffmpeg` on X11 — saved to the user's localized Pictures folder |
+| Volume | `pactl` (PulseAudio/PipeWire), `wpctl` (PipeWire) or `amixer` (ALSA) |
+| Games | Steam (native or Flatpak), GOG and `.desktop` games from Lutris, Heroic, Flatpak and Snap |
+
+The model receives a one-line summary of the detected machine in its instructions and can call `get_machine_profile` for the full profile (disks with free space, GPUs, screen, audio and default apps). Local clients (desktop widget, MCP server, file bridge, monitor) follow `PORT`/`JARVIS_HOST` from `.env`.
 
 ### Policy Engine and secure execution
 
@@ -313,7 +332,7 @@ The repository includes automated architecture, security and regression tests. T
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
 PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py -v
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py -v
 .venv/bin/python monitoring/test_suite.py --p0   # security & architecture gates (P0)
 .venv/bin/python monitoring/test_adk.py          # Google ADK scenarios
 ```
@@ -343,6 +362,7 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── transcricao.py           # Live transcription configuration
 ├── policy_engine.py         # Tool governance and authorization
 ├── system_tools.py          # Linux/system tools + function declarations
+├── perfil_maquina.py        # Runtime machine identification (hardware, desktop, apps)
 ├── controller_engine.py     # Virtual mouse/keyboard (evdev/uinput)
 ├── preferences_manager.py   # Persistent user preferences
 ├── plugin_manager.py        # Plugin discovery and lifecycle

@@ -11,8 +11,10 @@ import json
 import shlex
 import time
 import threading
+from typing import List, Optional
 import preferences_manager
 import controller_engine
+import perfil_maquina
 import gemini_bridge
 from gemini_bridge import AGY_BIN, ANTIGRAVITY_BIN, WORKSPACE_DIR
 
@@ -20,8 +22,79 @@ _last_gpu_result = None
 _last_gpu_time = 0.0
 _last_gpu_lock = threading.Lock()
 
+def _gpu_nvidia() -> Optional[dict]:
+    """Telemetria completa pelo nvidia-smi (driver proprietário da NVIDIA)."""
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
+        )
+    except Exception:
+        return None
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    parts = [p.strip() for p in res.stdout.strip().splitlines()[0].split(",")]
+    if len(parts) < 6:
+        return None
+    return {
+        "disponivel": True,
+        "modelo": parts[0],
+        "uso_gpu": f"{parts[1]}%",
+        "vram_usada_mb": f"{parts[3]} MB",
+        "vram_total_mb": f"{parts[4]} MB",
+        "temperatura": f"{parts[5]}°C",
+        "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
+    }
+
+
+def _gpu_sysfs() -> Optional[dict]:
+    """Telemetria pela interface padrão do kernel (GPUs AMD com driver amdgpu)."""
+    t = perfil_maquina.telemetria_gpu_sysfs()
+    if not t:
+        return None
+    uso = f"{t['uso_percentual']}%"
+    temperatura = f"{t['temperatura_c']}°C" if t["temperatura_c"] is not None else None
+    vram_usada = f"{t['vram_usada_mb']} MB" if t["vram_usada_mb"] is not None else None
+    vram_total = f"{t['vram_total_mb']} MB" if t["vram_total_mb"] is not None else None
+    detalhes = [f"uso em {uso}"]
+    if temperatura:
+        detalhes.append(f"temperatura em {temperatura}")
+    if vram_usada and vram_total:
+        detalhes.append(f"{vram_usada} de {vram_total} VRAM utilizados")
+    return {
+        "disponivel": True,
+        "modelo": t["modelo"],
+        "uso_gpu": uso,
+        "vram_usada_mb": vram_usada,
+        "vram_total_mb": vram_total,
+        "temperatura": temperatura,
+        "mensagem": f"Placa de vídeo {t['modelo']}: " + ", ".join(detalhes) + "."
+    }
+
+
+def _gpu_sem_telemetria() -> dict:
+    """GPUs sem interface de telemetria (Intel, nouveau, VMs): informa ao menos o modelo."""
+    placas = perfil_maquina.placas_de_video()
+    if not placas:
+        return {"disponivel": False, "mensagem": "Nenhuma placa de vídeo foi detectada nesta máquina, senhor."}
+    principal = placas[0]
+    return {
+        "disponivel": True,
+        "modelo": principal["modelo"],
+        "tipo": principal["tipo"],
+        "telemetria_em_tempo_real": False,
+        "mensagem": (
+            f"Placa de vídeo {principal['modelo']} ({principal['tipo']}) detectada, senhor. "
+            "O driver dela não expõe uso e temperatura em tempo real."
+        )
+    }
+
+
 def get_gpu_status() -> dict:
-    """Verifica e retorna o uso, temperatura e memória VRAM da GPU dedicada."""
+    """Uso, VRAM e temperatura da placa de vídeo, em qualquer fabricante.
+
+    NVIDIA via nvidia-smi, AMD via sysfs (amdgpu); nas demais informa o modelo.
+    """
     global _last_gpu_result, _last_gpu_time
     now = time.monotonic()
     if _last_gpu_result is not None and (now - _last_gpu_time < 2.0):
@@ -32,49 +105,13 @@ def get_gpu_status() -> dict:
         if _last_gpu_result is not None and (now - _last_gpu_time < 2.0):
             return _last_gpu_result
         try:
-            res = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                parts = [p.strip() for p in res.stdout.strip().split(",")]
-                if len(parts) >= 6:
-                    _last_gpu_result = {
-                        "disponivel": True,
-                        "modelo": parts[0],
-                        "uso_gpu": f"{parts[1]}%",
-                        "vram_usada_mb": f"{parts[3]} MB",
-                        "vram_total_mb": f"{parts[4]} MB",
-                        "temperatura": f"{parts[5]}°C",
-                        "mensagem": f"Placa de vídeo {parts[0]}: uso em {parts[1]}%, temperatura em {parts[5]}°C, {parts[3]} MB de {parts[4]} MB VRAM utilizados."
-                    }
-                    _last_gpu_time = now
-                    return _last_gpu_result
+            _last_gpu_result = _gpu_nvidia() or _gpu_sysfs() or _gpu_sem_telemetria()
         except Exception:
-            pass
-        _last_gpu_result = {"disponivel": False, "mensagem": "Nenhuma GPU dedicada detectada."}
+            _last_gpu_result = {"disponivel": False, "mensagem": "Não foi possível consultar a placa de vídeo."}
         _last_gpu_time = now
         return _last_gpu_result
 
 NOTES_FILE = os.path.expanduser("~/jarvis_notes.txt")
-
-# Mapeamento de nomes comuns em português para executáveis no Linux
-APP_ALIASES = {
-    "navegador": "google-chrome",
-    "chrome": "google-chrome",
-    "browser": "google-chrome",
-    "firefox": "firefox",
-    "vscode": "code",
-    "vs code": "code",
-    "codigo": "code",
-    "terminal": "x-terminal-emulator",
-    "calculadora": "gnome-calculator",
-    "calc": "gnome-calculator",
-    "arquivos": "nautilus",
-    "gerenciador de arquivos": "nautilus",
-    "spotify": "spotify",
-    "editor": "gedit"
-}
 
 def get_system_status() -> dict:
     """
@@ -175,8 +212,10 @@ def list_installed_games(filter_name: str = "") -> dict:
     """
     games = []
 
-    # 1. Descoberta dinâmica de pontos de montagem (SSDs, HDs e mídias externas) com cache
+    # 1. Descoberta dinâmica de pontos de montagem (SSDs, HDs e mídias externas) com cache,
+    # incluindo discos montados em caminhos próprios (ex.: /data, /jogos)
     discovered_mounts = _discover_slow_mounts()
+    discovered_mounts |= {m["ponto_de_montagem"] for m in perfil_maquina.montagens() if m["ponto_de_montagem"] != "/"}
 
     # 2. Descoberta de bibliotecas Steam locais e em outros discos/SSDs
     vdf_paths = [
@@ -228,20 +267,8 @@ def list_installed_games(filter_name: str = "") -> dict:
 
     ignored_names = ["Steamworks Common Redistributables", "Proton", "Steam Linux Runtime"]
 
-    def _identificar_disco(caminho: str) -> str:
-        for m in sorted(discovered_mounts, key=len, reverse=True):
-            if caminho.startswith(m):
-                bname = os.path.basename(m)
-                if "gamer" in bname.lower():
-                    return "SSD Gamer (SATA 1TB)"
-                elif "novo volume" in bname.lower():
-                    return "SSD Secundário (SATA 240GB)"
-                elif "8a8c78608c7848a9" in bname.lower() or "windows" in bname.lower():
-                    return "SSD Windows/Dados (NVMe 732GB)"
-                return f"SSD/Drive {bname}"
-        if caminho.startswith(os.path.expanduser("~")):
-            return "SSD Linux Principal (NVMe)"
-        return "Armazenamento Local"
+    # Steam nativo expõe o binário "steam"; o Flatpak só registra o protocolo steam://
+    lancador_steam = "steam" if shutil.which("steam") else "xdg-open"
 
     for sdir in steam_lib_dirs:
         if not os.path.exists(sdir):
@@ -271,8 +298,8 @@ def list_installed_games(filter_name: str = "") -> dict:
                         "distribuidora": "Steam",
                         "appid": appid,
                         "pasta": pasta_jogo,
-                        "disco": _identificar_disco(pasta_jogo),
-                        "comando": f"steam steam://rungameid/{appid}"
+                        "disco": perfil_maquina.identificar_disco(pasta_jogo),
+                        "comando": f"{lancador_steam} steam://rungameid/{appid}"
                     })
             except Exception:
                 pass
@@ -309,7 +336,7 @@ def list_installed_games(filter_name: str = "") -> dict:
                             "distribuidora": "GOG Galaxy",
                             "appid": g_id,
                             "pasta": game_dir,
-                            "disco": _identificar_disco(game_dir),
+                            "disco": perfil_maquina.identificar_disco(game_dir),
                             "comando": f"xdg-open {shlex.quote(game_dir)}"
                         })
                     except Exception:
@@ -317,42 +344,35 @@ def list_installed_games(filter_name: str = "") -> dict:
         except Exception:
             pass
 
-    # 4. Varre .desktop locais em busca de outros jogos (Lutris, Wine, etc.)
-    desktop_dirs = [
-        os.path.expanduser("~/.local/share/applications"),
-        "/usr/share/applications"
-    ]
-    for d in desktop_dirs:
-        if not os.path.exists(d):
+    # 4. Atalhos .desktop de jogos em todos os diretórios XDG (nativos, Lutris, Heroic, Flatpak e Snap)
+    for app in perfil_maquina.aplicativos_instalados():
+        exec_min = app["exec"].lower()
+        eh_jogo = "Game" in app["categorias"] or any(m in exec_min for m in ("lutris", "heroic", "steam://rungameid"))
+        nome = app["nome_original"] or app["nome"]
+        argv = perfil_maquina.argv_do_exec(app["exec"])
+        if app["oculto"] or not eh_jogo or not nome or not argv:
             continue
-        for df in glob.glob(os.path.join(d, "*.desktop")):
-            try:
-                with open(df, "r", encoding="utf-8", errors="ignore") as fp:
-                    dtxt = fp.read()
-                dname = ""
-                dexec = ""
-                dcats = ""
-                for l in dtxt.splitlines():
-                    if l.startswith("Name=") and not dname:
-                        dname = l.split("=", 1)[1]
-                    elif l.startswith("Exec=") and not dexec:
-                        dexec = l.split("=", 1)[1]
-                    elif l.startswith("Categories="):
-                        dcats = l.split("=", 1)[1]
-
-                if ("Game" in dcats or "lutris" in dexec.lower()) and dname:
-                    dist = "Lutris" if "lutris" in dexec.lower() else "Nativo Linux"
-                    if not any(g["nome"].lower() == dname.lower() for g in games):
-                        games.append({
-                            "nome": dname,
-                            "distribuidora": dist,
-                            "appid": None,
-                            "pasta": df,
-                            "disco": "SSD Linux Principal (NVMe)",
-                            "comando": dexec.split("%")[0].strip()
-                        })
-            except Exception:
-                pass
+        if "lutris" in exec_min:
+            dist = "Lutris"
+        elif "heroic" in exec_min:
+            dist = "Heroic"
+        elif "steam://rungameid" in exec_min:
+            dist = "Steam"
+        elif "flatpak" in os.path.basename(argv[0]):
+            dist = "Flatpak"
+        elif "/snap/" in argv[0] or app["arquivo"].startswith("/var/lib/snapd"):
+            dist = "Snap"
+        else:
+            dist = "Nativo Linux"
+        if not any(g["nome"].lower() == nome.lower() for g in games):
+            games.append({
+                "nome": nome,
+                "distribuidora": dist,
+                "appid": None,
+                "pasta": app["arquivo"],
+                "disco": perfil_maquina.identificar_disco(app["arquivo"]),
+                "comando": shlex.join(argv)
+            })
 
     # Deduplica
     seen = set()
@@ -470,69 +490,71 @@ def open_application(app_name: str) -> dict:
     except Exception:
         pass
 
-    # 2. Aliases e catálogo de aplicativos conhecidos (bloqueia binários arbitrários)
+    # 2. Aplicativos: categorias (navegador, terminal, calculadora...) resolvidas nesta máquina,
+    # catálogo de executáveis seguros ou atalho .desktop instalado (inclui Flatpak e Snap).
+    # Nunca executa um caminho arbitrário: só binários do catálogo ou atalhos do sistema.
     SAFE_APP_CATALOG = {
         "steam", "code", "firefox", "google-chrome", "chromium", "spotify",
         "discord", "obs", "vlc", "gedit", "nautilus", "x-terminal-emulator",
         "gnome-calculator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"
     }
+    resolvido = None
+    if clean_name not in perfil_maquina.ALIASES_DE_CATEGORIA and clean_name in SAFE_APP_CATALOG:
+        caminho = shutil.which(clean_name)
+        if caminho:
+            resolvido = {"tipo": "binario", "argv": [caminho], "rotulo": clean_name}
+    if resolvido is None:
+        resolvido = perfil_maquina.resolver_aplicativo(clean_name)
 
-    target_exec = APP_ALIASES.get(clean_name)
-    resolved = None
-
-    if target_exec:
-        resolved = shutil.which(target_exec)
-    elif clean_name in SAFE_APP_CATALOG:
-        target_exec = clean_name
-        resolved = shutil.which(target_exec)
-
-    if not resolved:
-        if "terminal" in clean_name:
-            for term in ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]:
-                if shutil.which(term):
-                    resolved = term
-                    target_exec = term
-                    break
-        elif "calc" in clean_name:
-            for calc in ["gnome-calculator", "kcalc", "galculator"]:
-                if shutil.which(calc):
-                    resolved = calc
-                    target_exec = calc
-                    break
-
-    if not resolved:
-        # Tenta lançar via gtk-launch se existir .desktop seguro registrado
-        for d in [os.path.expanduser("~/.local/share/applications"), "/usr/share/applications"]:
-            if os.path.exists(d):
-                for df in glob.glob(os.path.join(d, "*.desktop")):
-                    base = os.path.basename(df).lower()
-                    if clean_name in base:
-                        desktop_id = os.path.basename(df)
-                        try:
-                            subprocess.Popen(["gtk-launch", desktop_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                            return {
-                                "sucesso": True,
-                                "mensagem": f"Aplicativo '{desktop_id}' inicializado com sucesso, senhor."
-                            }
-                        except Exception:
-                            pass
-
+    if not resolvido:
         return {
             "sucesso": False,
-            "mensagem": f"Desculpe, senhor. Não localizei o executável seguro ou jogo '{app_name}' no catálogo de aplicativos permitidos."
+            "mensagem": f"Desculpe, senhor. Não localizei o aplicativo ou jogo '{app_name}' instalado nesta máquina."
         }
 
     try:
-        subprocess.Popen([resolved], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        if resolvido["tipo"] == "binario":
+            subprocess.Popen(resolvido["argv"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        elif not _iniciar_entrada_desktop(resolvido["entrada"]):
+            return {"sucesso": False, "mensagem": f"Não consegui iniciar '{resolvido['rotulo']}', senhor."}
         return {
             "sucesso": True,
-            "mensagem": f"Aplicativo '{target_exec}' inicializado com sucesso, senhor."
+            "aplicativo": resolvido["rotulo"],
+            "mensagem": f"Aplicativo '{resolvido['rotulo']}' inicializado com sucesso, senhor."
         }
     except Exception as e:
         return {
             "sucesso": False,
             "mensagem": f"Falha ao inicializar o aplicativo: {str(e)}"
         }
+
+
+def _iniciar_entrada_desktop(entrada: dict) -> bool:
+    """Abre um atalho .desktop pelo lançador do próprio desktop; em último caso, pela linha Exec."""
+    lancadores = []
+    if shutil.which("gtk-launch"):
+        lancadores.append(["gtk-launch", entrada["id"]])
+    if shutil.which("gio"):
+        lancadores.append(["gio", "launch", entrada["arquivo"]])
+    for kio in ("kioclient6", "kioclient5", "kioclient"):
+        if shutil.which(kio):
+            lancadores.append([kio, "exec", entrada["arquivo"]])
+            break
+    for argv in lancadores:
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            continue
+        try:
+            if proc.wait(timeout=3) == 0:
+                return True
+        except subprocess.TimeoutExpired:
+            return True  # lançador ainda ativo: o aplicativo está abrindo
+    argv = perfil_maquina.argv_do_exec(entrada["exec"])
+    if argv and shutil.which(argv[0]):
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    return False
 
 
 def search_web(query: str) -> dict:
@@ -555,40 +577,68 @@ def search_web(query: str) -> dict:
             "mensagem": f"Não foi possível abrir o navegador para a pesquisa: {str(e)}"
         }
 
+MENSAGENS_DE_VOLUME = {
+    "aumentar": "Volume aumentado em {pct}%, senhor.",
+    "diminuir": "Volume reduzido em {pct}%, senhor.",
+    "mutar": "Áudio do sistema silenciado, senhor.",
+    "desmutar": "Áudio reativado, senhor.",
+    "definir": "Volume calibrado para {pct}%, senhor.",
+}
+
+
+def _comandos_de_volume(acao: str, pct: int) -> List[List[str]]:
+    """O mesmo ajuste em cada controle de áudio disponível: PulseAudio/PipeWire (pactl),
+    PipeWire nativo (wpctl) e ALSA (amixer), nessa ordem."""
+    tabelas = [
+        ("pactl", {
+            "aumentar": ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"+{pct}%"],
+            "diminuir": ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"-{pct}%"],
+            "mutar": ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"],
+            "desmutar": ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+            "definir": ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{pct}%"],
+        }),
+        ("wpctl", {
+            "aumentar": ["wpctl", "set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", f"{pct}%+"],
+            "diminuir": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%-"],
+            "mutar": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1"],
+            "desmutar": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"],
+            "definir": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%"],
+        }),
+        ("amixer", {
+            "aumentar": ["amixer", "-q", "sset", "Master", f"{pct}%+"],
+            "diminuir": ["amixer", "-q", "sset", "Master", f"{pct}%-"],
+            "mutar": ["amixer", "-q", "sset", "Master", "mute"],
+            "desmutar": ["amixer", "-q", "sset", "Master", "unmute"],
+            "definir": ["amixer", "-q", "sset", "Master", f"{pct}%"],
+        }),
+    ]
+    return [tabela[acao] for binario, tabela in tabelas if shutil.which(binario)]
+
+
 def adjust_volume(action: str, percent: int = 10) -> dict:
     """
     Ajusta o volume do áudio do sistema operacional.
     Valores para 'action': 'aumentar', 'diminuir', 'mutar', 'desmutar', 'definir'.
     """
+    acao = (action or "").strip().lower()
+    if acao not in MENSAGENS_DE_VOLUME:
+        return {"sucesso": False, "mensagem": f"Ação de volume '{action}' não compreendida. Use: {', '.join(MENSAGENS_DE_VOLUME)}."}
     try:
-        if action == "aumentar":
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"+{percent}%"], check=True)
-            msg = f"Volume aumentado em {percent}%, senhor."
-        elif action == "diminuir":
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"-{percent}%"], check=True)
-            msg = f"Volume reduzido em {percent}%, senhor."
-        elif action == "mutar":
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"], check=True)
-            msg = "Áudio do sistema silenciado, senhor."
-        elif action == "desmutar":
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"], check=True)
-            msg = "Áudio reativado, senhor."
-        elif action == "definir":
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"], check=True)
-            msg = f"Volume calibrado para {percent}%, senhor."
-        else:
-            msg = f"Ação de volume '{action}' não compreendida."
-        return {"sucesso": True, "mensagem": msg}
-    except Exception:
-        # Tenta fallback com amixer
+        pct = max(0, min(int(percent), 150))
+    except (TypeError, ValueError):
+        pct = 10
+
+    comandos = _comandos_de_volume(acao, pct)
+    if not comandos:
+        return {"sucesso": False, "mensagem": "Nenhum controle de áudio encontrado nesta máquina (pactl, wpctl ou amixer), senhor."}
+    erros = []
+    for cmd in comandos:
         try:
-            if action == "aumentar":
-                subprocess.run(["amixer", "-D", "pulse", "sset", "Master", f"{percent}%+"], check=True)
-            elif action == "diminuir":
-                subprocess.run(["amixer", "-D", "pulse", "sset", "Master", f"{percent}%-"], check=True)
-            return {"sucesso": True, "mensagem": "Volume ajustado via amixer, senhor."}
-        except Exception as e2:
-            return {"sucesso": False, "mensagem": f"Não foi possível alterar o volume: {str(e2)}"}
+            subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+            return {"sucesso": True, "controle": cmd[0], "mensagem": MENSAGENS_DE_VOLUME[acao].format(pct=pct)}
+        except Exception as e:
+            erros.append(f"{cmd[0]}: {e}")
+    return {"sucesso": False, "mensagem": "Não foi possível alterar o volume: " + "; ".join(erros)}
 
 def take_quick_note(note_text: str) -> dict:
     """Registra uma anotação rápida solicitada pelo usuário no bloco de notas do JARVIS."""
@@ -955,39 +1005,84 @@ def open_default_app(app_type: str, target: str = None) -> dict:
         return {"sucesso": False, "mensagem": f"Erro ao abrir aplicativo padrão: {str(e)}"}
 
 
+def _pasta_de_capturas() -> str:
+    """Subpasta de capturas dentro da pasta de imagens do usuário, no idioma do sistema."""
+    base = perfil_maquina.pasta_de_imagens()
+    for nome in ("Screenshots", "Capturas de tela", "Capturas de pantalla"):
+        if os.path.isdir(os.path.join(base, nome)):
+            return os.path.join(base, nome)
+    idioma = (os.environ.get("LANG") or os.environ.get("LANGUAGE") or "").lower()
+    return os.path.join(base, "Capturas de tela" if idioma.startswith("pt") else "Screenshots")
+
+
+def _comandos_de_captura(saida: str) -> List[List[str]]:
+    """Ferramentas de captura disponíveis para a sessão gráfica atual, na ordem de preferência."""
+    sessao = perfil_maquina.sessao_grafica()
+    ambiente = perfil_maquina.sistema_operacional()["ambiente_grafico"]
+    spectacle = ["spectacle", "-b", "-n", "-f", "-o", saida]
+    gnome = ["gnome-screenshot", "-f", saida]
+    if sessao == "wayland":
+        # Ferramentas X11 capturariam só o XWayland (imagem preta): ficam de fora
+        ordem = [spectacle, gnome, ["grim", saida]] if ambiente == "KDE" else [gnome, ["grim", saida], spectacle]
+    elif sessao == "x11":
+        ordem = [
+            ["maim", saida],
+            ["scrot", saida],
+            ["import", "-window", "root", saida],
+            gnome,
+            spectacle,
+            ["xfce4-screenshooter", "-f", "-s", saida],
+            # Sem -video_size: o x11grab captura a área de trabalho inteira, em qualquer resolução
+            ["ffmpeg", "-loglevel", "error", "-y", "-f", "x11grab", "-i", os.environ.get("DISPLAY", ":0"),
+             "-frames:v", "1", "-update", "1", saida],
+        ]
+    else:
+        return []
+    return [cmd for cmd in ordem if shutil.which(cmd[0])]
+
+
 def take_screenshot(filename: str = None) -> dict:
     """Tira uma captura de tela completa e salva com nome de arquivo personalizado."""
-    shots_dir = os.path.expanduser("~/Imagens/Capturas de tela")
-    if not os.path.exists(shots_dir):
-        os.makedirs(shots_dir, exist_ok=True)
+    shots_dir = _pasta_de_capturas()
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if filename:
-        clean_name = filename.strip()
-        if not clean_name.endswith(".png") and not clean_name.endswith(".jpg"):
-            clean_name += ".png"
-        out_path = os.path.join(shots_dir, clean_name)
-    else:
-        out_path = os.path.join(shots_dir, f"captura_{now_str}.png")
+    # Só o nome do arquivo: um caminho enviado pelo modelo não pode sair da pasta de capturas
+    clean_name = os.path.basename((filename or "").strip()) or f"captura_{now_str}.png"
+    if not clean_name.lower().endswith((".png", ".jpg", ".jpeg")):
+        clean_name += ".png"
+    out_path = os.path.join(shots_dir, clean_name)
+    raiz, extensao = os.path.splitext(out_path)
+    temporario = f"{raiz}.jarvis-tmp{extensao}"
 
-    display = os.environ.get("DISPLAY", ":0")
-    cmd = [
-        "ffmpeg", "-f", "x11grab", "-video_size", "1920x1080",
-        "-i", display, "-update", "1", "-frames:v", "1", out_path, "-y"
-    ]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    comandos = _comandos_de_captura(temporario)
+    if not comandos:
+        sessao = perfil_maquina.sessao_grafica()
+        dica = ("instale grim (Sway/Hyprland), spectacle (KDE) ou gnome-screenshot (GNOME)" if sessao == "wayland"
+                else "instale maim, scrot ou imagemagick" if sessao == "x11"
+                else "o assistente não está rodando dentro de uma sessão gráfica")
+        return {"sucesso": False, "mensagem": f"Nenhuma ferramenta de captura de tela disponível, senhor: {dica}."}
+
+    os.makedirs(shots_dir, exist_ok=True)
+    erros = []
+    for cmd in comandos:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        except Exception as e:
+            erros.append(f"{cmd[0]}: {e}")
+            continue
+        if os.path.exists(temporario) and os.path.getsize(temporario) > 0:
+            os.replace(temporario, out_path)
             return {
                 "sucesso": True,
                 "arquivo": out_path,
                 "nome": os.path.basename(out_path),
+                "ferramenta": cmd[0],
                 "mensagem": f"Captura de tela salva com sucesso em '{os.path.basename(out_path)}', senhor."
             }
-        else:
-            return {"sucesso": False, "mensagem": f"Falha ao gravar captura de tela: {res.stderr[:120]}"}
-    except Exception as e:
-        return {"sucesso": False, "mensagem": f"Erro ao capturar tela: {str(e)}"}
+        erros.append(f"{cmd[0]}: {(res.stderr or 'sem imagem gerada').strip()[:80]}")
+    if os.path.exists(temporario):
+        os.remove(temporario)
+    return {"sucesso": False, "mensagem": "Falha ao capturar a tela: " + "; ".join(erros)}
 
 # ----------------- INTEGRAÇÃO COM ANTIGRAVITY IDE & MCP -----------------
 def antigravity_open_workspace(path: str = WORKSPACE_DIR) -> dict:
@@ -1203,11 +1298,16 @@ def toggle_telemetry_overlay(enabled: bool = True) -> dict:
     ram_p = sys_status.get("ram_percent", "0%")
     ram_used = sys_status.get("ram_used_gb", "0 GB")
     ram_total = sys_status.get("ram_total_gb", "0 GB")
-    gpu_model = gpu_status.get("modelo", "NVIDIA GeForce")
-    gpu_temp = gpu_status.get("temperatura", "0°C")
-    gpu_uso = gpu_status.get("uso_gpu", "0%")
-    vram_usada = gpu_status.get("vram_usada_mb", "0 MB")
-    vram_total = gpu_status.get("vram_total_mb", "0 MB")
+    # Valores ausentes ficam None: a interface mostra "--" em vez de números inventados
+    gpu_model = gpu_status.get("modelo") if gpu_status.get("disponivel") else None
+    gpu_temp = gpu_status.get("temperatura")
+    gpu_uso = gpu_status.get("uso_gpu")
+    vram_usada = gpu_status.get("vram_usada_mb")
+    vram_total = gpu_status.get("vram_total_mb")
+    if gpu_model:
+        resumo_gpu = gpu_model + (f" em {gpu_temp}" if gpu_temp else "") + (f" com {gpu_uso} de uso" if gpu_uso else "")
+    else:
+        resumo_gpu = "nenhuma placa de vídeo com telemetria"
 
     return {
         "sucesso": True,
@@ -1225,14 +1325,23 @@ def toggle_telemetry_overlay(enabled: bool = True) -> dict:
             "vram_total": vram_total,
             "uptime": sys_status.get("uptime", "")
         },
-        "mensagem": f"Telemetria em tela {'ativada e visível na sua janela' if enabled else 'ocultada'}, senhor. Processador em {cpu_p}, RAM em {ram_p}, {gpu_model} em {gpu_temp} e {gpu_uso} de uso."
+        "mensagem": f"Telemetria em tela {'ativada e visível na sua janela' if enabled else 'ocultada'}, senhor. Processador em {cpu_p}, RAM em {ram_p} e {resumo_gpu}."
+    }
+
+def get_machine_profile() -> dict:
+    """Identifica a máquina do usuário: sistema, ambiente gráfico, processador, memória, placas de vídeo, discos, tela, áudio e aplicativos padrão."""
+    perfil = perfil_maquina.perfil_da_maquina(forcar=True)
+    return {
+        "sucesso": True,
+        **perfil,
+        "mensagem": f"Senhor, identifiquei sua máquina: {perfil_maquina.resumo_da_maquina()}."
     }
 
 # Declarações de Schema para Gemini Function Calling
 GEMINI_FUNCTION_DECLARATIONS = [
     {
         "name": "toggle_telemetry_overlay",
-        "description": "Exibe ou oculta a tela/painel de telemetria de hardware (CPU, GPU GeForce RTX, VRAM, RAM e temperatura) diretamente na janela do assistente sobreposta na tela do usuário.",
+        "description": "Exibe ou oculta a tela/painel de telemetria de hardware (CPU, placa de vídeo, VRAM, RAM e temperatura) diretamente na janela do assistente sobreposta na tela do usuário.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -1258,12 +1367,17 @@ GEMINI_FUNCTION_DECLARATIONS = [
     },
     {
         "name": "get_gpu_status",
-        "description": "Obtém a telemetria em tempo real da placa de vídeo dedicada (GPU NVIDIA GeForce RTX): uso em porcentagem, VRAM utilizada e total, e temperatura em graus Celsius.",
+        "description": "Obtém a telemetria em tempo real da placa de vídeo da máquina (NVIDIA, AMD ou Intel): modelo, uso em porcentagem, VRAM utilizada e total, e temperatura em graus Celsius quando o driver informa.",
         "parameters": {"type": "OBJECT", "properties": {}}
     },
     {
         "name": "get_system_status",
         "description": "Obtém a telemetria em tempo real do sistema: uso de CPU, memória RAM, bateria, disco e tempo ligado.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "get_machine_profile",
+        "description": "Identifica a máquina do usuário: distribuição Linux, ambiente gráfico (Wayland/X11), processador, memória RAM, placas de vídeo, discos (tipo, modelo, capacidade e espaço livre), resolução da tela, servidor de áudio e aplicativos padrão. Use quando o senhor perguntar sobre o computador dele ou quando a resposta depender do hardware.",
         "parameters": {"type": "OBJECT", "properties": {}}
     },
     {
@@ -1638,6 +1752,7 @@ GEMINI_FUNCTION_DECLARATIONS = [
 TOOL_REGISTRY = {
     "list_installed_games": list_installed_games,
     "get_gpu_status": get_gpu_status,
+    "get_machine_profile": get_machine_profile,
     "get_system_status": get_system_status,
     "toggle_telemetry_overlay": toggle_telemetry_overlay,
     "get_current_datetime": get_current_datetime,

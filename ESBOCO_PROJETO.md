@@ -40,6 +40,7 @@ O J.A.R.V.I.S. é um assistente pessoal por comando de voz com tempo de resposta
 │
 ├── agentes/                 # Agentes ADK, roteador, memória e Computer Use
 ├── system_tools.py          # Ferramentas do SO (telemetria, apps, volume, web, notas, Antigravity)
+├── perfil_maquina.py        # Identifica a máquina em tempo de execução (GPU, discos, tela, apps)
 ├── policy_engine.py         # Classificação de risco, confirmações e leases
 ├── plugins/ + skills/       # Plug-ins (código) e Skills ADK (SKILL.md + assets)
 │
@@ -84,6 +85,7 @@ Cada ferramenta é registrada com um schema JSON que o Gemini reconhece para dec
 | Ferramenta | Descrição | Parâmetros |
 | :--- | :--- | :--- |
 | `get_system_status` | Telemetria completa de hardware (CPU, RAM, Disco, Bateria, Uptime). | *Nenhum* |
+| `get_machine_profile` | Identifica a máquina: sistema, ambiente gráfico, CPU, RAM, GPUs, discos, tela, áudio e apps padrão. | *Nenhum* |
 | `get_current_datetime` | Horário, data e dia da semana. | *Nenhum* |
 | `open_application` | Inicia programas locais (navegador, código, terminal, calculadora). | `app_name: string` |
 | `search_web` | Abre o navegador padrão em uma busca do Google. | `query: string` |

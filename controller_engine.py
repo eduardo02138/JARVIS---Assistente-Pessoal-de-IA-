@@ -1,13 +1,17 @@
 """
 controller_engine.py - Módulo de Controle Físico de Mouse, Teclado e Janelas do J.A.R.V.I.S.
-Utiliza evdev (uinput) no nível de kernel com suporte universal a Wayland (GNOME / CachyOS).
+Utiliza evdev (uinput) no nível de kernel, o que funciona em qualquer sessão (Wayland ou X11).
 """
 
+import os
 import time
 import subprocess
 import re
 import psutil
 import logging
+import shutil
+
+import perfil_maquina
 logger = logging.getLogger("JARVIS_CONTROLLER")
 
 try:
@@ -120,27 +124,47 @@ HOTKEY_NAMES = {
 }
 
 def get_screen_geometry() -> str:
-    """Retorna a resolução atual do monitor."""
-    try:
-        res = subprocess.run(["xdpyinfo"], capture_output=True, text=True, timeout=1.5)
-        for line in res.stdout.splitlines():
-            if "dimensions:" in line:
-                m = re.search(r'(\d+x\d+)\s+pixels', line)
-                if m:
-                    return m.group(1)
-    except Exception:
-        pass
-    return "3000x2160"
+    """Retorna a resolução atual da tela (X11, Wayland ou direto do kernel)."""
+    return perfil_maquina.resolucao_da_tela()
 
 def get_mouse_position() -> dict:
-    """Obtém a posição atual aproximada do cursor."""
+    """Obtém a posição atual aproximada do cursor (X11/XWayland; no Wayland puro fica indisponível)."""
+    tela = os.environ.get("DISPLAY")
+    if not tela:
+        return {"x": None, "y": None}
     try:
         from Xlib import display
-        d = display.Display(":0")
-        ptr = d.screen().root.query_pointer()
+        ptr = display.Display(tela).screen().root.query_pointer()
         return {"x": ptr.root_x, "y": ptr.root_y}
     except Exception:
-        return {"x": None, "y": None}
+        pass
+    if shutil.which("xdotool"):
+        try:
+            res = subprocess.run(["xdotool", "getmouselocation", "--shell"], capture_output=True, text=True, timeout=1)
+            valores = dict(linha.split("=", 1) for linha in res.stdout.splitlines() if "=" in linha)
+            return {"x": int(valores["X"]), "y": int(valores["Y"])}
+        except Exception:
+            pass
+    return {"x": None, "y": None}
+
+
+def _nomes_de_aplicativos_instalados() -> dict:
+    """Executável → nome amigável, a partir dos atalhos .desktop desta máquina."""
+    ignorados = {"flatpak", "env", "sh", "bash", "snap", "xdg-open", "gtk-launch", "gio"}
+    nomes = {}
+    for app in perfil_maquina.aplicativos_instalados():
+        if app["oculto"] or app["terminal"] or not app["nome"]:
+            continue
+        argv = perfil_maquina.argv_do_exec(app["exec"])
+        if argv:
+            binario = os.path.basename(argv[0]).lower()
+            if binario not in ignorados:
+                nomes.setdefault(binario, app["nome"])
+        # Flatpak: o processo dentro do sandbox costuma ter o último trecho do id (org.mozilla.firefox)
+        ultimo = app["id"].removesuffix(".desktop").rsplit(".", 1)[-1].lower()
+        if ultimo:
+            nomes.setdefault(ultimo, app["nome"])
+    return nomes
 
 def get_open_windows() -> list:
     """Inspeciona janelas e aplicações gráficas ativas do usuário."""
@@ -191,11 +215,17 @@ def get_open_windows() -> list:
         "loupe": "Visualizador de Imagens (Loupe)"
     }
 
+    # Rótulos conhecidos acima têm prioridade; qualquer outro app instalado é reconhecido pelo .desktop
+    try:
+        rotulos = {**_nomes_de_aplicativos_instalados(), **desktop_map}
+    except Exception:
+        rotulos = dict(desktop_map)
+
     try:
         for p in psutil.process_iter(["name", "cmdline", "pid"]):
             name = (p.info["name"] or "").lower()
-            if name in desktop_map:
-                app_label = desktop_map[name]
+            if name in rotulos:
+                app_label = rotulos[name]
                 if app_label not in seen:
                     seen.add(app_label)
                     windows.append({"titulo": app_label, "tipo": "aplicacao_aberta", "binario": name, "pid": p.info["pid"]})

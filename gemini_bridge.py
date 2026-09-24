@@ -180,7 +180,8 @@ async def gemini_file_watcher_task():
                     # Tenta notificar o JARVIS por voz via inject_prompt se o servidor estiver rodando
                     try:
                         import urllib.request
-                        url = "http://localhost:8000/api/inject-prompt"
+                        from servidor import url_local_do_servidor
+                        url = f"{url_local_do_servidor()}/api/inject-prompt"
                         prompt_msg = f"[AVISO PONTE GEMINI]: O senhor enviou um comando pelo arquivo da IDE: '{cmd[:60]}'. O agente Antigravity concluiu a execução."
                         data = json.dumps({"prompt": prompt_msg}).encode("utf-8")
                         token = os.environ.get("JARVIS_TOKEN") or os.environ.get("JARVIS_SECRET_TOKEN", "")

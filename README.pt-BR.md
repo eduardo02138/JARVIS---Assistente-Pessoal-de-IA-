@@ -35,7 +35,7 @@ O projeto é especialmente relevante para quem pesquisa ou desenvolve **voice ag
 - 🖥️ HUD web holográfico e widget desktop flutuante em PySide6.
 - 🧩 Arquitetura de plugins e Skills ADK.
 - 🔌 MCP nos dois sentidos: servidor para IDEs/agentes externos e cliente para servidores MCP externos.
-- 🐧 Projeto Linux-first com suporte a Wayland/X11.
+- 🐧 Projeto Linux-first que se adapta a cada máquina: qualquer fabricante de GPU, Wayland ou X11, apps Flatpak/Snap.
 
 ---
 
@@ -96,6 +96,7 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 | `agentes/computer_use/` | Controle de navegador via Playwright / Computer Use |
 | `policy_engine.py` | Governança, risco, confirmações e leases de controle/IDE/computador |
 | `system_tools.py` | Ferramentas do Linux, hardware e automação local + declarações de função do Gemini |
+| `perfil_maquina.py` | Identificação da máquina em tempo de execução: sistema, ambiente gráfico, CPU, RAM, GPUs, discos, tela, áudio e aplicativos |
 | `controller_engine.py` | Mouse/teclado virtual via `evdev`/`uinput` (degrada sem quebrar se indisponível) |
 | `preferences_manager.py` | Preferências persistentes (apps padrão, plataforma de música, launchers) |
 | `plugin_manager.py` / `plugin_sdk.py` | Descoberta, ciclo de vida e contratos de plugins |
@@ -217,6 +218,26 @@ O `app.py` exibe o `/widget/` numa janela PySide6 sem bordas e inicia o backend 
 
 ---
 
+## Funciona em qualquer máquina Linux
+
+Nada do hardware é fixo no código. O `perfil_maquina.py` identifica a máquina em tempo de execução por interfaces padrão do Linux (`/sys`, `/proc`, `/etc/os-release`, XDG e o `PATH`), e cada detector cai para um valor neutro em vez de falhar — servidor sem tela, VM ou notebook sem GPU dedicada continuam funcionando.
+
+| O quê | Como é detectado |
+| --- | --- |
+| Sistema | Distribuição (`/etc/os-release`), kernel, ambiente gráfico e tipo de sessão (Wayland/X11) |
+| CPU e RAM | Modelo em `/proc/cpuinfo`, núcleos e memória via `psutil` |
+| Placas de vídeo | Todo controlador de vídeo PCI e GPU de SoC, com nome via `lspci` ou `pci.ids`; uso/VRAM/temperatura pelo `nvidia-smi` (NVIDIA) ou sysfs do `amdgpu` (AMD); Intel e outras informam o modelo |
+| Discos | NVMe, SSD SATA, HD, USB e discos virtuais com modelo, capacidade e rótulo — atravessando partições, LUKS/LVM e subvolumes btrfs |
+| Tela | `xrandr`/`xdpyinfo` no X11, ou o modo nativo de cada monitor conectado direto do kernel (Wayland) |
+| Aplicativos | Navegador e gerenciador de arquivos padrão (`xdg-settings`/`xdg-mime`), binários conhecidos por categoria e todo atalho `.desktop`, inclusive Flatpak e Snap |
+| Capturas de tela | `grim`, `spectacle` ou `gnome-screenshot` no Wayland; `maim`, `scrot`, ImageMagick ou `ffmpeg` no X11 — salvas na pasta de Imagens do usuário, no idioma do sistema |
+| Volume | `pactl` (PulseAudio/PipeWire), `wpctl` (PipeWire) ou `amixer` (ALSA) |
+| Jogos | Steam (nativo ou Flatpak), GOG e jogos `.desktop` do Lutris, Heroic, Flatpak e Snap |
+
+O modelo recebe um resumo da máquina detectada nas instruções e pode chamar `get_machine_profile` para o perfil completo (discos com espaço livre, GPUs, tela, áudio e aplicativos padrão). Os clientes locais (widget desktop, servidor MCP, ponte de arquivos e monitor) seguem `PORT`/`JARVIS_HOST` do `.env`.
+
+---
+
 ## Segurança e governança
 
 O projeto evita entregar autoridade irrestrita ao modelo. As ferramentas passam por uma camada de políticas que diferencia consultas somente leitura de ações que alteram o sistema, serviços externos ou recursos privilegiados.
@@ -264,7 +285,7 @@ As mesmas suítes executadas pelo CI (instale antes o `requirements-dev.txt`):
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
 PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py -v
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py -v
 .venv/bin/python monitoring/test_suite.py --p0   # gates de segurança e arquitetura (P0)
 .venv/bin/python monitoring/test_adk.py          # cenários Google ADK
 ```
@@ -294,6 +315,7 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── transcricao.py           # Configuração de transcrição Live
 ├── policy_engine.py         # Governança de ferramentas
 ├── system_tools.py          # Ferramentas do sistema + declarações de função
+├── perfil_maquina.py        # Identificação da máquina (hardware, ambiente gráfico, apps)
 ├── controller_engine.py     # Mouse/teclado virtual (evdev/uinput)
 ├── preferences_manager.py   # Preferências persistentes
 ├── plugin_manager.py        # Descoberta e ciclo de vida de plugins

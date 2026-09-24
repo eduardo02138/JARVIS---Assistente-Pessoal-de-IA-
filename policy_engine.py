@@ -56,6 +56,7 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     # READ: Informação e Consulta
     "get_system_status": RiskLevel.READ,
     "get_gpu_status": RiskLevel.READ,
+    "get_machine_profile": RiskLevel.READ,
     "toggle_telemetry_overlay": RiskLevel.READ,
     "get_current_datetime": RiskLevel.READ,
     "list_installed_games": RiskLevel.READ,

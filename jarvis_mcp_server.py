@@ -16,6 +16,7 @@ ASSISTANT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ASSISTANT_DIR not in sys.path:
     sys.path.insert(0, ASSISTANT_DIR)
 
+import perfil_maquina
 import system_tools
 
 from mcp.server.mcpserver import MCPServer
@@ -27,7 +28,9 @@ server = MCPServer(
     description="Servidor MCP do JARVIS para controle de hardware, telemetria e notificações de voz"
 )
 
-JARVIS_API_BASE = "http://localhost:8000"
+from servidor import porta_do_servidor, url_local_do_servidor  # carrega o .env (PORT, JARVIS_TOKEN)
+
+JARVIS_API_BASE = url_local_do_servidor()
 
 def _get_jarvis_token() -> str:
     token = os.environ.get("JARVIS_TOKEN")
@@ -45,14 +48,16 @@ def _get_jarvis_token() -> str:
 def jarvis_get_telemetry() -> str:
     """
     Obtém a telemetria em tempo real do computador do usuário (CPU, memória RAM,
-    GPU NVIDIA RTX dedicada com VRAM e temperatura, bateria e uptime).
+    placa de vídeo com VRAM e temperatura quando disponíveis, bateria e uptime)
+    e o perfil da máquina (sistema, processador, GPUs, discos e tela).
     """
     gpu = system_tools.get_gpu_status()
     sys_status = system_tools.get_system_status()
     
     result = {
         "sistema": sys_status,
-        "gpu_nvidia": gpu
+        "gpu": gpu,
+        "maquina": perfil_maquina.perfil_da_maquina(),
     }
     return json.dumps(result, indent=2, ensure_ascii=False)
 
@@ -86,7 +91,7 @@ def jarvis_notify_voice(message: str) -> str:
             res_data = json.loads(response.read().decode("utf-8"))
             return f"Notificação enviada ao JARVIS com sucesso: {res_data.get('message', 'OK')}"
     except urllib.error.URLError as e:
-        return f"O servidor Web do JARVIS (porta 8000) parece não estar acessível ({str(e)}). Mensagem não entregue."
+        return f"O servidor Web do JARVIS (porta {porta_do_servidor()}) parece não estar acessível ({str(e)}). Mensagem não entregue."
     except Exception as e:
         return f"Erro ao enviar notificação de voz: {str(e)}"
 

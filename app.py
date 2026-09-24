@@ -27,8 +27,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 
-PORT = 8000
-SERVER_URL = f"http://localhost:{PORT}/widget/?app=1"
+# Mesmo endereço e porta do servidor (PORT/JARVIS_HOST do .env, carregado pelo pacote servidor)
+from servidor import host_local_do_servidor, porta_do_servidor, url_local_do_servidor
+
+PORT = porta_do_servidor()
+SERVER_URL = f"{url_local_do_servidor()}/widget/?app=1"
 
 # Canal local usado pelo atalho global do sistema para mostrar/esconder a janela
 IPC_NOME = "jarvis-desktop-toggle"
@@ -48,7 +51,7 @@ def enviar_comando_para_instancia(comando: bytes = b"show") -> bool:
 
 def is_server_running():
     try:
-        with socket.create_connection(("127.0.0.1", PORT), timeout=1):
+        with socket.create_connection((host_local_do_servidor(), PORT), timeout=1):
             return True
     except (socket.timeout, ConnectionRefusedError, OSError):
         return False
@@ -148,10 +151,11 @@ class GeminiLiveDesktopApp(QMainWindow):
         self.setup_tray_icon()
 
     def center_to_bottom_right(self):
+        # availableGeometry já desconta painéis; x()/y() posicionam certo em qualquer monitor
         screen = QApplication.primaryScreen().availableGeometry()
         margin = 35
-        x = screen.width() - self.width() - margin
-        y = screen.height() - self.height() - margin
+        x = screen.x() + screen.width() - self.width() - margin
+        y = screen.y() + screen.height() - self.height() - margin
         self.move(x, y)
 
     def on_pybridge_message(self, title: str):
