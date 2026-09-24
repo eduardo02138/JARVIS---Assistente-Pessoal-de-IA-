@@ -257,7 +257,7 @@ Veja também [`SECURITY.md`](SECURITY.md).
 
 ## Plugins e Skills ADK
 
-O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspondente (`SKILL.md` e `assets/` opcionais) fica em `skills/<nome-da-skill>/`. Assim o modelo recebe instruções focadas só das skills ativas.
+O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspondente (`SKILL.md` e `assets/` opcionais) fica em `skills/<nome-da-skill>/`. Assim o modelo recebe instruções focadas só das skills ativas. Os agentes carregam as skills sob demanda pelo `SkillToolset` do ADK: `list_skills`, `load_skill` e `load_skill_resource` são só leitura, e `run_skill_script` (que executa código) exige sua confirmação.
 
 | Plugin | Skill | Situação |
 | --- | --- | --- |
@@ -272,9 +272,35 @@ O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspon
 
 Os plugins simulados ficam **desligados por padrão** para o assistente nunca relatar dados inventados como reais. Use `JARVIS_ATIVAR_MOCKS=1` para ativá-los em demonstrações. As ferramentas de sistema e hardware Linux são nativas (`system_tools.py`) e sempre disponíveis.
 
-### Cliente MCP
+### MCP: JARVIS dentro da IDE e servidores externos dentro do JARVIS
 
-Copie `mcp_servers.example.json` para `mcp_servers.json` (ou aponte `MCP_SERVERS_CONFIG` para um arquivo) para conectar servidores MCP externos (stdio, SSE ou HTTP) aos agentes ADK. Cada servidor declara `tool_filter` e níveis de risco por ferramenta, então as ferramentas externas também passam pelo Policy Engine.
+**Servidor.** O `jarvis_mcp_server.py` expõe telemetria, jogos, skills, o log de auditoria e avisos por voz via stdio. Gere a configuração pronta para esta máquina e cole nas configurações MCP da IDE (Antigravity, VS Code, Cursor, Claude Code…):
+
+```bash
+.venv/bin/python jarvis_mcp_server.py --config
+```
+
+Ferramentas de plugins só aparecem no MCP quando o Policy Engine as executa sem confirmação (`READ`/`LOW_WRITE`), e cada chamada é reavaliada. Ações que exigem sua aprovação (`EXTERNAL_WRITE`, `PRIVILEGED`) ficam no JARVIS, onde você pode confirmá-las.
+
+**Cliente.** Copie `mcp_servers.example.json` para `mcp_servers.json` (ou aponte `MCP_SERVERS_CONFIG` para um arquivo) para conectar servidores MCP externos (stdio, SSE ou HTTP) aos agentes ADK:
+
+| Chave | Significado |
+| --- | --- |
+| `command`, `args`, `cwd` / `url`, `headers` | Como iniciar ou acessar o servidor; `~` e `${VAR}` são expandidos |
+| `env` | Variáveis entregues a um servidor stdio. Só o ambiente mínimo (PATH, HOME…) é herdado, então os segredos do `.env` não vazam para servidores de terceiros; `"inherit_env": true` volta a herdar tudo |
+| `tool_filter`, `tool_name_prefix` | Quais ferramentas expor e um prefixo opcional (as políticas seguem o nome com prefixo) |
+| `policies`, `default_risk_level` | Nível de risco por ferramenta e um padrão para as demais. Ferramenta sem política fica bloqueada; um servidor nunca sobrescreve a política de uma ferramenta do próprio JARVIS |
+
+Ao iniciar, o JARVIS conecta em cada servidor em segundo plano, lista as ferramentas e aplica o `default_risk_level`. `/api/health` e `/api/mcp/servers` informam se cada servidor está `conectado`, suas ferramentas e o erro, se houver.
+
+### Modo IDE (agente de programação Antigravity)
+
+Diga "ativar modo IDE" e confirme uma vez. A partir daí o JARVIS repassa pedidos técnicos (código, arquivos, testes) ao agente Antigravity por `antigravity_run_prompt`, sem pedir confirmação a cada prompt. Funciona na sessão de voz nativa, no cliente de voz ADK e no chat de texto.
+
+- A ativação exige sua confirmação e concede uma lease só para aquela sessão.
+- A lease se renova enquanto o modo está em uso e expira após `JARVIS_IDE_LEASE_TTL` segundos sem uso (padrão 300); na sessão de voz nativa o HUD é avisado quando o modo desliga.
+- Encerrar a sessão desliga o Modo IDE; uma janela nova nunca o herda ligado.
+- Comandos escritos em `gemini/input.txt` só rodam com o Modo IDE ativo, e cada troca fica auditada em `gemini/audit.jsonl`.
 
 ---
 
@@ -285,7 +311,8 @@ As mesmas suítes executadas pelo CI (instale antes o `requirements-dev.txt`):
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
 PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py -v
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
+    monitoring/test_skills_mcp_ide.py -v
 .venv/bin/python monitoring/test_suite.py --p0   # gates de segurança e arquitetura (P0)
 .venv/bin/python monitoring/test_adk.py          # cenários Google ADK
 ```

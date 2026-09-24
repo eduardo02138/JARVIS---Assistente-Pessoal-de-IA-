@@ -216,10 +216,35 @@ A dedicated Computer Use agent can operate a Chromium browser through Playwright
 
 ### MCP integration
 
-JARVIS speaks MCP in both directions:
+JARVIS speaks MCP in both directions.
 
-- **Server** — `jarvis_mcp_server.py` exposes selected JARVIS capabilities over the **Model Context Protocol**, allowing compatible IDEs and AI agents to use JARVIS as a local tool server.
-- **Client** — `mcp_client_manager.py` attaches external MCP servers (stdio, SSE or streamable HTTP) to the ADK agents. Copy `mcp_servers.example.json` to `mcp_servers.json` (or point `MCP_SERVERS_CONFIG` to a file); each server declares a `tool_filter` and per-tool risk levels, so external tools still go through the Policy Engine.
+**Server (JARVIS inside your IDE or agent).** `jarvis_mcp_server.py` exposes telemetry, games, skills, the audit log and voice notifications over stdio. Print the ready-to-paste configuration for this machine and add it to the IDE's MCP settings (Antigravity, VS Code, Cursor, Claude Code…):
+
+```bash
+.venv/bin/python jarvis_mcp_server.py --config
+```
+
+Plugin tools are exposed only when the Policy Engine runs them without confirmation (`READ`/`LOW_WRITE`), and each call is re-evaluated. Actions that need your approval (`EXTERNAL_WRITE`, `PRIVILEGED`) stay inside JARVIS, where you can confirm them.
+
+**Client (external MCP servers inside JARVIS).** `mcp_client_manager.py` attaches external servers (stdio, SSE or streamable HTTP) to the ADK agents. Copy `mcp_servers.example.json` to `mcp_servers.json` (or point `MCP_SERVERS_CONFIG` to a file):
+
+| Key | Meaning |
+| --- | --- |
+| `command`, `args`, `cwd` / `url`, `headers` | How to start or reach the server; `~` and `${VAR}` are expanded |
+| `env` | Variables passed to a stdio server. Only a minimal environment (PATH, HOME…) is inherited, so your `.env` secrets never leak to third-party servers; `"inherit_env": true` opts back in |
+| `tool_filter`, `tool_name_prefix` | Which tools to expose and an optional name prefix (policies follow the prefixed name) |
+| `policies`, `default_risk_level` | Risk level per tool and a default for the rest. Tools without a policy stay blocked; a server can never override the policy of a built-in JARVIS tool |
+
+At startup JARVIS connects to each server in the background, lists its tools and applies `default_risk_level`. `/api/health` and `/api/mcp/servers` report whether each server is `conectado`, its tools and any error.
+
+### IDE mode (Antigravity coding agent)
+
+Say "activate IDE mode" (in Portuguese: "ativar modo IDE") and confirm once. JARVIS then forwards technical requests (code, files, tests) to the Antigravity agent through `antigravity_run_prompt`, without asking again for each prompt. It works in the native voice session, the ADK voice client and text chat.
+
+- Activation requires your confirmation and grants a lease to that session only.
+- The lease renews while the mode is in use and expires after `JARVIS_IDE_LEASE_TTL` seconds of inactivity (default 300); in the native voice session the HUD is told when the mode switches off.
+- Closing the session turns IDE mode off; a new window never inherits it.
+- Commands written to `gemini/input.txt` run only while IDE mode is active, and every exchange is audited in `gemini/audit.jsonl`.
 
 ---
 
@@ -308,7 +333,7 @@ The Google ADK runtime is part of the same server: the ADK voice client is at `h
 
 ## Plugins and ADK Skills
 
-JARVIS uses a modular plugin architecture rather than hard-coding every integration in the central agent. Plugin code lives in `plugins/<id>/plugin.py`; the matching ADK Skill (`SKILL.md` plus optional `assets/`) lives in `skills/<skill-name>/`, so the model receives focused instructions only for enabled skills.
+JARVIS uses a modular plugin architecture rather than hard-coding every integration in the central agent. Plugin code lives in `plugins/<id>/plugin.py`; the matching ADK Skill (`SKILL.md` plus optional `assets/`) lives in `skills/<skill-name>/`, so the model receives focused instructions only for enabled skills. The agents load them on demand through ADK's `SkillToolset`: `list_skills`, `load_skill` and `load_skill_resource` are read-only, and `run_skill_script` (which runs code) requires your confirmation.
 
 | Plugin | Skill | Status |
 | --- | --- | --- |
@@ -332,7 +357,8 @@ The repository includes automated architecture, security and regression tests. T
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
 PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py -v
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
+    monitoring/test_skills_mcp_ide.py -v
 .venv/bin/python monitoring/test_suite.py --p0   # security & architecture gates (P0)
 .venv/bin/python monitoring/test_adk.py          # Google ADK scenarios
 ```

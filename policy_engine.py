@@ -50,6 +50,11 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "consultar_preferencias": RiskLevel.READ,
     "load_memory": RiskLevel.READ,
     "preload_memory": RiskLevel.READ,
+    # SkillToolset do ADK: ler skills é consulta; executar script de skill roda código
+    "list_skills": RiskLevel.READ,
+    "load_skill": RiskLevel.READ,
+    "load_skill_resource": RiskLevel.READ,
+    "run_skill_script": RiskLevel.PRIVILEGED,
     "especialista_sistema": RiskLevel.READ,
     "especialista_navegador": RiskLevel.READ,
     "abrir_site": RiskLevel.EXTERNAL_WRITE,
@@ -185,6 +190,7 @@ class PolicyEngine:
         self._ide_lease_expira_em: float = 0.0
         self._ide_lease_owner: Optional[str] = None
         self._ide_lease_user_id: Optional[str] = None
+        self._ide_lease_ttl_s: float = float(IDE_LEASE_TTL_S)
         self._pending_actions: Dict[str, PendingAction] = {}
         self._lock = threading.RLock()
 
@@ -295,10 +301,21 @@ class PolicyEngine:
         """Concede autoridade temporária ao agente Antigravity (Modo IDE)."""
         with self._lock:
             self._ide_lease_expira_em = time.monotonic() + ttl_s
+            self._ide_lease_ttl_s = float(ttl_s)
             self._ide_lease_owner = owner
             self._ide_lease_user_id = user_id
         logger.info(f"Lease do Modo IDE concedida a '{owner}' (user: {user_id}) por {ttl_s}s.")
         return self.ide_lease_status()
+
+    def renovar_ide_lease(self) -> None:
+        """Uso do Modo IDE mantém a lease viva: o prazo conta a partir da última atividade.
+
+        Lease expirada ou revogada não renasce: o usuário precisa reativar o modo.
+        """
+        with self._lock:
+            agora = time.monotonic()
+            if agora < self._ide_lease_expira_em:
+                self._ide_lease_expira_em = agora + self._ide_lease_ttl_s
 
     def revoke_ide_lease(
         self,
@@ -484,6 +501,7 @@ class PolicyEngine:
             # Se houver uma lease ativa do Modo IDE concedida à sessão e usuário atuais,
             # a delegação contínua é permitida sem requerer nova confirmação individual por prompt.
             if tool_name == "antigravity_run_prompt" and self.is_ide_lease_active(session_id, user_id):
+                self.renovar_ide_lease()
                 return PolicyDecision(
                     tool_name=tool_name,
                     risk_level=risk,

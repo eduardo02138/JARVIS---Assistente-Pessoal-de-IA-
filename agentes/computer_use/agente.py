@@ -21,6 +21,7 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.computer_use.computer_use_toolset import ComputerUseToolset
 
 from policy_engine import policy_engine
+from ..contexto import identidade_da_sessao
 from .playwright_computer import PlaywrightComputer
 
 logger = logging.getLogger("jarvis.computer_use")
@@ -43,12 +44,9 @@ def guarda_computador(
     tool_context: ToolContext,
 ) -> Optional[dict]:
     """Exige lease ativa do Modo Computador antes de qualquer tool do browser."""
-    session_id = (
-        getattr(tool_context, "session_id", None)
-        or tool_context.state.get("session_id")
-        or "sessao-principal"
-    )
-    if policy_engine.is_computer_lease_active(session_id):
+    # Sem sessão identificável não há lease possível: bloqueia (fail-closed)
+    session_id, _ = identidade_da_sessao(tool_context, padrao="")
+    if session_id and policy_engine.is_computer_lease_active(session_id):
         return None
 
     return {

@@ -309,7 +309,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     })
                     await safe_send_json({
                         "type": "ide_mode",
-                        "active": system_tools.get_ide_mode()
+                        # Como no Modo Controle: só vale com a lease desta sessão
+                        "active": system_tools.get_ide_mode() and policy_engine.is_ide_lease_active(sessao_id, usuario_id)
                     })
                     # Uma nova sessão não herda o Modo Controle: a autoridade é de quem tem a lease
                     await safe_send_json({
@@ -843,10 +844,22 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     logger.exception("Erro no loop contínuo do Gemini Live: %s", gemini_err)
                                 raise
 
-                    # Worker 4: Encerra o Modo Controle assim que a lease de autoridade expira
+                    # Worker 4: encerra os Modos Controle e IDE quando a lease de autoridade expira
                     async def control_lease_worker():
                         while True:
                             await asyncio.sleep(5)
+                            ide = policy_engine.ide_lease_status()
+                            if ide.get("owner") == sessao_id and not ide.get("ativa") and system_tools.get_ide_mode():
+                                system_tools.set_ide_mode(False)
+                                lease_ide = policy_engine.revoke_ide_lease(session_id=sessao_id)
+                                record_event("ide_lease_expired", lease_ide)
+                                logger.info("Lease do Modo IDE expirada por inatividade: Modo IDE desativado.")
+                                await safe_send_json({
+                                    "type": "ide_mode",
+                                    "active": False,
+                                    "lease": lease_ide,
+                                    "data": {"sucesso": True, "mensagem": "Modo IDE encerrado por inatividade, senhor. Diga 'ativar modo IDE' para retomar."}
+                                })
                             dono_desta_sessao = policy_engine.control_lease_status().get("owner") == sessao_id
                             if (dono_desta_sessao and system_tools.get_control_mode()
                                     and not policy_engine.is_control_lease_active(sessao_id)):

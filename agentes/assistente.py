@@ -25,6 +25,7 @@ from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
 
 from policy_engine import policy_engine
+from .contexto import identidade_da_sessao
 from .ferramentas import (
     consultar_preferencias,
     lembrar_preferencia,
@@ -64,6 +65,11 @@ Ferramentas e Governança:
 - Você NUNCA pode conceder a sua própria autorização; a confirmação precisa ser emitida pelo usuário.
 - Use lembrar_preferencia quando o usuário disser uma preferência duradoura.
 - Use load_memory para consultar informações, fatos e conversas passadas sempre que o usuário perguntar sobre algo discutido anteriormente.
+
+Modo IDE (agente de programação Antigravity):
+- Ative com set_ide_mode(enabled=True) somente quando o usuário pedir explicitamente ("ativar modo IDE", "iniciar modo IDE"), nunca em saudações ou só porque o assunto é código. Desative com set_ide_mode(enabled=False) quando ele pedir para sair.
+- A ativação exige a confirmação do usuário. Com o modo ativo, repasse pedidos técnicos (código, arquivos, testes, dúvidas do projeto) ao agente da IDE com antigravity_run_prompt(prompt=..., continue_session=True) e relate o resultado em poucas palavras; enquanto o modo estiver em uso, não é preciso confirmar cada pedido.
+- Se o resultado de set_ide_mode indicar que o modo já estava ativo, não o anuncie de novo: apenas atenda o pedido.
 """
 
 INSTRUCAO_COORDENADOR = INSTRUCAO_BASE + """
@@ -87,8 +93,7 @@ def guarda_de_ferramentas(
     if isinstance(tool, AgentTool):
         return None
 
-    session_id = getattr(tool_context, "session_id", None) or "local"
-    user_id = getattr(tool_context, "user_id", None) or getattr(tool_context, "usuario", None) or "local"
+    session_id, user_id = identidade_da_sessao(tool_context)
     decision = policy_engine.evaluate(tool.name, args, session_id=session_id, user_id=user_id)
 
     if not decision.allowed:
@@ -123,6 +128,33 @@ def guarda_de_ferramentas(
             ),
         }
 
+    return None
+
+
+def registrar_autoridade_dos_modos(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any
+) -> Optional[dict]:
+    """Concede ou revoga a lease quando o agente liga ou desliga os Modos IDE e Controle.
+
+    Espelha o /ws/live nativo: a confirmação do usuário (guarda_de_ferramentas) libera
+    set_ide_mode/set_control_mode, e a lease dá ao modo a autoridade contínua da sessão.
+    Sem isso, no ADK o Modo IDE "ligava" mas cada prompt ao Antigravity pedia confirmação.
+    """
+    nome = getattr(tool, "name", "")
+    if nome not in ("set_ide_mode", "set_control_mode") or not isinstance(tool_response, dict):
+        return None
+    sessao, usuario = identidade_da_sessao(tool_context)
+    chave = "ide_mode" if nome == "set_ide_mode" else "control_mode"
+    ligado = bool(tool_response.get("sucesso")) and bool(tool_response.get(chave))
+    if nome == "set_ide_mode":
+        if ligado:
+            policy_engine.grant_ide_lease(owner=sessao, user_id=usuario)
+        else:
+            policy_engine.revoke_ide_lease(session_id=sessao, user_id=usuario)
+    elif ligado:
+        policy_engine.grant_control_lease(owner=sessao)
+    else:
+        policy_engine.revoke_control_lease(session_id=sessao)
     return None
 
 
@@ -196,6 +228,7 @@ def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
             *ferramentas,
         ],
         before_tool_callback=guarda_de_ferramentas,
+        after_tool_callback=registrar_autoridade_dos_modos,
     )
 
 
@@ -256,6 +289,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
             AgentTool(agent=especialista_navegador),
         ] + ([] if skill_toolset is None else [skill_toolset]) + mcp_toolsets,
         before_tool_callback=guarda_de_ferramentas,
+        after_tool_callback=registrar_autoridade_dos_modos,
     )
 
 

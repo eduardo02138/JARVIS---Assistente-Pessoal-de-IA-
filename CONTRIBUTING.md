@@ -29,7 +29,8 @@ Run the relevant test suites before submitting:
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
 PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py -v
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
+    monitoring/test_skills_mcp_ide.py -v
 .venv/bin/python monitoring/test_suite.py --p0
 .venv/bin/python monitoring/test_adk.py
 ```

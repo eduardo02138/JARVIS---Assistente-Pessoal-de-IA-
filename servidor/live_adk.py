@@ -25,7 +25,12 @@ from servidor.runtime_adk import (
     session_service_adk,
     trocar_modelo,
 )
-from servidor.seguranca import JARVIS_SECRET_TOKEN, registrar_rejeicao_de_token, sessao_aceita
+from servidor.seguranca import (
+    JARVIS_SECRET_TOKEN,
+    liberar_controle_da_sessao,
+    registrar_rejeicao_de_token,
+    sessao_aceita,
+)
 
 router = APIRouter()
 
@@ -354,6 +359,8 @@ async def live_adk(
         for t in list(_conn_background_tasks):
             if not t.done():
                 t.cancel()
+        # Leases dos Modos IDE/Controle concedidas a esta sessão terminam com ela
+        liberar_controle_da_sessao(sessao)
         try:
             sess_obj = await session_service_adk.get_session(
                 app_name="assistente", user_id=usuario, session_id=sessao

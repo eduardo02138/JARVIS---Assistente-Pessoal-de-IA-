@@ -41,7 +41,7 @@ def _status_mcp_sanitizado() -> list:
     """Status dos servidores MCP sem expor binários, URLs ou filtros (health é público)."""
     from mcp_client_manager import mcp_client_manager
     return [
-        {"nome": s["nome"], "tipo": s["tipo"], "ativo": s["ativo"]}
+        {"nome": s["nome"], "tipo": s["tipo"], "ativo": s["ativo"], "conectado": s.get("conectado")}
         for s in mcp_client_manager.status()
     ]
 

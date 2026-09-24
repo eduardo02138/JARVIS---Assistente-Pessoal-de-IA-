@@ -135,19 +135,25 @@ def jarvis_open_gemini_bridge() -> str:
 @server.tool()
 def jarvis_read_bridge_audit(limit: int = 20) -> str:
     """
-    Lê os últimos eventos e comandos auditados no arquivo gemini/audit.jsonl.
+    Lê os últimos eventos e comandos (1 a 200) auditados no arquivo gemini/audit.jsonl.
     """
     import gemini_bridge
+    from collections import deque
     if not os.path.exists(gemini_bridge.AUDIT_JSONL):
         return json.dumps({"eventos": [], "mensagem": "Nenhum evento registrado ainda."}, ensure_ascii=False)
-    
-    events = []
+
+    limite = max(1, min(int(limit or 20), 200))
     try:
+        # Só as últimas linhas ficam em memória: o log cresce sem limite
         with open(gemini_bridge.AUDIT_JSONL, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    events.append(json.loads(line.strip()))
-        return json.dumps(events[-limit:], indent=2, ensure_ascii=False)
+            ultimas = deque((linha for linha in f if linha.strip()), maxlen=limite)
+        events = []
+        for linha in ultimas:
+            try:
+                events.append(json.loads(linha))
+            except json.JSONDecodeError:
+                continue
+        return json.dumps(events, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"erro": f"Falha ao ler audit.jsonl: {str(e)}"}, ensure_ascii=False)
 
@@ -183,8 +189,10 @@ def jarvis_list_mcp_servers() -> str:
 
 
 # ---------------- FERRAMENTAS DE PLUG-INS (Habilidades ADK) ----------------
-# Expõe as ferramentas de todos os plug-ins ativos pelo protocolo MCP, com os
-# mesmos nomes, descrições e parâmetros declarados no Plugin SDK e no Policy Engine.
+# Expõe pelo MCP as ferramentas dos plug-ins ativos que o Policy Engine libera sem
+# confirmação (READ/LOW_WRITE). O servidor MCP não tem HUD nem voz para o usuário
+# confirmar nada: ações que exigem confirmação (EXTERNAL_WRITE, PRIVILEGED) ficam
+# só no JARVIS, e cada chamada é reavaliada pela política vigente.
 
 _MCP_TIPO_PARA_PYTHON = {
     "STRING": str,
@@ -200,13 +208,17 @@ def _registrar_ferramentas_de_plugins():
     """Registra dinamicamente cada ferramenta ativa dos plug-ins como tool do MCP."""
     import inspect
     from plugin_manager import plugin_manager
+    from policy_engine import RiskLevel, policy_engine
 
-    registradas = set()
+    registradas, reservadas = set(), []
     for plugin in plugin_manager._plugins.values():
         if not plugin.meta.enabled:
             continue
         for spec in plugin.get_tools():
             nome_mcp = f"jarvis_plugin_{spec.name}"
+            if policy_engine.get_risk_level(spec.name) not in (RiskLevel.READ, RiskLevel.LOW_WRITE):
+                reservadas.append(spec.name)
+                continue
 
             parametros: list[inspect.Parameter] = []
             schema = spec.parameters or {}
@@ -232,8 +244,16 @@ def _registrar_ferramentas_de_plugins():
                         )
                     )
 
-            def _criar_wrapper(plugin_inst, tool_spec):
+            def _criar_wrapper(tool_spec):
                 def _wrapper(**kwargs):
+                    # A política vigente decide a cada chamada (defesa em profundidade)
+                    decisao = policy_engine.evaluate(tool_spec.name, kwargs, session_id="mcp", user_id="mcp")
+                    if not decisao.allowed or decisao.requires_confirmation:
+                        return json.dumps({
+                            "sucesso": False,
+                            "ferramenta": tool_spec.name,
+                            "erro": f"Bloqueada pelo Policy Engine: {decisao.reason} Confirme esta ação pelo próprio JARVIS.",
+                        }, indent=2, ensure_ascii=False)
                     try:
                         resultado = tool_spec.handler(**kwargs)
                         return json.dumps(resultado, indent=2, ensure_ascii=False, default=str)
@@ -250,23 +270,43 @@ def _registrar_ferramentas_de_plugins():
                 _wrapper.__signature__ = inspect.Signature(parametros)
                 return _wrapper
 
-            wrapper = _criar_wrapper(plugin, spec)
+            wrapper = _criar_wrapper(spec)
             if nome_mcp in registradas:
                 continue
             try:
                 server.tool()(wrapper)
                 registradas.add(nome_mcp)
             except Exception as e:
-                print(f"[MCP] Falha ao registrar '{nome_mcp}': {e}")
+                # stdout é o canal do protocolo MCP (stdio): mensagens vão para stderr
+                print(f"[MCP] Falha ao registrar '{nome_mcp}': {e}", file=sys.stderr)
+    if reservadas:
+        print(f"[MCP] Exigem confirmação do usuário e ficam só no JARVIS: {', '.join(sorted(reservadas))}", file=sys.stderr)
 
 
 # Registra as ferramentas de plug-ins no boot do servidor MCP
 try:
     _registrar_ferramentas_de_plugins()
 except Exception as e:
-    print(f"[MCP] Falha ao registrar ferramentas de plug-ins: {e}")
+    print(f"[MCP] Falha ao registrar ferramentas de plug-ins: {e}", file=sys.stderr)
+
+
+def configuracao_para_ide() -> dict:
+    """Bloco "mcpServers" para registrar este servidor numa IDE ou agente, com os caminhos desta máquina."""
+    python = os.path.join(ASSISTANT_DIR, ".venv", "bin", "python")
+    return {
+        "mcpServers": {
+            "jarvis": {
+                "command": python if os.path.exists(python) else sys.executable,
+                "args": [os.path.join(ASSISTANT_DIR, "jarvis_mcp_server.py")],
+            }
+        }
+    }
 
 
 if __name__ == "__main__":
-    server.run(transport="stdio")
+    if "--config" in sys.argv:
+        # Uso: python jarvis_mcp_server.py --config  → cole o JSON na configuração MCP da IDE
+        print(json.dumps(configuracao_para_ide(), indent=2, ensure_ascii=False))
+    else:
+        server.run(transport="stdio")
 

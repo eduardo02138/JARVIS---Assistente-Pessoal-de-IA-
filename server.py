@@ -54,6 +54,8 @@ async def lifespan(app_instance: FastAPI):
         toolsets = mcp_client_manager.carregar_toolsets()
         if toolsets:
             logger.info("MCP Client: %d servidor(es) MCP carregado(s) no boot.", len(toolsets))
+            # Verificação em segundo plano: o boot não espera servidores lentos (npx baixa pacotes)
+            agendar_tarefa_do_servidor(mcp_client_manager.descobrir_ferramentas())
     except Exception as e:
         logger.warning("Falha ao inicializar clientes MCP no boot: %s", e)
     yield

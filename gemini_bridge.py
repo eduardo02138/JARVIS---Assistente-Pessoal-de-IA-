@@ -98,6 +98,61 @@ def open_gemini_bridge() -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir a pasta gemini na IDE Antigravity: {str(e)}"}
 
+def processar_comando_da_ponte(cmd: str) -> dict:
+    """Executa ou recusa um comando recebido por gemini/input.txt (síncrono: rode em thread).
+
+    A pasta gemini é um canal do próprio usuário para o Modo IDE: o comando só roda
+    enquanto o modo estiver ativo (lease concedida após confirmação por voz ou pela
+    interface). Antes, criava-se uma pendência de confirmação que nenhuma tela exibia.
+    """
+    from policy_engine import policy_engine
+
+    log_audit_event("USER_FILE", "input_command", cmd)
+    args_call = {"prompt": cmd, "continue_session": True}
+    decision = policy_engine.evaluate("antigravity_run_prompt", args_call, session_id="gemini_bridge", user_id="gemini_bridge")
+    if not decision.allowed:
+        logger.warning(f"Execução bloqueada por política no watcher gemini/input.txt: {decision.reason}")
+        log_audit_event("POLICY", "blocked_command", decision.reason, {"input_command": cmd})
+        update_latest_response(f"Comando: {cmd[:60]}", f"[BLOQUEADO PELO POLICY ENGINE]: {decision.reason}")
+        return {"executado": False, "motivo": decision.reason}
+
+    if not policy_engine.ide_lease_status().get("ativa"):
+        msg_bloqueio = ("[MODO IDE INATIVO]: ative o Modo IDE no JARVIS (diga 'ativar modo IDE') "
+                        "para executar comandos pela pasta gemini.")
+        logger.warning("Comando da pasta gemini ignorado: Modo IDE inativo.")
+        log_audit_event("POLICY", "blocked_command", msg_bloqueio, {"input_command": cmd})
+        update_latest_response(f"Comando: {cmd[:60]}", msg_bloqueio)
+        return {"executado": False, "motivo": msg_bloqueio}
+    policy_engine.renovar_ide_lease()
+
+    import system_tools
+    res = system_tools.antigravity_run_prompt(cmd, continue_session=True)
+    ans = res.get("resposta_completa", res.get("mensagem", ""))
+    log_audit_event("ANTIGRAVITY", "command_response", ans, {"input_command": cmd})
+    update_latest_response(f"Comando: {cmd[:60]}", ans)
+    _avisar_jarvis_por_voz(cmd)
+    return {"executado": True, "resposta": ans}
+
+
+def _avisar_jarvis_por_voz(cmd: str) -> None:
+    """Pede à sessão de voz ativa que avise o usuário (se o servidor estiver rodando)."""
+    try:
+        import urllib.request
+        from servidor import url_local_do_servidor
+        url = f"{url_local_do_servidor()}/api/inject-prompt"
+        prompt_msg = f"[AVISO PONTE GEMINI]: O senhor enviou um comando pelo arquivo da IDE: '{cmd[:60]}'. O agente Antigravity concluiu a execução."
+        data = json.dumps({"prompt": prompt_msg}).encode("utf-8")
+        token = os.environ.get("JARVIS_TOKEN") or os.environ.get("JARVIS_SECRET_TOKEN", "")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=3):
+            pass
+    except Exception:
+        pass
+
+
 async def gemini_file_watcher_task():
     """
     Monitora assincronamente o arquivo gemini/input.txt.
@@ -139,60 +194,8 @@ async def gemini_file_watcher_task():
                         f.write(f"# Último comando enviado às {datetime.now().strftime('%H:%M:%S')}: {cmd[:60]}...\n{PLACEHOLDER_TEXT}\n")
                     last_mtime = os.path.getmtime(INPUT_TXT)
 
-                    # Registra comando de entrada no log de auditoria
-                    log_audit_event("USER_FILE", "input_command", cmd)
-
-                    # Avalia a política de segurança antes de executar ação privilegiada
-                    from policy_engine import policy_engine
-                    args_call = {"prompt": cmd, "continue_session": True}
-                    decision = policy_engine.evaluate("antigravity_run_prompt", args_call, session_id="gemini_bridge", user_id="gemini_bridge")
-                    if not decision.allowed:
-                        logger.warning(f"Execução bloqueada por política no watcher gemini/input.txt: {decision.reason}")
-                        log_audit_event("POLICY", "blocked_command", decision.reason, {"input_command": cmd})
-                        update_latest_response(f"Comando: {cmd[:60]}", f"[BLOQUEADO PELO POLICY ENGINE]: {decision.reason}")
-                        continue
-
-                    if decision.requires_confirmation:
-                        # Checa se há autorização one-shot já concedida pelo usuário
-                        if not policy_engine.consume_authorization("antigravity_run_prompt", args_call, session_id="gemini_bridge", user_id="gemini_bridge"):
-                            pending = policy_engine.create_pending_action(
-                                tool_name="antigravity_run_prompt",
-                                args=args_call,
-                                session_id="gemini_bridge",
-                                user_id="gemini_bridge",
-                                ttl=60.0,
-                            )
-                            msg_bloqueio = f"[CONFIRMAÇÃO NECESSÁRIA]: Execução de prompt sensível bloqueada. ID da pendência: {pending.action_id}."
-                            logger.warning(msg_bloqueio)
-                            log_audit_event("POLICY", "pending_confirmation", msg_bloqueio, {"input_command": cmd, "action_id": pending.action_id})
-                            update_latest_response(f"Comando: {cmd[:60]}", msg_bloqueio)
-                            continue
-
-                    # Executa o comando via Antigravity agy CLI
-                    import system_tools
-                    res = system_tools.antigravity_run_prompt(cmd, continue_session=True)
-                    ans = res.get("resposta_completa", res.get("mensagem", ""))
-
-                    # Registra resposta
-                    log_audit_event("ANTIGRAVITY", "command_response", ans, {"input_command": cmd})
-                    update_latest_response(f"Comando: {cmd[:60]}", ans)
-
-                    # Tenta notificar o JARVIS por voz via inject_prompt se o servidor estiver rodando
-                    try:
-                        import urllib.request
-                        from servidor import url_local_do_servidor
-                        url = f"{url_local_do_servidor()}/api/inject-prompt"
-                        prompt_msg = f"[AVISO PONTE GEMINI]: O senhor enviou um comando pelo arquivo da IDE: '{cmd[:60]}'. O agente Antigravity concluiu a execução."
-                        data = json.dumps({"prompt": prompt_msg}).encode("utf-8")
-                        token = os.environ.get("JARVIS_TOKEN") or os.environ.get("JARVIS_SECRET_TOKEN", "")
-                        headers = {"Content-Type": "application/json"}
-                        if token:
-                            headers["Authorization"] = f"Bearer {token}"
-                        req = urllib.request.Request(url, data=data, headers=headers)
-                        with urllib.request.urlopen(req, timeout=3):
-                            pass
-                    except Exception:
-                        pass
+                    # Em thread: o Antigravity pode levar até 85 s e não pode travar o servidor
+                    await asyncio.to_thread(processar_comando_da_ponte, cmd)
         except asyncio.CancelledError:
             break
         except Exception as e:

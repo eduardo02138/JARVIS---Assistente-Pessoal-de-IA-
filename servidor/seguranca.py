@@ -54,6 +54,9 @@ def liberar_controle_da_sessao(session_id: str) -> None:
     if policy_engine.ide_lease_status().get("owner") == session_id:
         lease_ide = policy_engine.revoke_ide_lease(session_id=session_id)
         record_event("ide_lease_released", lease_ide)
+        # Sem a lease o Modo IDE não tem autoridade: a próxima sessão não pode herdá-lo "ligado"
+        if system_tools.get_ide_mode():
+            system_tools.set_ide_mode(False)
     logger.info("Sessão encerrada: Modo Controle desativado e lease de controle revogada.")
 
 
