@@ -1,178 +1,115 @@
 """
 Gerenciador Central de Plug-ins do J.A.R.V.I.S.
 Carrega, ativa, desativa e monitora extensões modulares dinamicamente.
+
+Descoberta por manifesto: cada plugins/<id>/plugin.json declara id, nome, versão,
+categoria, ícone, autor, descrição, o módulo de entrada ("entry") e se o plug-in só
+simula dados ("simulated"). Os manifestos são lidos sem importar código, e adicionar
+um plug-in é criar a pasta com manifesto e módulo, sem editar este arquivo.
+plugins/catalogo_loja.json lista os itens da loja que ainda não têm código aqui.
 """
 
+import importlib
+import json
+import logging
 import os
 import sys
-import importlib
-import logging
 from typing import Optional
-from plugin_sdk import JarvisPlugin, ToolSpec
+
+from plugin_sdk import NOME_DO_MANIFESTO, JarvisPlugin, ManifestoInvalido, ToolSpec, ler_manifesto
 
 logger = logging.getLogger("jarvis.plugins")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
+CATALOGO_DA_LOJA = os.path.join(PLUGINS_DIR, "catalogo_loja.json")
 
-# Catálogo oficial da Loja de Habilidades do JARVIS
-STORE_CATALOG = [
-    {
-        "id": "game_companion",
-        "name": "Companhia em Jogos Online",
-        "version": "1.2.0",
-        "category": "gaming",
-        "icon": "🎮",
-        "description": "Assistência tática em tempo real para jogos (Marvel Rivals, GTA, RPGs), timers táticos e inicializador de jogos instalados.",
-        "author": "Stark Gaming Hub",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "google_workspace",
-        "name": "Google Workspace (Gmail, Docs & Keep)",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "📑",
-        "description": "Comandos de voz para redigir documentos no Docs, consultar caixa de entrada no Gmail e capturar ideias no Keep.",
-        "author": "Google Cloud & Stark Industries",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "deep_research",
-        "name": "Pesquisa Profunda & Dossiês Assíncronos",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "🔬",
-        "description": "Executa investigações aprofundadas em segundo plano sem travar o chat, emitindo notificações de voz/HUD ao concluir.",
-        "author": "Gemini Live Research Lab",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "google_finance",
-        "name": "Google Finance & Portfólio de Investimentos",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "📈",
-        "description": "SIMULADO: cotações de demonstração… não consulta o Google Finance real. Demonstração de carteira e alocação de ativos.",
-        "author": "Google Finance & Stark Holdings",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "ginjutsu_studio",
-        "name": "Ginjutsu Motion & Video AI Studio",
-        "version": "1.0.0",
-        "category": "general",
-        "icon": "🎬",
-        "description": "Transferência de atuação, coreografia e enquadramento de vídeos existentes para novos personagens via Higgsfield Ginjutsu.",
-        "author": "Higgsfield & Stark Visuals",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "smart_home",
-        "name": "Casa Inteligente & IoT",
-        "version": "1.0.0",
-        "category": "smart_home",
-        "icon": "🏠",
-        "description": "Controle de iluminação inteligente, climatização e cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso').",
-        "author": "Stark Home Automation",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "live_stream",
-        "name": "Transmissão ao Vivo & Streaming",
-        "version": "1.0.0",
-        "category": "streaming",
-        "icon": "📡",
-        "description": "Integração para transmissões ao vivo: leitura e síntese de chat em tempo real e alertas de doações.",
-        "author": "Stark Media Lab",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "social_feed",
-        "name": "Mídias Sociais & Notificações",
-        "version": "1.0.0",
-        "category": "social",
-        "icon": "💬",
-        "description": "Monitoramento inteligente de feeds, menções, mensagens diretas (Discord, Telegram, X/Twitter).",
-        "author": "Stark Comms",
-        "installed": True,
-        "enabled": True
-    },
-    {
-        "id": "obs_studio",
-        "name": "Controle de Cenas OBS Studio",
-        "version": "1.0.0",
-        "category": "streaming",
-        "icon": "📹",
-        "description": "Troca de cenas, fontes de áudio e gravação de gameplays diretamente por comandos de voz.",
-        "author": "Comunidade Open Source",
-        "installed": False,
-        "enabled": False
-    }
-]
-
-# Plug-ins que ainda respondem com dados simulados. Ficam desligados por padrão para não
-# poluir a conversa com notificações, cotações e e-mails inventados; ative com
-# JARVIS_ATIVAR_MOCKS=1 quando quiser demonstrá-los.
-PLUGINS_SIMULADOS = {
-    "smart_home", "social_feed", "live_stream",
-    "google_workspace", "google_finance", "ginjutsu_studio", "deep_research",
-}
+# Campos de cada item da loja entregues ao HUD
+CAMPOS_DO_CATALOGO = ("id", "name", "version", "category", "icon", "description", "author")
 
 MOCKS_ATIVOS = os.environ.get("JARVIS_ATIVAR_MOCKS", "").strip().lower() in ("1", "true", "sim", "yes")
 
 
+def descobrir_manifestos(pasta: str = PLUGINS_DIR) -> tuple[list[dict], dict[str, str]]:
+    """Manifestos válidos de plugins/*/plugin.json e os erros de cada pasta, sem importar código."""
+    manifestos: list[dict] = []
+    erros: dict[str, str] = {}
+    if not os.path.isdir(pasta):
+        return manifestos, erros
+    for nome in sorted(os.listdir(pasta)):
+        dir_plugin = os.path.join(pasta, nome)
+        if not os.path.isfile(os.path.join(dir_plugin, NOME_DO_MANIFESTO)):
+            continue
+        try:
+            manifestos.append(ler_manifesto(dir_plugin))
+        except ManifestoInvalido as erro:
+            erros[nome] = str(erro)
+    return manifestos, erros
+
+
+def ler_catalogo_da_loja(caminho: str = CATALOGO_DA_LOJA) -> list[dict]:
+    """Itens da loja sem código no projeto (aparecem para instalar, mas não instalam)."""
+    try:
+        with open(caminho, encoding="utf-8") as arquivo:
+            itens = json.load(arquivo)
+    except (OSError, ValueError):
+        return []
+    return [item for item in itens if isinstance(item, dict) and item.get("id")] if isinstance(itens, list) else []
+
+
+# Plug-ins que ainda respondem com dados simulados ("simulated": true no manifesto).
+# Ficam desligados por padrão para não poluir a conversa com notificações, cotações e
+# e-mails inventados; ative com JARVIS_ATIVAR_MOCKS=1 quando quiser demonstrá-los.
+PLUGINS_SIMULADOS = frozenset(m["id"] for m in descobrir_manifestos()[0] if m.get("simulated"))
+
+
+def _classe_do_plugin(modulo) -> Optional[type]:
+    """A subclasse de JarvisPlugin definida no próprio módulo de entrada."""
+    for atributo in vars(modulo).values():
+        if (isinstance(atributo, type) and issubclass(atributo, JarvisPlugin)
+                and atributo is not JarvisPlugin and atributo.__module__ == modulo.__name__):
+            return atributo
+    return None
+
+
 class PluginManager:
-    def __init__(self):
+    def __init__(self, pasta: str = PLUGINS_DIR):
+        self._pasta = pasta
         self._plugins: dict[str, JarvisPlugin] = {}
+        self._manifestos: dict[str, dict] = {}
+        self._erros: dict[str, str] = {}
         self._load_all()
 
     def _load_all(self):
-        """Carrega todos os módulos de plug-in encontrados em plugins/."""
-        if not os.path.exists(PLUGINS_DIR):
-            os.makedirs(PLUGINS_DIR, exist_ok=True)
-
+        """Importa o módulo de entrada de cada manifesto válido e instancia o plug-in."""
         if BASE_DIR not in sys.path:
             sys.path.insert(0, BASE_DIR)
 
-        # Plugins oficiais mapeados
-        known_modules = {
-            "game_companion": "plugins.game_companion.plugin",
-            "google_workspace": "plugins.google_workspace.plugin",
-            "deep_research": "plugins.deep_research.plugin",
-            "google_finance": "plugins.google_finance.plugin",
-            "ginjutsu_studio": "plugins.ginjutsu_studio.plugin",
-            "smart_home": "plugins.smart_home.plugin",
-            "live_stream": "plugins.live_stream.plugin",
-            "social_feed": "plugins.social_feed.plugin",
-        }
-
-        for plugin_id, mod_path in known_modules.items():
+        manifestos, self._erros = descobrir_manifestos(self._pasta)
+        pacote = os.path.basename(os.path.abspath(self._pasta))
+        for manifesto in manifestos:
+            plugin_id = manifesto["id"]
+            self._manifestos[plugin_id] = manifesto
             try:
-                mod = importlib.import_module(mod_path)
-                for attr_name in dir(mod):
-                    attr = getattr(mod, attr_name)
-                    if isinstance(attr, type) and issubclass(attr, JarvisPlugin) and attr is not JarvisPlugin:
-                        instance = attr()
-                        if instance.meta.id in PLUGINS_SIMULADOS and not MOCKS_ATIVOS:
-                            instance.meta.enabled = False
-                            for item in STORE_CATALOG:
-                                if item["id"] == instance.meta.id:
-                                    item["enabled"] = False
-                                    break
-                        instance.on_load()
-                        self._plugins[instance.meta.id] = instance
-                        logger.info(f"Plug-in '{instance.meta.name}' ({instance.meta.id}) carregado com sucesso.")
-                        break
+                modulo = importlib.import_module(f"{pacote}.{plugin_id}.{manifesto['entry']}")
+                classe = _classe_do_plugin(modulo)
+                if classe is None:
+                    raise ImportError(f"nenhuma classe JarvisPlugin em {manifesto['entry']}.py")
+                instance = classe()
+                if instance.meta.id != plugin_id:
+                    raise ValueError(f"a classe declara id '{instance.meta.id}', o manifesto '{plugin_id}'")
+                if manifesto.get("simulated") and not MOCKS_ATIVOS:
+                    instance.meta.enabled = False
+                instance.on_load()
+                self._plugins[plugin_id] = instance
+                logger.info(f"Plug-in '{instance.meta.name}' ({plugin_id}) carregado com sucesso.")
             except Exception as e:
+                self._erros[plugin_id] = str(e)
                 logger.error(f"Falha ao carregar o plug-in '{plugin_id}': {e}")
+
+    def erros_de_carga(self) -> dict[str, str]:
+        """Plug-ins com manifesto inválido ou que falharam ao carregar, com o motivo."""
+        return dict(self._erros)
 
     def get_active_tools(self) -> list[ToolSpec]:
         """Retorna todas as ferramentas de plug-ins atualmente ativos/habilitados."""
@@ -201,11 +138,6 @@ class PluginManager:
             plugin.on_unload()
             msg = f"Plug-in '{plugin.meta.name}' desativado temporariamente, senhor."
 
-        for item in STORE_CATALOG:
-            if item["id"] == plugin_id:
-                item["enabled"] = new_state
-                break
-
         self.sync_with_system_tools()
 
         return {
@@ -216,41 +148,56 @@ class PluginManager:
         }
 
     def install_plugin(self, plugin_id: str) -> dict:
-        """Instala ou ativa um plug-in da loja."""
-        for item in STORE_CATALOG:
-            if item["id"] == plugin_id:
-                item["installed"] = True
-                item["enabled"] = True
-                if plugin_id in self._plugins:
-                    self._plugins[plugin_id].meta.enabled = True
-                    self._plugins[plugin_id].on_load()
-                self.sync_with_system_tools()
-                return {
-                    "sucesso": True,
-                    "plugin_id": plugin_id,
-                    "mensagem": f"Plug-in '{item['name']}' instalado e ativado no ecossistema JARVIS, senhor."
-                }
+        """Ativa um plug-in da loja que tem código no projeto; os demais recusam com o motivo."""
+        plugin = self._plugins.get(plugin_id)
+        if plugin is not None:
+            plugin.meta.enabled = True
+            plugin.on_load()
+            self.sync_with_system_tools()
+            return {
+                "sucesso": True,
+                "plugin_id": plugin_id,
+                "mensagem": f"Plug-in '{plugin.meta.name}' instalado e ativado no ecossistema JARVIS, senhor."
+            }
+        if plugin_id in self._erros:
+            return {"sucesso": False, "plugin_id": plugin_id,
+                    "mensagem": f"O plug-in '{plugin_id}' não pôde ser carregado: {self._erros[plugin_id]}"}
+        item = next((i for i in ler_catalogo_da_loja() if i["id"] == plugin_id), None)
+        if item is not None:
+            return {"sucesso": False, "plugin_id": plugin_id,
+                    "mensagem": f"O plug-in '{item.get('name', plugin_id)}' ainda não está disponível nesta instalação, senhor: ele consta só no catálogo da loja."}
         return {"sucesso": False, "mensagem": f"Plug-in '{plugin_id}' não encontrado na loja."}
+
+    def get_store_catalog(self) -> list[dict]:
+        """Loja: plug-ins com manifesto (reais primeiro) e os itens só de catálogo."""
+        itens = []
+        for plugin_id, manifesto in self._manifestos.items():
+            plugin = self._plugins.get(plugin_id)
+            item = {campo: manifesto.get(campo) for campo in CAMPOS_DO_CATALOGO}
+            item["installed"] = plugin is not None
+            item["enabled"] = bool(plugin and plugin.meta.enabled)
+            item["simulated"] = bool(manifesto.get("simulated"))
+            itens.append(item)
+        itens.sort(key=lambda item: (item["simulated"], item["name"] or ""))
+        for dados in ler_catalogo_da_loja():
+            if dados["id"] in self._manifestos:
+                continue
+            item = {campo: dados.get(campo) for campo in CAMPOS_DO_CATALOGO}
+            item.update(installed=False, enabled=False, simulated=False)
+            itens.append(item)
+        return itens
 
     def get_all_plugins_info(self) -> list[dict]:
         """Retorna uma lista com informações e status de todos os plug-ins."""
         result = []
-        for item in STORE_CATALOG:
-            p = self._plugins.get(item["id"])
+        for item in self.get_store_catalog():
+            plugin = self._plugins.get(item["id"])
+            ferramentas = [t.name for t in plugin.get_tools()] if plugin else []
             info = dict(item)
-            if p:
-                info["enabled"] = p.meta.enabled
-                info["installed"] = True
-                info["tools_count"] = len(p.get_tools())
-                info["tools"] = [t.name for t in p.get_tools()]
-            else:
-                info["tools_count"] = 0
-                info["tools"] = []
+            info["tools_count"] = len(ferramentas)
+            info["tools"] = ferramentas
             result.append(info)
         return result
-
-    def get_store_catalog(self) -> list[dict]:
-        return STORE_CATALOG
 
     def rebuild_registry(self):
         """

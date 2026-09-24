@@ -123,9 +123,10 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 | --- | --- |
 | `server.py` | Entry point: builds the FastAPI app from the `servidor/` routers, mounts the web clients and re-exports the public names used by scripts and tests |
 | `servidor/seguranca.py` | Session token, issued sessions (`/api/auth/session`), token checks and lease release |
-| `servidor/runtime_adk.py` | ADK session/memory services, runner factory and key rotation |
+| `servidor/runtime_adk.py` | ADK session/memory services, runner factory (default and fallback model) and key rotation |
+| `servidor/falhas.py` | Provider failure classification (quota, auth, overloaded/missing model, timeout, network, invalid request) and the right reaction to each |
 | `servidor/rotas_sistema.py` | Health, providers, plugins, debug and preferences endpoints |
-| `servidor/rotas_agente.py` | ADK text chat (`/api/chat`), pending confirmations and Computer Mode |
+| `servidor/rotas_agente.py` | ADK text chat (`/api/chat`, one turn at a time per session), pending confirmations and Computer Mode |
 | `servidor/live_nativo.py` | Native Gemini Live WebSocket (`/ws/live`) with background tool execution |
 | `servidor/live_adk.py` | ADK Live WebSocket (`/ws/live_adk`) |
 | `live_protocolo.py` | Shared Live protocol helpers: the single confirm/deny parser, ping-timeout fix and clean-shutdown signal |
@@ -138,8 +139,12 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 | `perfil_maquina.py` | Runtime machine identification: OS, desktop, CPU, RAM, GPUs, disks, screen, audio and installed apps |
 | `controller_engine.py` | Virtual mouse/keyboard via `evdev`/`uinput` (degrades gracefully when unavailable) |
 | `preferences_manager.py` | Persistent user preferences (default apps, music platform, game launchers) |
-| `plugin_manager.py` / `plugin_sdk.py` | Plugin discovery, lifecycle and extension contracts |
-| `plugins/` | Plugin runtime code (`plugins/<id>/plugin.py`) |
+| `plugin_manager.py` / `plugin_sdk.py` | Manifest-based plugin discovery (`plugins/<id>/plugin.json`), lifecycle and extension contracts |
+| `plugins/` | Plugins: `plugin.json` manifest (the single source of metadata) + runtime code; `catalogo_loja.json` lists store items without code |
+| `processos.py` | Starts apps, the browser, the IDE and the `agy` CLI without handing them `JARVIS_TOKEN` or the provider keys |
+| `rede_segura.py` | SSRF guard for `read_web_page`: public pages only, redirects re-checked, download size capped |
+| `resultados_de_ferramentas.py` | Makes every tool result JSON-safe and caps its size before it reaches the model, the HUD and the audit log |
+| `diagnostico.py` | Machine and configuration doctor (`python diagnostico.py`, `GET /api/diagnostico`) |
 | `skills/` | ADK Skills (`skills/<skill-name>/SKILL.md` + `assets/`), the single source for skill instructions |
 | `adk_skill_loader.py` | ADK Skill loading and SkillToolset integration |
 | `jarvis_mcp_server.py` | MCP stdio server for IDEs and external agents |
@@ -163,6 +168,7 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 | `WS /ws/live_adk` | Google ADK Live session (agents, memory, skills, MCP toolsets) |
 | `POST /api/chat` | Text turn routed between the fast agent, the coordinator and Computer Use |
 | `GET /api/health` | Models, key pool, active provider and MCP status |
+| `GET /api/diagnostico` | Diagnostics report: configuration, security, what each feature needs on this machine and integration health (token required) |
 
 Mutation endpoints and both WebSockets require `JARVIS_TOKEN`; local clients obtain it from `GET /api/auth/session` (loopback only).
 
@@ -178,7 +184,18 @@ Default models are configured in `.env`: `gemini-3.8-live` for voice, `gemini-3.
 
 ### Providers and failover
 
-`GEMINI_API_KEYS` accepts a comma-separated key pool: Live sessions rotate to the next key on quota or transient errors. For text chat, an optional local OmniRoute proxy (`OMNIROUTE_URL`) acts as the secondary provider and is used automatically when Google AI Studio is unavailable, or directly when selected in the HUD. Live voice always runs on Google.
+`GEMINI_API_KEYS` accepts a comma-separated key pool. For text chat, an optional local OmniRoute proxy (`OMNIROUTE_URL`) acts as the secondary provider and is used automatically when Google AI Studio is unavailable, or directly when selected in the HUD. Live voice always runs on Google.
+
+Every provider error is classified (`servidor/falhas.py`) and handled by what actually fixes it:
+
+| Failure | Reaction |
+| --- | --- |
+| Quota / rate limit (429), key rejected (401/403, invalid key) | Next key in the pool; with no other key, the second provider |
+| Overloaded or missing model (503, 500, 404, Live close 1011) | Fallback model (`TEXT_MODEL_FALLBACK`, `LIVE_MODEL_FALLBACK`), then the second provider |
+| Timeout, network error | Second provider |
+| Invalid request, conversation too long for the model | Clear error right away: no key, model or provider change can fix it |
+
+This is how text chat (`/api/chat`) reacts; the fallback model runs in its own runner for that request, so other sessions keep the default model. The ADK voice session rotates the key for quota/key problems and uses `LIVE_MODEL_FALLBACK` on the next connection for model problems. The native voice session moves to the next account in the pool (right away when the problem is the key's) and stops early only when the connection itself is refused as invalid, since no other account would accept it.
 
 ### Google Agent Development Kit (ADK)
 
@@ -210,6 +227,12 @@ The model receives a one-line summary of the detected machine in its instruction
 
 The model does not receive unrestricted authority over the machine. Tool requests are evaluated by a policy layer that can classify operations as read-only, local write, external write or privileged and require confirmation/leases for sensitive actions.
 
+Around the Policy Engine:
+
+- **Programs started by JARVIS don't get its secrets.** Apps, games, the browser, the Antigravity IDE and the `agy` CLI start without `JARVIS_TOKEN`, the Gemini keys or credentials from `.env` (`processos.py`), so neither an app nor a prompt-injected coding agent can call the local API with your authority. `JARVIS_ENV_REPASSAR=GEMINI_API_KEY` passes a specific variable along (the local API token never is).
+- **`read_web_page` reads public pages only.** Loopback, the local network, link-local addresses (cloud metadata) and redirects to them are refused, the connected address is re-checked (DNS rebinding) and downloads are capped at 2 MB (`rede_segura.py`). `JARVIS_WEB_PERMITIR_REDE_LOCAL=1` allows the local network.
+- **Tool results have a size limit.** Results are made JSON-safe and anything larger than `JARVIS_LIMITE_RESULTADO_FERRAMENTA` characters (default 16000) is shortened with markers of what was left out, in the native Live session and in the ADK agents alike.
+
 ### Screen vision and Computer Use
 
 A dedicated Computer Use agent can operate a Chromium browser through Playwright. Browser control is intentionally separated from the general-purpose agent/tool set so browser authority can be governed independently.
@@ -231,7 +254,7 @@ Plugin tools are exposed only when the Policy Engine runs them without confirmat
 | Key | Meaning |
 | --- | --- |
 | `command`, `args`, `cwd` / `url`, `headers` | How to start or reach the server; `~` and `${VAR}` are expanded |
-| `env` | Variables passed to a stdio server. Only a minimal environment (PATH, HOME…) is inherited, so your `.env` secrets never leak to third-party servers; `"inherit_env": true` opts back in |
+| `env` | Variables passed to a stdio server. Only a minimal environment (PATH, HOME…) is inherited, so your `.env` secrets never leak to third-party servers; `"inherit_env": true` inherits the rest of your session, still without JARVIS's credentials (declare them in `env` if a server needs one) |
 | `tool_filter`, `tool_name_prefix` | Which tools to expose and an optional name prefix (policies follow the prefixed name) |
 | `policies`, `default_risk_level` | Risk level per tool and a default for the rest. Tools without a policy stay blocked; a server can never override the policy of a built-in JARVIS tool |
 
@@ -314,6 +337,14 @@ http://127.0.0.1:8000/debug    # debug dashboard
 
 The Google ADK runtime is part of the same server: the ADK voice client is at `http://127.0.0.1:8000/static_adk/`, and ADK text turns go through `POST /api/chat`.
 
+### Check this machine
+
+```bash
+.venv/bin/python diagnostico.py
+```
+
+The diagnostics list what is working and, for each problem, how to fix it: missing keys or token, a server exposed to the network, and what each feature needs here (volume and screenshot tools, `xdg-open`, uinput for Control Mode, Chromium for Computer Use, `agy` for IDE mode). They also check plugins, skills, MCP servers (connecting to each one), OmniRoute and the session database. `--json` prints a machine-readable report; the exit code is 1 when there is an error. With the server running, `GET /api/diagnostico` returns the same report.
+
 ### Optional: desktop widget
 
 ```bash
@@ -333,7 +364,7 @@ The Google ADK runtime is part of the same server: the ADK voice client is at `h
 
 ## Plugins and ADK Skills
 
-JARVIS uses a modular plugin architecture rather than hard-coding every integration in the central agent. Plugin code lives in `plugins/<id>/plugin.py`; the matching ADK Skill (`SKILL.md` plus optional `assets/`) lives in `skills/<skill-name>/`, so the model receives focused instructions only for enabled skills. The agents load them on demand through ADK's `SkillToolset`: `list_skills`, `load_skill` and `load_skill_resource` are read-only, and `run_skill_script` (which runs code) requires your confirmation.
+JARVIS uses a modular plugin architecture rather than hard-coding every integration in the central agent. Each plugin is a folder `plugins/<id>/` with a `plugin.json` manifest and its runtime code; the matching ADK Skill (`SKILL.md` plus optional `assets/`) lives in `skills/<skill-name>/`, so the model receives focused instructions only for enabled skills. The agents load them on demand through ADK's `SkillToolset`: `list_skills`, `load_skill` and `load_skill_resource` are read-only, and `run_skill_script` (which runs code) requires your confirmation.
 
 | Plugin | Skill | Status |
 | --- | --- | --- |
@@ -348,6 +379,24 @@ JARVIS uses a modular plugin architecture rather than hard-coding every integrat
 
 Simulated plugins are **disabled by default** so the assistant never reports invented data as real. Set `JARVIS_ATIVAR_MOCKS=1` to enable them for demos. Linux system and hardware tools are built in (`system_tools.py`) and always available.
 
+**Creating a plugin** needs no change to `plugin_manager.py`. Add a folder with the manifest and the module named in `entry`:
+
+```json
+{
+  "id": "my_plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "🔌",
+  "author": "You",
+  "description": "What it does.",
+  "entry": "plugin",
+  "simulated": false
+}
+```
+
+In `plugin.py`, subclass `JarvisPlugin`, call `super().__init__(PluginMeta.do_manifesto(__file__))` and register each tool with a `risk_level`. The manifest is read without importing any code; an invalid manifest (id different from the folder, missing fields, bad `entry`) is reported by the diagnostics and never imported.
+
 ---
 
 ## Testing and trust gates
@@ -356,12 +405,12 @@ The repository includes automated architecture, security and regression tests. T
 
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
-PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
-    monitoring/test_skills_mcp_ide.py -v
+PYTHONPATH=. .venv/bin/pytest monitoring/ -v            # every pytest suite
 .venv/bin/python monitoring/test_suite.py --p0   # security & architecture gates (P0)
 .venv/bin/python monitoring/test_adk.py          # Google ADK scenarios
 ```
+
+The pytest suites cover, among others: machine detection with fake hardware (`test_perfil_maquina.py`), skills/MCP/IDE mode with real ADK objects and MCP servers (`test_skills_mcp_ide.py`), child-process secrets, the SSRF guard and tool-result limits (`test_seguranca_execucao.py`), provider failure handling and per-session chat queues (`test_resiliencia.py`), plugin manifests (`test_plugins_manifesto.py`) and the diagnostics (`test_diagnostico.py`).
 
 No real API key is needed: the suites run offline with dummy credentials. GitHub Actions also runs a syntax check, an import smoke test and Gitleaks on every push and pull request to `main`.
 
@@ -376,7 +425,7 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── gemini/                  # File bridge with the Antigravity IDE (examples tracked, runtime files ignored)
 ├── gemini-live-widget/      # Desktop widget frontend
 ├── monitoring/              # Logger, debug dashboard, trust gates and regression tests
-├── plugins/                 # Plugin runtime code (plugins/<id>/plugin.py)
+├── plugins/                 # Plugins (plugins/<id>/plugin.json manifest + plugin.py)
 ├── skills/                  # ADK Skills (skills/<skill-name>/SKILL.md + assets/)
 ├── servidor/                # Backend modules (security, ADK runtime, routes, Live WebSockets)
 ├── static/                  # Main holographic web HUD (+ static/common/ shared JS)
@@ -391,13 +440,17 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── perfil_maquina.py        # Runtime machine identification (hardware, desktop, apps)
 ├── controller_engine.py     # Virtual mouse/keyboard (evdev/uinput)
 ├── preferences_manager.py   # Persistent user preferences
-├── plugin_manager.py        # Plugin discovery and lifecycle
+├── plugin_manager.py        # Manifest-based plugin discovery and lifecycle
 ├── plugin_sdk.py            # Plugin contracts
 ├── adk_skill_loader.py      # ADK skill loader
 ├── gemini_bridge.py         # Antigravity file bridge and audit log
 ├── jarvis_mcp_server.py     # MCP server
 ├── mcp_client_manager.py    # MCP client (external servers → ADK agents)
 ├── mcp_servers.example.json # MCP client configuration template
+├── processos.py             # Child processes without JARVIS's secrets
+├── rede_segura.py           # SSRF guard for read_web_page
+├── resultados_de_ferramentas.py # JSON-safe, size-capped tool results
+├── diagnostico.py           # Machine/configuration doctor
 ├── requirements.txt         # Runtime dependencies
 ├── requirements-dev.txt     # Test dependencies (pytest)
 ├── run_jarvis.sh            # Starts the server

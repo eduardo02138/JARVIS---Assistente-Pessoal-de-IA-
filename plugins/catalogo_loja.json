@@ -1,0 +1,11 @@
+[
+  {
+    "id": "obs_studio",
+    "name": "Controle de Cenas OBS Studio",
+    "version": "1.0.0",
+    "category": "streaming",
+    "icon": "📹",
+    "author": "Comunidade Open Source",
+    "description": "Troca de cenas, fontes de áudio e gravação de gameplays diretamente por comandos de voz."
+  }
+]

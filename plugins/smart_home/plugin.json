@@ -1,0 +1,11 @@
+{
+  "id": "smart_home",
+  "name": "Casa Inteligente & IoT",
+  "version": "1.0.0",
+  "category": "smart_home",
+  "icon": "🏠",
+  "author": "Stark Home Automation",
+  "description": "Controle de iluminação inteligente, climatização, cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso') e automação IoT.",
+  "entry": "plugin",
+  "simulated": true
+}

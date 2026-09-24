@@ -7,14 +7,7 @@ from plugin_sdk import JarvisPlugin, PluginMeta
 
 class LiveStreamPlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="live_stream",
-            name="Transmissão ao Vivo & Streaming",
-            version="1.0.0",
-            category="streaming",
-            icon="📡",
-            description="Integração para transmissões ao vivo: leitura e síntese de chat em tempo real, contagem de espectadores e alertas de doações."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.streaming = False
         self.platform = "Twitch / YouTube"
         self.viewers = 142

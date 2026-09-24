@@ -7,14 +7,7 @@ from plugin_sdk import JarvisPlugin, PluginMeta
 
 class SocialFeedPlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="social_feed",
-            name="Mídias Sociais & Notificações",
-            version="1.0.0",
-            category="social",
-            icon="💬",
-            description="Monitoramento inteligente de feeds, menções, mensagens diretas (Discord, Telegram, X/Twitter) e publicação de atualizações."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.notifications = [
             {"canal": "Discord", "autor": "Equipe Antigravity", "conteudo": "Nova versão do SDK agy disponível para testes.", "urgente": True},
             {"canal": "GitHub", "autor": "DeepMind Devs", "conteudo": "Pull request mesclada no repositório de ferramentas.", "urgente": False},

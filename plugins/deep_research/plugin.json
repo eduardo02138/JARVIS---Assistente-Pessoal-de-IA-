@@ -1,0 +1,11 @@
+{
+  "id": "deep_research",
+  "name": "Pesquisa Profunda & Dossiês Assíncronos",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "🔬",
+  "author": "Gemini Live Research Lab",
+  "description": "Executa investigações aprofundadas em segundo plano sem travar a conversa, com aviso por voz e no HUD ao concluir.",
+  "entry": "plugin",
+  "simulated": true
+}

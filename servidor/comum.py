@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import weakref
 from typing import Set
 
 from monitoring.logger import logger
@@ -51,3 +52,17 @@ def agendar_tarefa_do_servidor(coro) -> asyncio.Task:
     _server_background_tasks.add(task)
     task.add_done_callback(_server_background_tasks.discard)
     return task
+
+
+# Uma trava por sessão de conversa. Some sozinha quando nenhum turno a usa (weakref),
+# então o dicionário não cresce com sessões antigas.
+_travas_de_sessao: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def trava_da_sessao(sessao: str) -> asyncio.Lock:
+    """Turnos da mesma sessão rodam em fila; sessões diferentes, em paralelo."""
+    trava = _travas_de_sessao.get(sessao)
+    if trava is None:
+        trava = asyncio.Lock()
+        _travas_de_sessao[sessao] = trava
+    return trava

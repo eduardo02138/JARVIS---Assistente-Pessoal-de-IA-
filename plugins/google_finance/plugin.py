@@ -37,14 +37,7 @@ def _carregar_portfolio_padrao() -> List[Dict]:
 
 class GoogleFinancePlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="google_finance",
-            name="Google Finance & Portfólio de Investimentos",
-            version="1.0.0",
-            category="general",
-            icon="📈",
-            description="SIMULADO: cotações de demonstração (B3, S&P 500, Cripto), carteira fictícia, análise de alocação e insights. Não consulta o Google Finance real."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         # Carteira padrão inicial do investidor
         self.portfolio: List[Dict] = _carregar_portfolio_padrao()
 

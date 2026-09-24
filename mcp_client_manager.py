@@ -11,7 +11,8 @@ Destaques da implementação:
 - Integração nativa com o PolicyEngine (registro de níveis de risco por ferramenta ou padrão),
   sem nunca sobrescrever a política de uma ferramenta do próprio JARVIS.
 - Servidores stdio recebem só o ambiente mínimo (PATH, HOME...) mais o bloco "env" declarado:
-  as chaves do .env do JARVIS não vazam para processos de terceiros ("inherit_env": true reativa).
+  as chaves do .env do JARVIS não vazam para processos de terceiros ("inherit_env": true herda
+  o restante da sessão do usuário, ainda sem JARVIS_TOKEN e as chaves de provedor).
 - Verificação de conexão no boot: lista as ferramentas de cada servidor e aplica default_risk_level.
 - Gestão de ciclo de vida assíncrona com close_all() integrado ao lifespan do FastAPI.
 - Isolamento de recursão (ignora conexões com o próprio servidor 'jarvis').
@@ -45,6 +46,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 from mcp import StdioServerParameters
 from mcp.client.stdio import get_default_environment
 from policy_engine import RiskLevel, policy_engine
+from processos import ambiente_sem_segredos
 
 # Nomes cujas políticas vieram de configurações MCP (as demais são do JARVIS e não mudam)
 _POLITICAS_DE_ORIGEM_MCP: set = set()
@@ -144,7 +146,8 @@ class McpClientManager:
             raw_env = cfg.get("env", {})
             # Ambiente mínimo (PATH, HOME, SHELL...) como no SDK do MCP: GEMINI_API_KEY,
             # JARVIS_TOKEN e demais segredos só chegam ao servidor se declarados em "env".
-            env_vars = os.environ.copy() if cfg.get("inherit_env") else get_default_environment()
+            # "inherit_env" herda a sessão do usuário, ainda sem as credenciais do JARVIS.
+            env_vars = ambiente_sem_segredos() if cfg.get("inherit_env") else get_default_environment()
             for k, v in raw_env.items():
                 env_vars[k] = os.path.expandvars(str(v))
 

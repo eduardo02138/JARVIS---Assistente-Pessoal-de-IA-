@@ -1,0 +1,11 @@
+{
+  "id": "google_workspace",
+  "name": "Google Workspace (Gmail, Docs & Keep)",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "📑",
+  "author": "Google Cloud & Stark Industries",
+  "description": "Comandos de voz para redigir documentos no Docs, consultar a caixa de entrada do Gmail e capturar ideias rápidas no Keep.",
+  "entry": "plugin",
+  "simulated": true
+}

@@ -14,14 +14,7 @@ logger = logging.getLogger("jarvis.plugins.ginjutsu_studio")
 
 class GinjutsuStudioPlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="ginjutsu_studio",
-            name="Ginjutsu Motion & Video AI Studio",
-            version="1.0.0",
-            category="general",
-            icon="🎬",
-            description="Transferência de atuação, coreografia e movimento de vídeos existentes para novos personagens e modelos visuais via Higgsfield Ginjutsu."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.jobs: Dict[str, Dict] = {}
 
     def on_load(self):

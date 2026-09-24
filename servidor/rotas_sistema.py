@@ -1,5 +1,6 @@
 """Rotas de saúde, provedores, plug-ins, depuração e preferências."""
 
+import asyncio
 import os
 import time
 
@@ -75,6 +76,13 @@ async def health_check():
         "modo_computador": policy_engine.computer_lease_status(),
         "mcp_servers": _status_mcp_sanitizado(),
     }
+
+
+@router.get("/api/diagnostico")
+async def diagnostico_da_maquina(_=Depends(verify_jarvis_token)):
+    """Relatório do diagnóstico (o mesmo de python diagnostico.py), com as conexões MCP reais."""
+    import diagnostico
+    return await asyncio.to_thread(diagnostico.executar_diagnostico)
 
 
 @router.get("/api/mcp/servers")

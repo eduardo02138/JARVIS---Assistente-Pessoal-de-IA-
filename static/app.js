@@ -987,6 +987,7 @@ async function renderPluginsUI() {
                         <div>
                             <div class="plugin-meta-title">${p.name}</div>
                             <span class="plugin-category-badge cat-${p.category}">${p.category}</span>
+                            ${p.simulated ? '<span class="plugin-category-badge">simulado</span>' : ''}
                         </div>
                     </div>
                 </div>
@@ -1031,6 +1032,8 @@ window.installPlugin = async function(pluginId) {
         if (data.sucesso) {
             appendToolLog('PLUG-IN', 'success', data.mensagem);
             renderPluginsUI();
+        } else {
+            appendToolLog('PLUG-IN', 'error', data.mensagem || 'Instalação recusada.');
         }
     } catch (e) {
         alert('Erro ao instalar plug-in: ' + e.message);

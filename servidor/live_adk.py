@@ -17,6 +17,7 @@ from live_protocolo import palavra_confirma
 from monitoring.logger import logger, record_event
 from policy_engine import policy_engine
 from servidor.comum import IDIOMA, VOZ, env_flag, env_json
+from servidor.falhas import classificar_falha
 from servidor.runtime_adk import (
     CAMINHO_VOZ,
     girar_chave_adk,
@@ -333,25 +334,24 @@ async def live_adk(
     except* (WebSocketDisconnect, asyncio.CancelledError):
         logger.info("Cliente Live ADK desconectou.")
     except* (ServerError, ClientError) as grupo:
-        erro_inst = grupo.exceptions[0]
-        logger.warning("Falha na sessão Live ADK (%s). Rotacionando chave e/ou modelo.", erro_inst)
-        girou = girar_chave_adk()
-        if girou:
-            # A rotação limpa o cache de runners; aplica a reserva ao runner recriado
-            # para que a próxima conexão já use o modelo reserva (mensagem abaixo verdadeira).
-            # Sem revert: o objec runner velho foi descartado; nao se troca modelo dele.
-            novo_runner = obter_runner_adk(CAMINHO_VOZ)
+        # Cota e chave recusada: outra chave do pool. Modelo sobrecarregado ou
+        # inexistente: modelo reserva na próxima conexão. Requisição inválida: nada a trocar.
+        falha = classificar_falha(grupo)
+        logger.warning("Falha na sessão Live ADK (%s): %s", falha.motivo.value, falha.detalhe)
+        record_event("live_adk_falha", {"motivo": falha.motivo.value, "codigo": falha.codigo})
+        if falha.girar_chave and girar_chave_adk():
+            msg_erro = f"{falha.mensagem()}. Chave rotacionada no pool: reconecte para continuar."
+        elif falha.trocar_modelo:
+            # Vale para as próximas conexões: o runner de voz em cache passa ao modelo reserva
             try:
-                trocar_modelo(novo_runner, MODELO_LIVE_RESERVA)
+                trocar_modelo(obter_runner_adk(CAMINHO_VOZ), MODELO_LIVE_RESERVA)
+                msg_erro = f"{falha.mensagem()}. Modelo reserva ativado: reconecte para continuar."
             except Exception:
-                pass
-        msg_erro = (
-            "Limite ou instabilidade na Live API. Chave rotacionada no pool. Reconecte para continuar."
-            if girou
-            else "Modelo Live indisponível. Reconecte para tentar o modelo reserva."
-        )
+                msg_erro = f"{falha.mensagem()}. Reconecte para tentar de novo."
+        else:
+            msg_erro = f"{falha.mensagem()}. Reconecte para tentar de novo."
         try:
-            await safe_send_json({"tipo": "erro", "mensagem": msg_erro})
+            await safe_send_json({"tipo": "erro", "mensagem": msg_erro, "motivo": falha.motivo.value})
         except Exception:
             pass
     finally:

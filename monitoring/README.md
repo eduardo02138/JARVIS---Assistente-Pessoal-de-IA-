@@ -47,7 +47,17 @@ python3 monitoring/monitor.py
 
 ---
 
-### 3. Executar Teste de Diagnóstico Automatizado
+### 3. Diagnóstico da máquina e da configuração
+Para ver o que falta nesta máquina para cada função, com a correção de cada problema:
+```bash
+.venv/bin/python diagnostico.py            # relatório legível (saída 1 se houver erro)
+.venv/bin/python diagnostico.py --json     # relatório em JSON
+```
+Com o servidor rodando, `GET /api/diagnostico` (com o token) devolve o mesmo relatório.
+
+---
+
+### 4. Executar Teste de Diagnóstico Automatizado
 Para testar todas as camadas (chaves, tools de sistema, handshake Live API, desktop app):
 ```bash
 ./monitoring/test_suite.py

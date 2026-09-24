@@ -1,0 +1,11 @@
+{
+  "id": "google_finance",
+  "name": "Google Finance & Portfólio de Investimentos",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "📈",
+  "author": "Google Finance & Stark Holdings",
+  "description": "SIMULADO: cotações de demonstração (B3, S&P 500, Cripto), carteira fictícia, análise de alocação e insights. Não consulta o Google Finance real.",
+  "entry": "plugin",
+  "simulated": true
+}

@@ -25,6 +25,7 @@ from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
 
 from policy_engine import policy_engine
+from resultados_de_ferramentas import limitar_resultado, limite_configurado, tamanho_json_estrito
 from .contexto import identidade_da_sessao
 from .ferramentas import (
     consultar_preferencias,
@@ -158,6 +159,28 @@ def registrar_autoridade_dos_modos(
     return None
 
 
+def limitar_resultado_da_ferramenta(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any
+) -> Optional[dict]:
+    """Resultado maior que o limite chega ao modelo resumido, com marcadores do que foi omitido.
+
+    Só atua em resultado JSON puro: partes de mídia (types.Part) devolvidas por uma
+    ferramenta seguem intactas para o ADK extrair.
+    """
+    try:
+        tamanho = tamanho_json_estrito(tool_response)
+    except (TypeError, ValueError):
+        return None
+    if tamanho <= limite_configurado():
+        return None
+    logger.info("Resultado de '%s' com %d caracteres resumido para caber no contexto.", getattr(tool, "name", "?"), tamanho)
+    return limitar_resultado(tool_response)
+
+
+# Ordem importa: o ADK para no primeiro callback que devolve um resultado
+CALLBACKS_POS_FERRAMENTA = [registrar_autoridade_dos_modos, limitar_resultado_da_ferramenta]
+
+
 def _instrucoes_das_skills() -> str:
     """Bloco L2 das Skills ADK ativas, injetado no prompt do agente (progressive disclosure)."""
     try:
@@ -228,7 +251,7 @@ def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
             *ferramentas,
         ],
         before_tool_callback=guarda_de_ferramentas,
-        after_tool_callback=registrar_autoridade_dos_modos,
+        after_tool_callback=CALLBACKS_POS_FERRAMENTA,
     )
 
 
@@ -254,6 +277,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
         ),
         tools=tools_especialista_sistema,
         before_tool_callback=guarda_de_ferramentas,
+        after_tool_callback=limitar_resultado_da_ferramenta,
     )
 
     tools_especialista_navegador: list = []
@@ -271,6 +295,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
         ),
         tools=tools_especialista_navegador,
         before_tool_callback=guarda_de_ferramentas,
+        after_tool_callback=limitar_resultado_da_ferramenta,
     )
 
     skill_toolset = _criar_skill_toolset()
@@ -289,7 +314,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
             AgentTool(agent=especialista_navegador),
         ] + ([] if skill_toolset is None else [skill_toolset]) + mcp_toolsets,
         before_tool_callback=guarda_de_ferramentas,
-        after_tool_callback=registrar_autoridade_dos_modos,
+        after_tool_callback=CALLBACKS_POS_FERRAMENTA,
     )
 
 

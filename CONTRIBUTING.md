@@ -20,7 +20,7 @@ pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-Use development/test credentials only.
+Use development/test credentials only. Run `.venv/bin/python diagnostico.py` to see what this machine is missing for each feature.
 
 ## Validation
 
@@ -28,9 +28,7 @@ Run the relevant test suites before submitting:
 
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
-PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
-    monitoring/test_skills_mcp_ide.py -v
+PYTHONPATH=. .venv/bin/pytest monitoring/ -v
 .venv/bin/python monitoring/test_suite.py --p0
 .venv/bin/python monitoring/test_adk.py
 ```
@@ -58,11 +56,15 @@ Avoid:
 - blocking the event loop with synchronous I/O;
 - source-string tests when runtime behavioral tests are possible;
 - hidden global state that can leak between sessions;
-- credentials or machine-specific absolute paths.
+- credentials or machine-specific absolute paths;
+- `subprocess.Popen` for apps, the browser or CLIs: use `processos.abrir_desanexado`/`processos.executar`, which drop JARVIS's secrets;
+- fetching URLs chosen by the model without `rede_segura.ler_url_publica`.
 
 ## Adding a plugin or ADK Skill
 
-Use the existing plugin contracts in `plugin_sdk.py` and discovery logic in `plugin_manager.py`. Keep tool names descriptive, define risk classification, document parameters clearly and provide a focused `SKILL.md` when the capability should be exposed through ADK skills.
+A plugin is a folder `plugins/<id>/` with a `plugin.json` manifest (`id` equal to the folder name, `name`, `version`, `entry` and optionally `category`, `icon`, `author`, `description`, `simulated`) and the module named in `entry`. `plugin_manager.py` discovers it from the manifest, so it needs no edit. In the module, subclass `JarvisPlugin` and build the metadata with `PluginMeta.do_manifesto(__file__)` so the manifest stays the single source.
+
+Keep tool names descriptive, give every tool a `risk_level` (tools without one are blocked), document parameters clearly, mark demo-data plugins with `"simulated": true` and provide a focused `SKILL.md` in `skills/<skill-name>/` when the capability should be exposed through ADK skills.
 
 ## Pull request description
 

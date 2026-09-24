@@ -84,9 +84,10 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 | --- | --- |
 | `server.py` | Ponto de entrada: monta o FastAPI a partir dos routers de `servidor/`, serve os clientes web e reexporta os nomes públicos usados por scripts e testes |
 | `servidor/seguranca.py` | Token, sessões emitidas (`/api/auth/session`), verificação de token e liberação de leases |
-| `servidor/runtime_adk.py` | Serviços de sessão/memória do ADK, fábrica de runners e rotação de chaves |
+| `servidor/runtime_adk.py` | Serviços de sessão/memória do ADK, fábrica de runners (modelo padrão e reserva) e rotação de chaves |
+| `servidor/falhas.py` | Classificação das falhas do provedor (cota, chave, modelo sobrecarregado/inexistente, tempo, rede, requisição inválida) e a reação certa para cada uma |
 | `servidor/rotas_sistema.py` | Rotas de saúde, provedores, plugins, depuração e preferências |
-| `servidor/rotas_agente.py` | Chat ADK (`/api/chat`), confirmações pendentes e Modo Computador |
+| `servidor/rotas_agente.py` | Chat ADK (`/api/chat`, um turno por vez em cada sessão), confirmações pendentes e Modo Computador |
 | `servidor/live_nativo.py` | WebSocket Gemini Live nativo (`/ws/live`) com ferramentas em segundo plano |
 | `servidor/live_adk.py` | WebSocket Live do ADK (`/ws/live_adk`) |
 | `live_protocolo.py` | Protocolo Live compartilhado: parser único de confirmação/recusa, ajuste de ping e encerramento limpo |
@@ -99,8 +100,12 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 | `perfil_maquina.py` | Identificação da máquina em tempo de execução: sistema, ambiente gráfico, CPU, RAM, GPUs, discos, tela, áudio e aplicativos |
 | `controller_engine.py` | Mouse/teclado virtual via `evdev`/`uinput` (degrada sem quebrar se indisponível) |
 | `preferences_manager.py` | Preferências persistentes (apps padrão, plataforma de música, launchers) |
-| `plugin_manager.py` / `plugin_sdk.py` | Descoberta, ciclo de vida e contratos de plugins |
-| `plugins/` | Código de runtime dos plugins (`plugins/<id>/plugin.py`) |
+| `plugin_manager.py` / `plugin_sdk.py` | Descoberta de plugins por manifesto (`plugins/<id>/plugin.json`), ciclo de vida e contratos |
+| `plugins/` | Plugins: manifesto `plugin.json` (fonte única dos metadados) + código; `catalogo_loja.json` lista os itens da loja sem código |
+| `processos.py` | Abre aplicativos, navegador, IDE e a CLI `agy` sem entregar a eles o `JARVIS_TOKEN` e as chaves dos provedores |
+| `rede_segura.py` | Proteção contra SSRF do `read_web_page`: só páginas públicas, redirecionamentos conferidos e download com teto |
+| `resultados_de_ferramentas.py` | Deixa todo resultado de ferramenta serializável e com tamanho limitado antes do modelo, do HUD e da auditoria |
+| `diagnostico.py` | Diagnóstico da máquina e da configuração (`python diagnostico.py`, `GET /api/diagnostico`) |
 | `skills/` | Skills ADK (`skills/<nome-da-skill>/SKILL.md` + `assets/`), fonte única das instruções |
 | `adk_skill_loader.py` | Carregamento de Skills ADK e SkillToolset |
 | `jarvis_mcp_server.py` | Servidor MCP para agentes e IDEs externas |
@@ -124,6 +129,7 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 | `WS /ws/live_adk` | Sessão Live do Google ADK (agentes, memória, skills, toolsets MCP) |
 | `POST /api/chat` | Turno de texto roteado entre agente rápido, coordenador e Computer Use |
 | `GET /api/health` | Modelos, pool de chaves, provedor ativo e status MCP |
+| `GET /api/diagnostico` | Relatório do diagnóstico: configuração, segurança, o que cada função precisa nesta máquina e saúde das integrações (exige token) |
 
 Rotas de mutação e os dois WebSockets exigem `JARVIS_TOKEN`; clientes locais obtêm o token em `GET /api/auth/session` (somente loopback).
 
@@ -131,7 +137,18 @@ Rotas de mutação e os dois WebSockets exigem `JARVIS_TOKEN`; clientes locais o
 
 Os modelos padrão ficam no `.env`: `gemini-3.8-live` para voz, `gemini-3.8-live-extended-thinking` para raciocínio em segundo plano (`LIVE_THINKING_LEVEL`), `gemini-2.5-flash-native-audio-latest` como reserva de voz e `gemini-flash-latest` para texto.
 
-`GEMINI_API_KEYS` aceita um pool de chaves separadas por vírgula: a sessão Live rotaciona para a próxima chave em caso de cota ou erro transitório. No chat de texto, um proxy OmniRoute local opcional (`OMNIROUTE_URL`) atua como segundo provedor, acionado automaticamente quando o Google AI Studio está indisponível ou diretamente quando selecionado no HUD. A voz Live sempre roda no Google.
+`GEMINI_API_KEYS` aceita um pool de chaves separadas por vírgula. No chat de texto, um proxy OmniRoute local opcional (`OMNIROUTE_URL`) atua como segundo provedor, acionado automaticamente quando o Google AI Studio está indisponível ou diretamente quando selecionado no HUD. A voz Live sempre roda no Google.
+
+Cada erro do provedor é classificado (`servidor/falhas.py`) e tratado com o que de fato resolve:
+
+| Falha | Reação |
+| --- | --- |
+| Cota / limite de taxa (429), chave recusada (401/403, chave inválida) | Próxima chave do pool; sem outra, o segundo provedor |
+| Modelo sobrecarregado ou inexistente (503, 500, 404, close 1011 da Live) | Modelo reserva (`TEXT_MODEL_FALLBACK`, `LIVE_MODEL_FALLBACK`), depois o segundo provedor |
+| Tempo esgotado, erro de rede | Segundo provedor |
+| Requisição inválida, conversa longa demais para o modelo | Erro claro na hora: nenhuma troca de chave, modelo ou provedor resolve |
+
+Essa é a reação do chat de texto (`/api/chat`); o modelo reserva roda num runner próprio, só para aquele pedido, e as outras sessões seguem no modelo padrão. A sessão de voz do ADK gira a chave em problemas de cota/chave e usa o `LIVE_MODEL_FALLBACK` na próxima conexão em problemas do modelo. A sessão de voz nativa passa para a próxima conta do pool (na hora, quando o problema é da chave) e só para antes quando a própria conexão é recusada como inválida, porque nenhuma outra conta a aceitaria.
 
 ---
 
@@ -201,6 +218,14 @@ http://127.0.0.1:8000/debug    # painel de depuração
 
 O runtime Google ADK faz parte do mesmo servidor: o cliente de voz ADK fica em `http://127.0.0.1:8000/static_adk/` e os turnos de texto ADK passam por `POST /api/chat`.
 
+### Verifique esta máquina
+
+```bash
+.venv/bin/python diagnostico.py
+```
+
+O diagnóstico lista o que está funcionando e, para cada problema, como corrigir: chave ou token ausente, servidor exposto na rede e o que cada função precisa aqui (ferramentas de volume e de captura de tela, `xdg-open`, uinput para o Modo Controle, Chromium para o Computer Use, `agy` para o Modo IDE). Também confere plugins, skills, servidores MCP (conectando em cada um), OmniRoute e o banco de sessões. `--json` gera o relatório para scripts, e o código de saída é 1 quando há erro. Com o servidor rodando, `GET /api/diagnostico` devolve o mesmo relatório.
+
 ### Widget desktop
 
 ```bash
@@ -249,7 +274,10 @@ Entre os mecanismos existentes estão:
 - classificação de risco de ferramentas;
 - confirmação explícita para operações sensíveis;
 - leases temporárias para controle físico/computador;
-- logs estruturados e testes de regressão.
+- logs estruturados e testes de regressão;
+- **programas abertos pelo JARVIS não recebem os segredos dele**: aplicativos, jogos, navegador, IDE Antigravity e a CLI `agy` iniciam sem `JARVIS_TOKEN`, sem as chaves do Gemini e sem credenciais do `.env` (`processos.py`), então nem um aplicativo nem um agente de programação sob prompt injection chama a API local com a sua autoridade. `JARVIS_ENV_REPASSAR=GEMINI_API_KEY` repassa uma variável específica (o token da API local nunca);
+- **`read_web_page` só lê páginas públicas**: loopback, rede local, endereços link-local (metadados de nuvem) e redirecionamentos para eles são recusados, o endereço conectado é conferido de novo (DNS rebinding) e o download tem teto de 2 MB (`rede_segura.py`). `JARVIS_WEB_PERMITIR_REDE_LOCAL=1` libera a rede local;
+- **resultados de ferramentas com tamanho limitado**: tudo vira JSON válido, e o que passar de `JARVIS_LIMITE_RESULTADO_FERRAMENTA` caracteres (padrão 16000) é encurtado com marcadores do que foi omitido, na sessão Live nativa e nos agentes ADK.
 
 Veja também [`SECURITY.md`](SECURITY.md).
 
@@ -257,7 +285,7 @@ Veja também [`SECURITY.md`](SECURITY.md).
 
 ## Plugins e Skills ADK
 
-O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspondente (`SKILL.md` e `assets/` opcionais) fica em `skills/<nome-da-skill>/`. Assim o modelo recebe instruções focadas só das skills ativas. Os agentes carregam as skills sob demanda pelo `SkillToolset` do ADK: `list_skills`, `load_skill` e `load_skill_resource` são só leitura, e `run_skill_script` (que executa código) exige sua confirmação.
+Cada plugin é uma pasta `plugins/<id>/` com o manifesto `plugin.json` e o código; a Skill ADK correspondente (`SKILL.md` e `assets/` opcionais) fica em `skills/<nome-da-skill>/`. Assim o modelo recebe instruções focadas só das skills ativas. Os agentes carregam as skills sob demanda pelo `SkillToolset` do ADK: `list_skills`, `load_skill` e `load_skill_resource` são só leitura, e `run_skill_script` (que executa código) exige sua confirmação.
 
 | Plugin | Skill | Situação |
 | --- | --- | --- |
@@ -271,6 +299,24 @@ O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspon
 | `social_feed` | `social-feed` | Simulado (notificações de demonstração) |
 
 Os plugins simulados ficam **desligados por padrão** para o assistente nunca relatar dados inventados como reais. Use `JARVIS_ATIVAR_MOCKS=1` para ativá-los em demonstrações. As ferramentas de sistema e hardware Linux são nativas (`system_tools.py`) e sempre disponíveis.
+
+**Criar um plugin** não exige mexer no `plugin_manager.py`. Crie a pasta com o manifesto e o módulo indicado em `entry`:
+
+```json
+{
+  "id": "meu_plugin",
+  "name": "Meu Plugin",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "🔌",
+  "author": "Você",
+  "description": "O que ele faz.",
+  "entry": "plugin",
+  "simulated": false
+}
+```
+
+No `plugin.py`, herde de `JarvisPlugin`, chame `super().__init__(PluginMeta.do_manifesto(__file__))` e registre cada ferramenta com `risk_level`. O manifesto é lido sem importar código; um manifesto inválido (id diferente da pasta, campos faltando, `entry` inválido) aparece no diagnóstico e nunca é importado.
 
 ### MCP: JARVIS dentro da IDE e servidores externos dentro do JARVIS
 
@@ -287,7 +333,7 @@ Ferramentas de plugins só aparecem no MCP quando o Policy Engine as executa sem
 | Chave | Significado |
 | --- | --- |
 | `command`, `args`, `cwd` / `url`, `headers` | Como iniciar ou acessar o servidor; `~` e `${VAR}` são expandidos |
-| `env` | Variáveis entregues a um servidor stdio. Só o ambiente mínimo (PATH, HOME…) é herdado, então os segredos do `.env` não vazam para servidores de terceiros; `"inherit_env": true` volta a herdar tudo |
+| `env` | Variáveis entregues a um servidor stdio. Só o ambiente mínimo (PATH, HOME…) é herdado, então os segredos do `.env` não vazam para servidores de terceiros; `"inherit_env": true` herda o resto da sua sessão, ainda sem as credenciais do JARVIS (declare em `env` a que um servidor precisar) |
 | `tool_filter`, `tool_name_prefix` | Quais ferramentas expor e um prefixo opcional (as políticas seguem o nome com prefixo) |
 | `policies`, `default_risk_level` | Nível de risco por ferramenta e um padrão para as demais. Ferramenta sem política fica bloqueada; um servidor nunca sobrescreve a política de uma ferramenta do próprio JARVIS |
 
@@ -310,12 +356,12 @@ As mesmas suítes executadas pelo CI (instale antes o `requirements-dev.txt`):
 
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
-PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
-    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py monitoring/test_perfil_maquina.py \
-    monitoring/test_skills_mcp_ide.py -v
+PYTHONPATH=. .venv/bin/pytest monitoring/ -v            # todas as suítes pytest
 .venv/bin/python monitoring/test_suite.py --p0   # gates de segurança e arquitetura (P0)
 .venv/bin/python monitoring/test_adk.py          # cenários Google ADK
 ```
+
+As suítes pytest cobrem, entre outros: identificação da máquina com hardware simulado (`test_perfil_maquina.py`), skills/MCP/Modo IDE com objetos reais do ADK e servidores MCP de verdade (`test_skills_mcp_ide.py`), segredos nos processos filhos, proteção contra SSRF e limite de resultados (`test_seguranca_execucao.py`), tratamento de falhas do provedor e fila por sessão no chat (`test_resiliencia.py`), manifestos de plugins (`test_plugins_manifesto.py`) e o diagnóstico (`test_diagnostico.py`).
 
 Não é preciso chave real: as suítes rodam offline com credenciais fictícias. O GitHub Actions também faz checagem de sintaxe, smoke test de imports e Gitleaks em todo push e pull request para `main`.
 
@@ -330,7 +376,7 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── gemini/                  # Ponte por arquivos com a IDE Antigravity
 ├── gemini-live-widget/      # Widget desktop
 ├── monitoring/              # Logger, painel de depuração, Trust Gates e regressões
-├── plugins/                 # Código dos plugins (plugins/<id>/plugin.py)
+├── plugins/                 # Plugins (manifesto plugins/<id>/plugin.json + plugin.py)
 ├── skills/                  # Skills ADK (skills/<nome>/SKILL.md + assets/)
 ├── servidor/                # Módulos do backend (segurança, runtime ADK, rotas, WebSockets Live)
 ├── static/                  # HUD web principal (+ static/common/ com JS compartilhado)
@@ -345,13 +391,17 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── perfil_maquina.py        # Identificação da máquina (hardware, ambiente gráfico, apps)
 ├── controller_engine.py     # Mouse/teclado virtual (evdev/uinput)
 ├── preferences_manager.py   # Preferências persistentes
-├── plugin_manager.py        # Descoberta e ciclo de vida de plugins
+├── plugin_manager.py        # Descoberta de plugins por manifesto e ciclo de vida
 ├── plugin_sdk.py            # Contratos de plugins
 ├── adk_skill_loader.py      # Loader de Skills ADK
 ├── gemini_bridge.py         # Ponte Antigravity e log de auditoria
 ├── jarvis_mcp_server.py     # Servidor MCP
 ├── mcp_client_manager.py    # Cliente MCP (servidores externos → agentes ADK)
 ├── mcp_servers.example.json # Modelo de configuração do cliente MCP
+├── processos.py             # Processos filhos sem os segredos do JARVIS
+├── rede_segura.py           # Proteção contra SSRF do read_web_page
+├── resultados_de_ferramentas.py # Resultados de ferramentas serializáveis e limitados
+├── diagnostico.py           # Diagnóstico da máquina e da configuração
 ├── requirements.txt         # Dependências de runtime
 ├── requirements-dev.txt     # Dependências de teste (pytest)
 ├── run_jarvis.sh            # Inicia o servidor

@@ -32,9 +32,10 @@ O J.A.R.V.I.S. é um assistente pessoal por comando de voz com tempo de resposta
 ├── server.py                # Ponto de entrada: monta o FastAPI a partir de servidor/
 ├── servidor/                # Backend dividido por responsabilidade:
 │   ├── seguranca.py         #   token, sessões emitidas e liberação de leases
-│   ├── runtime_adk.py       #   sessões, memória, runners e rotação de chaves do ADK
-│   ├── rotas_sistema.py     #   saúde, provedores, plug-ins, depuração e preferências
-│   ├── rotas_agente.py      #   chat ADK, confirmações e Modo Computador
+│   ├── runtime_adk.py       #   sessões, memória, runners (padrão e reserva) e rotação de chaves do ADK
+│   ├── falhas.py            #   classificação das falhas do provedor e a reação a cada uma
+│   ├── rotas_sistema.py     #   saúde, diagnóstico, provedores, plug-ins, depuração e preferências
+│   ├── rotas_agente.py      #   chat ADK (fila por sessão), confirmações e Modo Computador
 │   ├── live_adk.py          #   WebSocket /ws/live_adk (Live pelo ADK)
 │   └── live_nativo.py       #   WebSocket /ws/live (Gemini Live nativo + Function Calling)
 │
@@ -42,7 +43,11 @@ O J.A.R.V.I.S. é um assistente pessoal por comando de voz com tempo de resposta
 ├── system_tools.py          # Ferramentas do SO (telemetria, apps, volume, web, notas, Antigravity)
 ├── perfil_maquina.py        # Identifica a máquina em tempo de execução (GPU, discos, tela, apps)
 ├── policy_engine.py         # Classificação de risco, confirmações e leases
-├── plugins/ + skills/       # Plug-ins (código) e Skills ADK (SKILL.md + assets)
+├── processos.py             # Abre programas sem entregar JARVIS_TOKEN e chaves do .env
+├── rede_segura.py           # read_web_page só em páginas públicas (proteção contra SSRF)
+├── resultados_de_ferramentas.py # Resultados de ferramentas serializáveis e com tamanho limitado
+├── diagnostico.py           # Diagnóstico da máquina e da configuração (python diagnostico.py)
+├── plugins/ + skills/       # Plug-ins (plugin.json + código) e Skills ADK (SKILL.md + assets)
 │
 ├── static/                  # Frontend Web Holográfico (HUD Sci-Fi)
 ├── static/common/           # Módulo JS compartilhado entre HUD e widget (áudio, visão, token)
@@ -153,4 +158,5 @@ O repositório unifica a ponte nativa do JARVIS e o ecossistema oficial do **Goo
    - `LIVE_MODEL_PRIMARY`: Modelos Live nativos com WebSockets bidirecionais (`gemini-3.8-live` ou `gemini-2.5-flash-native-audio-latest`).
    - `TEXT_MODEL`: Modelos textuais convencionais (`gemini-flash-latest` com fallback para `gemini-2.5-flash`).
 3. **Persistência de Memória Durável**: Utiliza `DatabaseSessionService` (`sqlite+aiosqlite:///sessoes.db`) garantindo que as preferências e memórias de usuário (`user:`) sobrevivam a reinicializações de processo.
-4. **Resiliência a Quotas (HTTP 429)**: Rotação dinâmica do pool de chaves (`GEMINI_API_KEYS`).
+4. **Resiliência a falhas do provedor**: `servidor/falhas.py` classifica cada erro. Cota (429) e chave recusada giram o pool (`GEMINI_API_KEYS`); modelo sobrecarregado ou inexistente usa o modelo reserva num runner próprio; tempo esgotado e rede acionam o OmniRoute; requisição inválida e contexto excedido falham na hora, sem gastar as outras chaves.
+5. **Fila por sessão**: dois turnos de `/api/chat` na mesma sessão nunca rodam ao mesmo tempo (sessões diferentes seguem em paralelo), para não intercalar eventos na mesma conversa do ADK.

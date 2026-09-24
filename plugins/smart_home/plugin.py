@@ -37,14 +37,7 @@ def _carregar_estado_padrao() -> dict:
 
 class SmartHomePlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="smart_home",
-            name="Casa Inteligente & IoT",
-            version="1.0.0",
-            category="smart_home",
-            icon="🏠",
-            description="Controle de iluminação inteligente, climatização, cenas de ambiente ('Foco/Trabalho', 'Cinema', 'Descanso') e automação IoT."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         estado = _carregar_estado_padrao()
         self.lights = estado.get("lights", ESTADO_FALLBACK["lights"])
         self.clima = estado.get("clima", ESTADO_FALLBACK["clima"])

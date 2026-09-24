@@ -1,0 +1,11 @@
+{
+  "id": "live_stream",
+  "name": "Transmissão ao Vivo & Streaming",
+  "version": "1.0.0",
+  "category": "streaming",
+  "icon": "📡",
+  "author": "Stark Media Lab",
+  "description": "Integração para transmissões ao vivo: leitura e síntese de chat em tempo real, contagem de espectadores e alertas de doações.",
+  "entry": "plugin",
+  "simulated": true
+}

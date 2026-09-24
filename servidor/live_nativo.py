@@ -34,7 +34,9 @@ from live_protocolo import (
 from monitoring.logger import logger, record_event
 from policy_engine import policy_engine
 from provider_router import GoogleStudioProvider, provider_router
+from resultados_de_ferramentas import limitar_resultado
 from servidor.comum import IDIOMA, VOZ, env_flag, modelo_live_padrao
+from servidor.falhas import classificar_falha
 from servidor.instrucoes import JARVIS_SYSTEM_INSTRUCTION
 from servidor.runtime_adk import memory_service_adk
 from servidor.seguranca import (
@@ -274,6 +276,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         last_err = None
         consecutive_failures = 0
         for idx, try_key in enumerate(key_pool):
+            sessao_estabelecida = False
             try:
                 logger.info(f"Tentando conectar com conta {idx+1}/{len(key_pool)} do pool (modelo: {model_name})...")
                 active_client = genai.Client(api_key=try_key)
@@ -282,6 +285,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 desativar_ping_timeout(active_client)
 
                 async with active_client.aio.live.connect(model=model_name, config=config) as session:
+                    sessao_estabelecida = True
                     record_event("client_connected", {
                         "account_index": idx + 1,
                         "total_accounts": len(key_pool),
@@ -614,6 +618,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     else:
                                         res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
 
+                                # Serializável e dentro do limite antes de chegar ao modelo, ao HUD e à auditoria
+                                res = limitar_resultado(res)
                                 assistant_state["ultima_ferramenta"] = func_name
                                 assistant_state["ultimo_resultado_ferramenta"] = res
                                 record_event("tool_result", {"name": func_name, "result": res})
@@ -933,8 +939,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 return
             except Exception as e:
                 last_err = e
+                falha = classificar_falha(e)
                 consecutive_failures += 1
-                espera = min(1 << (consecutive_failures - 1), 30)
                 next_idx = (idx + 1) % len(key_pool)
                 motivo_falha = str(e)
                 if hasattr(e, "exceptions") and e.exceptions:
@@ -943,17 +949,30 @@ async def websocket_live_endpoint(websocket: WebSocket):
                 record_event("account_failover", {
                     "from_index": idx + 1,
                     "to_index": next_idx + 1,
-                    "reason": motivo_falha
+                    "reason": motivo_falha,
+                    "motivo": falha.motivo.value,
                 })
-                logger.warning(f"Conta {idx+1} falhou ({motivo_falha}). Tentando próxima do pool em {espera}s...")
+                if falha.definitiva and not sessao_estabelecida:
+                    # Configuração recusada ao conectar: as outras contas falhariam igual.
+                    # Já no meio da conversa, reconectar abre uma sessão nova e limpa (segue abaixo).
+                    logger.warning(f"Conta {idx+1} recusou a conexão ({falha.motivo.value}: {motivo_falha}). Outra conta não resolve.")
+                    break
+                # Cota e chave recusada são da conta: a próxima segue sem espera
+                espera = 0 if falha.girar_chave else min(1 << (consecutive_failures - 1), 30)
+                logger.warning(f"Conta {idx+1} falhou ({falha.motivo.value}: {motivo_falha}). Tentando próxima do pool em {espera}s...")
                 try:
                     await safe_send_json({"type": "warn", "message": f"Conta {idx+1} falhou, rotacionando para próxima..."})
                 except Exception:
                     pass
-                await asyncio.sleep(espera)
+                if espera:
+                    await asyncio.sleep(espera)
                 continue
 
-        err_final = f"Todas as contas do pool falharam: {last_err}"
+        falha_final = classificar_falha(last_err) if last_err is not None else None
+        if falha_final is not None and falha_final.definitiva and not sessao_estabelecida:
+            err_final = f"Sessão Live recusada pelo provedor: {falha_final.mensagem()}"
+        else:
+            err_final = f"Todas as contas do pool falharam: {last_err}"
         record_event("error", {"message": err_final})
         try:
             await safe_send_json({"type": "error", "message": err_final})

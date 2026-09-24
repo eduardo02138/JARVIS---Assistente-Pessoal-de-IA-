@@ -33,7 +33,9 @@ The project is designed around several trust boundaries:
 - local HTTP/WebSocket access is expected to be bound to loopback by default;
 - authentication/session identity must be preserved across confirmation and execution;
 - privileged operations should fail closed when required identity or authority is missing;
-- API keys and tokens belong in environment configuration, never in source control.
+- API keys and tokens belong in environment configuration, never in source control;
+- programs started by JARVIS (apps, browser, IDE, the `agy` CLI, MCP servers) never inherit `JARVIS_TOKEN` or the provider keys (`processos.py`);
+- URLs chosen by the model are fetched only from the public internet: loopback, the local network and cloud metadata are refused, including through redirects and DNS rebinding (`rede_segura.py`).
 
 ## Out of scope
 

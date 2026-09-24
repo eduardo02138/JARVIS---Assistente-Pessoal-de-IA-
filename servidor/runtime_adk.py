@@ -1,6 +1,7 @@
 """Runtime do Google ADK: sessões, memória de longo prazo, runners e rotação de chaves."""
 
 import os
+from typing import Optional
 
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps.app import App, EventsCompactionConfig
@@ -60,18 +61,24 @@ def trocar_modelo(runner: Runner, modelo: str) -> None:
             subagente.model = modelo
 
 
-def obter_runner_adk(tipo: str) -> Runner:
+def obter_runner_adk(tipo: str, modelo: Optional[str] = None) -> Runner:
+    """Runner em cache por caminho; com `modelo`, um runner separado com esse modelo (reserva).
+
+    O runner padrão nunca é alterado por uma falha de um pedido: o modelo reserva vale
+    só para quem o pediu, sem afetar as outras sessões que dividem o runner.
+    """
     if tipo == CAMINHO_COMPLEXO:
         tipo = "coordenador"
-    if tipo not in runners_adk:
+    chave = f"{tipo}@{modelo}" if modelo else tipo
+    if chave not in runners_adk:
         if tipo == "rapido":
-            agente = criar_agente_rapido()
+            agente = criar_agente_rapido(modelo)
         elif tipo == "coordenador":
-            agente = criar_agente_coordenador()
+            agente = criar_agente_coordenador(modelo)
         elif tipo == CAMINHO_VOZ:
-            agente = criar_agente_de_voz()
+            agente = criar_agente_de_voz(modelo)
         elif tipo == CAMINHO_COMPUTADOR:
-            agente = criar_agente_computer_use(MODELO_COMPUTER)
+            agente = criar_agente_computer_use(modelo or MODELO_COMPUTER)
         else:
             raise ValueError(f"Tipo de runner desconhecido: {tipo}")
 
@@ -92,12 +99,12 @@ def obter_runner_adk(tipo: str) -> Runner:
             events_compaction_config=compaction_config,
             context_cache_config=cache_config,
         )
-        runners_adk[tipo] = Runner(
+        runners_adk[chave] = Runner(
             app=app_obj,
             session_service=session_service_adk,
             memory_service=memory_service_adk,
         )
-    return runners_adk[tipo]
+    return runners_adk[chave]
 
 # Alias canônico: a mesma fábrica unificada sob o nome usado pelo servidor ADK antigo.
 obter_runner = obter_runner_adk

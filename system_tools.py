@@ -15,6 +15,8 @@ from typing import List, Optional
 import preferences_manager
 import controller_engine
 import perfil_maquina
+import processos
+import rede_segura
 import gemini_bridge
 from gemini_bridge import AGY_BIN, ANTIGRAVITY_BIN, WORKSPACE_DIR
 
@@ -479,7 +481,7 @@ def open_application(app_name: str) -> dict:
             if isinstance(saved_game_pref, dict) and saved_game_pref.get("custom_args"):
                 cmd.extend(shlex.split(saved_game_pref["custom_args"]))
 
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(cmd)
             return {
                 "sucesso": True,
                 "tipo": "jogo",
@@ -514,7 +516,7 @@ def open_application(app_name: str) -> dict:
 
     try:
         if resolvido["tipo"] == "binario":
-            subprocess.Popen(resolvido["argv"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(resolvido["argv"])
         elif not _iniciar_entrada_desktop(resolvido["entrada"]):
             return {"sucesso": False, "mensagem": f"Não consegui iniciar '{resolvido['rotulo']}', senhor."}
         return {
@@ -542,7 +544,7 @@ def _iniciar_entrada_desktop(entrada: dict) -> bool:
             break
     for argv in lancadores:
         try:
-            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            proc = processos.abrir_desanexado(argv)
         except OSError:
             continue
         try:
@@ -552,7 +554,7 @@ def _iniciar_entrada_desktop(entrada: dict) -> bool:
             return True  # lançador ainda ativo: o aplicativo está abrindo
     argv = perfil_maquina.argv_do_exec(entrada["exec"])
     if argv and shutil.which(argv[0]):
-        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        processos.abrir_desanexado(argv)
         return True
     return False
 
@@ -565,7 +567,7 @@ def search_web(query: str) -> dict:
     encoded = urllib.parse.quote(query)
     search_url = f"https://www.google.com/search?q={encoded}"
     try:
-        subprocess.Popen(["xdg-open", search_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        processos.abrir_desanexado(["xdg-open", search_url])
         return {
             "sucesso": True,
             "query": query,
@@ -676,7 +678,7 @@ def open_website(url: str) -> dict:
     if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
         clean_url = "https://" + clean_url
     try:
-        subprocess.Popen(["xdg-open", clean_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        processos.abrir_desanexado(["xdg-open", clean_url])
         return {
             "sucesso": True,
             "url": clean_url,
@@ -690,31 +692,44 @@ def read_web_page(url: str, max_chars: int = 4000) -> dict:
     Lê e extrai o conteúdo textual legível de uma página ou artigo da web (notícias, documentação, artigos, etc.)
     para que você possa ler, explicar ou resumir as informações diretamente ao senhor em áudio.
     """
-    import gzip
-    import urllib.request
     from html.parser import HTMLParser
 
     clean_url = url.strip()
     if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
         clean_url = "https://" + clean_url
 
-    req = urllib.request.Request(
-        clean_url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding": "gzip, deflate",
-        }
-    )
+    cabecalhos = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip",
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = resp.read()
-            if resp.info().get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
-                raw = gzip.decompress(raw)
-            charset = resp.headers.get_content_charset() or "utf-8"
-            html_text = raw.decode(charset, errors="ignore")
+        # Só páginas públicas: loopback, rede local e metadados de nuvem são recusados,
+        # inclusive por redirecionamento, e o download tem teto de tamanho.
+        try:
+            pagina = rede_segura.ler_url_publica(clean_url, timeout=8, cabecalhos=cabecalhos)
+        except rede_segura.DestinoBloqueado as bloqueio:
+            return {
+                "sucesso": False,
+                "url": clean_url,
+                "bloqueado": True,
+                "mensagem": f"Leitura recusada, senhor: {bloqueio.motivo}. Só leio páginas públicas da internet."
+            }
+        tipo = pagina.cabecalhos.get_content_type()
+        if not (tipo.startswith("text/") or tipo.endswith(("+xml", "+json"))
+                or tipo in ("application/xml", "application/json")):
+            return {
+                "sucesso": False,
+                "url": clean_url,
+                "mensagem": f"O endereço '{clean_url}' não é uma página de texto ({tipo}), senhor."
+            }
+        charset = pagina.cabecalhos.get_content_charset() or "utf-8"
+        try:
+            html_text = pagina.corpo.decode(charset, errors="ignore")
+        except LookupError:  # charset desconhecido declarado pelo servidor
+            html_text = pagina.corpo.decode("utf-8", errors="ignore")
 
         title = ""
         text = ""
@@ -822,7 +837,7 @@ def play_music(query: str, platform: str = None) -> dict:
         spotify_bin = shutil.which("spotify")
         if spotify_bin:
             try:
-                subprocess.Popen([spotify_bin, f"--uri=spotify:search:{encoded}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado([spotify_bin, f"--uri=spotify:search:{encoded}"])
                 return {
                     "sucesso": True,
                     "plataforma": "Spotify (Desktop)",
@@ -833,7 +848,7 @@ def play_music(query: str, platform: str = None) -> dict:
                 pass
         spotify_url = f"https://open.spotify.com/search/{encoded}"
         try:
-            subprocess.Popen(["xdg-open", spotify_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(["xdg-open", spotify_url])
             return {
                 "sucesso": True,
                 "plataforma": "Spotify (Web)",
@@ -846,7 +861,7 @@ def play_music(query: str, platform: str = None) -> dict:
     elif "deezer" in target_platform:
         deezer_url = f"https://www.deezer.com/search/{encoded}"
         try:
-            subprocess.Popen(["xdg-open", deezer_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(["xdg-open", deezer_url])
             return {
                 "sucesso": True,
                 "plataforma": "Deezer",
@@ -860,7 +875,7 @@ def play_music(query: str, platform: str = None) -> dict:
         # Padrão YouTube
         music_url = f"https://www.youtube.com/results?search_query={encoded}"
         try:
-            subprocess.Popen(["xdg-open", music_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(["xdg-open", music_url])
             return {
                 "sucesso": True,
                 "plataforma": "YouTube",
@@ -969,9 +984,9 @@ def open_default_app(app_type: str, target: str = None) -> dict:
             url = target or "https://www.google.com"
             clean_bin = os.path.basename(str(app_pref).strip().lower().split()[0])
             if clean_bin in ALLOWED_DEFAULT_APPS and clean_bin != "default" and shutil.which(clean_bin):
-                subprocess.Popen([clean_bin, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado([clean_bin, url])
             else:
-                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado(["xdg-open", url])
             return {"sucesso": True, "mensagem": "Navegador padrão aberto com sucesso, senhor."}
 
         elif clean_type == "text_editor":
@@ -979,26 +994,26 @@ def open_default_app(app_type: str, target: str = None) -> dict:
             file_target = target or "."
             clean_bin = os.path.basename(str(editor).strip().lower().split()[0])
             if clean_bin in ALLOWED_DEFAULT_APPS and shutil.which(clean_bin):
-                subprocess.Popen([clean_bin, file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado([clean_bin, file_target])
             else:
-                subprocess.Popen(["xdg-open", file_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado(["xdg-open", file_target])
             return {"sucesso": True, "mensagem": f"Editor de texto ({clean_bin}) aberto para '{file_target}', senhor."}
 
         elif clean_type == "email":
             mailto = f"mailto:{target}" if target else "mailto:"
-            subprocess.Popen(["xdg-open", mailto], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            processos.abrir_desanexado(["xdg-open", mailto])
             return {"sucesso": True, "mensagem": "Cliente de e-mail padrão aberto, senhor."}
 
         elif clean_type in ["image_viewer", "video_player", "music"]:
             if target and os.path.exists(os.path.expanduser(target)):
-                subprocess.Popen(["xdg-open", os.path.expanduser(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado(["xdg-open", os.path.expanduser(target)])
                 return {"sucesso": True, "mensagem": f"Arquivo '{target}' aberto com o visualizador padrão, senhor."}
             else:
                 return {"sucesso": False, "mensagem": f"Por favor, especifique o caminho do arquivo para abrir com o {clean_type}."}
 
         else:
             if target:
-                subprocess.Popen(["xdg-open", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                processos.abrir_desanexado(["xdg-open", target])
                 return {"sucesso": True, "mensagem": f"Alvo '{target}' aberto com aplicativo padrão do sistema, senhor."}
             return {"sucesso": False, "mensagem": f"Tipo de aplicativo '{clean_type}' não reconhecido."}
     except Exception as e:
@@ -1091,7 +1106,7 @@ def antigravity_open_workspace(path: str = WORKSPACE_DIR) -> dict:
     if not os.path.exists(target_path):
         return {"sucesso": False, "mensagem": f"O diretório '{target_path}' não foi encontrado, senhor."}
     try:
-        subprocess.Popen([ANTIGRAVITY_BIN, target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processos.abrir_desanexado([ANTIGRAVITY_BIN, target_path])
         return {"sucesso": True, "mensagem": f"Projeto em '{target_path}' aberto com sucesso na IDE Antigravity, senhor."}
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir a IDE Antigravity: {str(e)}"}
@@ -1105,7 +1120,7 @@ def antigravity_open_file(file_path: str, line_number: int = 1) -> dict:
         return {"sucesso": False, "mensagem": f"Arquivo '{full_path}' não localizado, senhor."}
     try:
         cmd = [ANTIGRAVITY_BIN, "-g", f"{full_path}:{line_number or 1}"]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processos.abrir_desanexado(cmd)
         return {"sucesso": True, "mensagem": f"Arquivo '{os.path.basename(full_path)}' aberto na linha {line_number or 1} na IDE Antigravity, senhor."}
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir arquivo na IDE Antigravity: {str(e)}"}
@@ -1113,7 +1128,7 @@ def antigravity_open_file(file_path: str, line_number: int = 1) -> dict:
 def antigravity_list_mcps() -> dict:
     """Lista todos os servidores MCP configurados e ativos na IDE Antigravity."""
     try:
-        res = subprocess.run([AGY_BIN, "mcp", "list"], capture_output=True, text=True, timeout=10)
+        res = processos.executar([AGY_BIN, "mcp", "list"], capture_output=True, text=True, timeout=10)
         output = res.stdout.strip()
         return {
             "sucesso": True,
@@ -1259,7 +1274,7 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
         if continue_session:
             cmd.append("-c")
         cmd.extend(["-p", clean_p])
-        res = subprocess.run(
+        res = processos.executar(
             cmd,
             cwd=WORKSPACE_DIR,
             capture_output=True,

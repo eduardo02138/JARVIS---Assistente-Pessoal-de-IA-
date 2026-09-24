@@ -1,0 +1,11 @@
+{
+  "id": "ginjutsu_studio",
+  "name": "Ginjutsu Motion & Video AI Studio",
+  "version": "1.0.0",
+  "category": "general",
+  "icon": "🎬",
+  "author": "Higgsfield & Stark Visuals",
+  "description": "Transferência de atuação, coreografia e movimento de vídeos existentes para novos personagens e modelos visuais via Higgsfield Ginjutsu.",
+  "entry": "plugin",
+  "simulated": true
+}

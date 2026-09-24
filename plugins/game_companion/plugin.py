@@ -40,14 +40,7 @@ def _carregar_dicas() -> List[str]:
 
 class GameCompanionPlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="game_companion",
-            name="Companhia em Jogos Online",
-            version="1.2.0",
-            category="gaming",
-            icon="🎮",
-            description="Assistência tática em tempo real para jogos, timers de objetivos, localização e inicialização direta de jogos instalados em qualquer distribuidora."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.active_game = "Nenhum"
         self.timers: Dict[str, float] = {}
         self.expired_history: List[str] = []
@@ -246,13 +239,13 @@ class GameCompanionPlugin(JarvisPlugin):
                 return {"sucesso": False, "mensagem": f"Comando de inicialização não disponível para {jogo.get('nome')}."}
 
             import shlex
-            import subprocess
+            import processos
             # shell=False: o comando vem de arquivos .desktop e da biblioteca do Steam,
             # então metacaracteres de shell (;, &&, |) não podem virar execução arbitrária.
             argumentos = shlex.split(cmd)
             if not argumentos:
                 return {"sucesso": False, "mensagem": f"Comando de inicialização inválido para {jogo.get('nome')}."}
-            subprocess.Popen(argumentos)
+            processos.abrir_desanexado(argumentos)
             self.active_game = jogo.get("nome")
             return {
                 "sucesso": True,

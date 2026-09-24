@@ -15,14 +15,7 @@ logger = logging.getLogger("jarvis.plugins.deep_research")
 
 class DeepResearchPlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="deep_research",
-            name="Pesquisa Profunda & Dossiês Assíncronos",
-            version="1.0.0",
-            category="general",
-            icon="🔬",
-            description="Executa relatórios e investigações aprofundadas em segundo plano sem bloquear a conversação, emitindo alertas ao concluir."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.researches: Dict[str, Dict] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
 

@@ -12,6 +12,8 @@ import subprocess
 import logging
 from datetime import datetime
 
+import processos
+
 logger = logging.getLogger("GEMINI_BRIDGE")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -88,7 +90,7 @@ def open_gemini_bridge() -> dict:
         pass
 
     try:
-        subprocess.Popen([ANTIGRAVITY_BIN, GEMINI_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processos.abrir_desanexado([ANTIGRAVITY_BIN, GEMINI_DIR])
         log_audit_event("JARVIS", "open_workspace", {"path": GEMINI_DIR})
         return {
             "sucesso": True,

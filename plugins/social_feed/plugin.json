@@ -1,0 +1,11 @@
+{
+  "id": "social_feed",
+  "name": "Mídias Sociais & Notificações",
+  "version": "1.0.0",
+  "category": "social",
+  "icon": "💬",
+  "author": "Stark Comms",
+  "description": "Monitoramento inteligente de feeds, menções, mensagens diretas (Discord, Telegram, X/Twitter) e publicação de atualizações.",
+  "entry": "plugin",
+  "simulated": true
+}

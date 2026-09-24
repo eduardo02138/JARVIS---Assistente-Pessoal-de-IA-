@@ -11,14 +11,7 @@ logger = logging.getLogger("jarvis.plugins.google_workspace")
 
 class GoogleWorkspacePlugin(JarvisPlugin):
     def __init__(self):
-        super().__init__(PluginMeta(
-            id="google_workspace",
-            name="Google Workspace (Gmail, Docs & Keep)",
-            version="1.0.0",
-            category="general",
-            icon="📑",
-            description="Comandos de voz para redigir documentos no Docs, consultar a caixa de entrada do Gmail e capturar ideias rápidas no Keep."
-        ))
+        super().__init__(PluginMeta.do_manifesto(__file__))
         self.keep_notes: List[Dict[str, str]] = [
             {"titulo": "Arquitetura JARVIS", "conteudo": "Implementar pool de conexões e cache de telemetria.", "tags": "tecnologia, dev"}
         ]

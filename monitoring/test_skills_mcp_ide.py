@@ -183,8 +183,15 @@ def test_mcp_stdio_nao_herda_segredos_do_ambiente(monkeypatch):
     params = mgr._criar_toolset_individual("externo", cfg)._connection_params.server_params
     assert params.command == os.path.expanduser("~/bin/servidor-mcp") and params.args == [os.path.expanduser("~/dados")]
 
+    monkeypatch.setenv("VARIAVEL_DA_SESSAO", "valor-da-sessao")
     herdado = mgr._criar_toolset_individual("externo", {**cfg, "inherit_env": True})._connection_params.server_params.env
-    assert herdado["GEMINI_API_KEY"] == "segredo-gemini", "inherit_env é opt-in explícito"
+    assert herdado["VARIAVEL_DA_SESSAO"] == "valor-da-sessao", "inherit_env herda a sessão do usuário"
+    assert "GEMINI_API_KEY" not in herdado and "JARVIS_TOKEN" not in herdado, \
+        "nem com inherit_env as credenciais do JARVIS vão para um servidor de terceiros"
+    declarado = mgr._criar_toolset_individual(
+        "externo", {**cfg, "inherit_env": True, "env": {"GEMINI_API_KEY": "${GEMINI_API_KEY}"}}
+    )._connection_params.server_params.env
+    assert declarado["GEMINI_API_KEY"] == "segredo-gemini", "declarar no bloco env continua liberando a chave"
 
 
 def test_mcp_verifica_conexao_e_aplica_risco_padrao():

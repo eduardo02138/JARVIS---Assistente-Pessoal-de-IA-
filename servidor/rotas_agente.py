@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from google.genai import types
 
+from agentes.assistente import MODELO_TEXTO_RESERVA
 from agentes.roteador import CAMINHO_RAPIDO, escolher_caminho
 from live_protocolo import palavra_confirma
 from monitoring.logger import logger
 from policy_engine import policy_engine
 from provider_router import OmniRouteProvider, provider_router
-from servidor.comum import agendar_tarefa_do_servidor
+from servidor.comum import agendar_tarefa_do_servidor, trava_da_sessao
+from servidor.falhas import classificar_falha
 from servidor.runtime_adk import (
     CAMINHO_COMPUTADOR,
     girar_chave_adk,
@@ -171,8 +173,14 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
             {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
             status_code=400,
         )
+    # Turnos da mesma sessão rodam em fila: dois pedidos simultâneos não intercalam
+    # eventos na mesma conversa do ADK. Sessões diferentes seguem em paralelo.
+    async with trava_da_sessao(sessao):
+        return await _turno_de_chat(texto, sessao, payload.get("caminho"))
+
+
+async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]):
     usuario = sessao
-    caminho_forcado = payload.get("caminho")
     marcas_navegador = (
         "modo computador",
         "use o navegador",
@@ -219,7 +227,8 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         if pending:
             logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
             texto = f"O usuário confirmou expressamente a execução da ação '{pending.tool_name}'. Execute-a agora."
-            caminho_forcado = "complexo"
+            # O coordenador tem o catálogo completo para executar a ação liberada
+            caminho, motivo = "complexo", "confirmação de ação pendente"
 
     if caminho == CAMINHO_RAPIDO:
         tipo_runner = "rapido"
@@ -227,7 +236,6 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
         tipo_runner = CAMINHO_COMPUTADOR
     else:
         tipo_runner = "coordenador"
-    runner = obter_runner_adk(tipo_runner)
 
     try:
         await session_service_adk.create_session(
@@ -239,10 +247,12 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     resposta = ""
     ferramentas_executadas = []
     resposta_ok = False
-    ultimo_erro = None
+    ultima_falha = None
+    # None = modelo padrão do caminho; o reserva só entra quando o problema é do modelo
+    modelo_da_tentativa: Optional[str] = None
 
-    for tentativa in range(4):
-        runner = obter_runner_adk(tipo_runner)
+    for _tentativa in range(4):
+        runner = obter_runner_adk(tipo_runner, modelo_da_tentativa)
         try:
             async for evento in runner.run_async(
                 user_id=usuario,
@@ -259,33 +269,34 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
             resposta_ok = True
             break
         except Exception as err:
-            err_str = str(err)
-            if any(marca in err_str for marca in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE")):
-                ultimo_erro = err
-                if girar_chave_adk():
-                    continue
-                if tipo_runner == CAMINHO_COMPUTADOR:
-                    # O modelo de texto reserva não entende a config computer_use.
-                    logger.warning("Modelo de Computer Use indisponível (%s).", err)
-                    break
-                logger.warning("Modelo de texto indisponível (%s). Acionando segundo provedor.", err)
+            ultima_falha = classificar_falha(err)
+            logger.warning("Falha do provedor no chat (%s): %s", ultima_falha.motivo.value, ultima_falha.detalhe)
+            if ultima_falha.girar_chave and girar_chave_adk():
+                continue
+            # O modelo de texto reserva não entende a configuração de Computer Use
+            if ultima_falha.trocar_modelo and modelo_da_tentativa is None and tipo_runner != CAMINHO_COMPUTADOR:
+                modelo_da_tentativa = MODELO_TEXTO_RESERVA
+                logger.warning("Tentando o modelo reserva %s.", MODELO_TEXTO_RESERVA)
+                continue
+            if ultima_falha.usar_segundo_provedor:
                 break
-            logger.warning("Falha na execução do ADK run_async (%s).", err)
             return JSONResponse({
                 "status": "erro",
-                "mensagem": f"Erro na execução do agente: {err}",
+                "mensagem": f"Erro na execução do agente: {ultima_falha.mensagem()}",
+                "motivo_da_falha": ultima_falha.motivo.value,
                 "caminho": caminho
             }, status_code=500)
 
     if not resposta_ok:
         # Failover automático para o segundo provedor (OmniRoute)
-        logger.info("Google AI Studio indisponível. Acionando OmniRoute (:20128) como segundo provedor...")
+        motivo_failover = ultima_falha.motivo.value if ultima_falha else "desconhecido"
+        logger.info("Google AI Studio indisponível (%s). Acionando OmniRoute como segundo provedor...", motivo_failover)
         try:
             resp_texto = await chamar_omniroute_chat(texto)
             return {
                 "status": "ok",
                 "caminho": caminho,
-                "motivo_do_roteamento": "Failover: Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
+                "motivo_do_roteamento": f"Failover ({motivo_failover}): Google AI Studio indisponível -> OmniRoute acionado como 2º provedor",
                 "provedor": "omniroute",
                 "modelo": f"omniroute/{OmniRouteProvider.get_model()}",
                 "resposta": resp_texto,
@@ -296,7 +307,9 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
             return JSONResponse({
                 "status": "erro",
                 "caminho": caminho,
-                "mensagem": f"Google AI Studio e segundo provedor (OmniRoute) indisponíveis: {ultimo_erro}"
+                "motivo_da_falha": motivo_failover,
+                "mensagem": ("Google AI Studio e segundo provedor (OmniRoute) indisponíveis: "
+                             f"{ultima_falha.mensagem() if ultima_falha else omni_err}")
             }, status_code=503)
 
     # Ingestão assíncrona da sessão na memória de longo prazo (background task)

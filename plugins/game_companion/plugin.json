@@ -1,0 +1,11 @@
+{
+  "id": "game_companion",
+  "name": "Companhia em Jogos Online",
+  "version": "1.2.0",
+  "category": "gaming",
+  "icon": "🎮",
+  "author": "Stark Gaming Hub",
+  "description": "Assistência tática em tempo real para jogos, timers de objetivos, localização e inicialização direta de jogos instalados em qualquer distribuidora.",
+  "entry": "plugin",
+  "simulated": false
+}
