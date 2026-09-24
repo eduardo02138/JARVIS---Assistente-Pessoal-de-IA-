@@ -505,7 +505,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             content=types.Content(
                                                 parts=[types.Part(text=user_text)]
                                             ),
-                                            session_id=sessao_id,
                                         )
                                     )
                                     assistant_state["busy"] = True
@@ -719,7 +718,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         content=types.Content(
                                             parts=[types.Part(text="\n".join(model_textos_do_turno))]
                                         ),
-                                        session_id=sessao_id,
                                     )
                                 )
                                 model_textos_do_turno.clear()
@@ -918,7 +916,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         content=types.Content(
                                             parts=[types.Part(text="\n".join(model_textos_do_turno))]
                                         ),
-                                        session_id=sessao_id,
                                     )
                                 )
                                 model_textos_do_turno.clear()

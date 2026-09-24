@@ -135,6 +135,10 @@ Rotas de mutação e os dois WebSockets exigem `JARVIS_TOKEN`; clientes locais o
 
 ### Modelos e provedores
 
+O JARVIS usa o **ADK 2.x** (`google-adk>=2.9.1,<3`) e o **SDK MCP 2.x** (`mcp>=2.2,<3`). Não instale `google-adk[mcp]` nem `google-adk[all]`: esses extras fixam `mcp<2`, sem a API que o servidor MCP do JARVIS usa. O código segue as regras de migração do ADK 2.0, verificadas pelo `monitoring/test_compatibilidade_adk.py`: nenhum agente sobrescreve `_run_async_impl`/`_run_live_impl` (o 2.0 ignora em silêncio; o comportamento vai em callbacks), nenhum evento é anexado à sessão na mão, nenhum `except BaseException`/`except:` sem relançar (prenderia o cancelamento e as pausas de confirmação humana do ADK) e o `Event(...)` só recebe campos que existem (os desconhecidos somem sem erro).
+
+Ferramentas e callbacks podem gravar memórias explícitas com o `context.add_memory(...)` do ADK: elas ficam salvas no `memoria.json` e o `load_memory` as encontra. Se o seu `sessoes.db` é anterior ao ADK 2 (schema legado "v0", com pickle), o `python diagnostico.py` mostra o comando `adk migrate session` para convertê-lo.
+
 Os modelos padrão ficam no `.env`: `gemini-3.8-live` para voz, `gemini-3.8-live-extended-thinking` para raciocínio em segundo plano (`LIVE_THINKING_LEVEL`), `gemini-2.5-flash-native-audio-latest` como reserva de voz e `gemini-flash-latest` para texto.
 
 `GEMINI_API_KEYS` aceita um pool de chaves separadas por vírgula. No chat de texto, um proxy OmniRoute local opcional (`OMNIROUTE_URL`) atua como segundo provedor, acionado automaticamente quando o Google AI Studio está indisponível ou diretamente quando selecionado no HUD. A voz Live sempre roda no Google.
@@ -224,7 +228,7 @@ O runtime Google ADK faz parte do mesmo servidor: o cliente de voz ADK fica em `
 .venv/bin/python diagnostico.py
 ```
 
-O diagnóstico lista o que está funcionando e, para cada problema, como corrigir: chave ou token ausente, servidor exposto na rede e o que cada função precisa aqui (ferramentas de volume e de captura de tela, `xdg-open`, uinput para o Modo Controle, Chromium para o Computer Use, `agy` para o Modo IDE). Também confere plugins, skills, servidores MCP (conectando em cada um), OmniRoute e o banco de sessões. `--json` gera o relatório para scripts, e o código de saída é 1 quando há erro. Com o servidor rodando, `GET /api/diagnostico` devolve o mesmo relatório.
+O diagnóstico lista o que está funcionando e, para cada problema, como corrigir: chave ou token ausente, servidor exposto na rede e o que cada função precisa aqui (ferramentas de volume e de captura de tela, `xdg-open`, uinput para o Modo Controle, Chromium para o Computer Use, `agy` para o Modo IDE). Também confere as versões das dependências (majors do ADK, do google-genai e do MCP), plugins, skills, servidores MCP (conectando em cada um), OmniRoute e o banco de sessões, inclusive o schema legado do ADK. `--json` gera o relatório para scripts, e o código de saída é 1 quando há erro. Com o servidor rodando, `GET /api/diagnostico` devolve o mesmo relatório.
 
 ### Widget desktop
 
@@ -361,7 +365,7 @@ PYTHONPATH=. .venv/bin/pytest monitoring/ -v            # todas as suítes pytes
 .venv/bin/python monitoring/test_adk.py          # cenários Google ADK
 ```
 
-As suítes pytest cobrem, entre outros: identificação da máquina com hardware simulado (`test_perfil_maquina.py`), skills/MCP/Modo IDE com objetos reais do ADK e servidores MCP de verdade (`test_skills_mcp_ide.py`), segredos nos processos filhos, proteção contra SSRF e limite de resultados (`test_seguranca_execucao.py`), tratamento de falhas do provedor e fila por sessão no chat (`test_resiliencia.py`), manifestos de plugins (`test_plugins_manifesto.py`) e o diagnóstico (`test_diagnostico.py`).
+As suítes pytest cobrem, entre outros: identificação da máquina com hardware simulado (`test_perfil_maquina.py`), skills/MCP/Modo IDE com objetos reais do ADK e servidores MCP de verdade (`test_skills_mcp_ide.py`), segredos nos processos filhos, proteção contra SSRF e limite de resultados (`test_seguranca_execucao.py`), tratamento de falhas do provedor e fila por sessão no chat (`test_resiliencia.py`), manifestos de plugins (`test_plugins_manifesto.py`), o diagnóstico (`test_diagnostico.py`) e a compatibilidade com o ADK 2.x (`test_compatibilidade_adk.py`).
 
 Não é preciso chave real: as suítes rodam offline com credenciais fictícias. O GitHub Actions também faz checagem de sintaxe, smoke test de imports e Gitleaks em todo push e pull request para `main`.
 

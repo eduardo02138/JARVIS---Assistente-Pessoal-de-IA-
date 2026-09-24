@@ -201,6 +201,15 @@ This is how text chat (`/api/chat`) reacts; the fallback model runs in its own r
 
 The native ADK layer provides routing between low-latency and coordinated agent paths, durable session support and modular skills. Active skills can be injected through `SkillToolset`, keeping the agent context smaller than loading every capability eagerly.
 
+JARVIS targets **ADK 2.x** (`google-adk>=2.9.1,<3`) and the **MCP SDK 2.x** (`mcp>=2.2,<3`). Don't install `google-adk[mcp]` or `google-adk[all]`: those extras pin `mcp<2`, which lacks the API the JARVIS MCP server uses. The code follows the ADK 2.0 migration rules, and `monitoring/test_compatibilidade_adk.py` enforces them:
+
+- no agent overrides `_run_async_impl`/`_run_live_impl` (ADK 2.0 silently ignores them); behavior goes in callbacks;
+- no event is appended to a session by hand; the framework emits and persists events;
+- no `except BaseException`/bare `except` without re-raising (it would trap cancellation and ADK's human-in-the-loop pauses);
+- `Event(...)` only receives fields the model has (unknown fields are silently dropped).
+
+Tools and callbacks can write explicit memories with ADK's `context.add_memory(...)`: they are stored, persisted in `memoria.json` and found by `load_memory`. If your `sessoes.db` predates ADK 2 (legacy pickle "v0" schema), `python diagnostico.py` prints the `adk migrate session` command to convert it.
+
 ### Tool calling and Linux automation
 
 System tools expose hardware telemetry, application control, screenshots, media actions and local automation. Plugins extend the catalog with workspace, research, game companion, smart-home, streaming and other specialized capabilities.
@@ -343,7 +352,7 @@ The Google ADK runtime is part of the same server: the ADK voice client is at `h
 .venv/bin/python diagnostico.py
 ```
 
-The diagnostics list what is working and, for each problem, how to fix it: missing keys or token, a server exposed to the network, and what each feature needs here (volume and screenshot tools, `xdg-open`, uinput for Control Mode, Chromium for Computer Use, `agy` for IDE mode). They also check plugins, skills, MCP servers (connecting to each one), OmniRoute and the session database. `--json` prints a machine-readable report; the exit code is 1 when there is an error. With the server running, `GET /api/diagnostico` returns the same report.
+The diagnostics list what is working and, for each problem, how to fix it: missing keys or token, a server exposed to the network, and what each feature needs here (volume and screenshot tools, `xdg-open`, uinput for Control Mode, Chromium for Computer Use, `agy` for IDE mode). They also check dependency versions (ADK, google-genai and MCP majors), plugins, skills, MCP servers (connecting to each one), OmniRoute and the session database, including the legacy ADK schema. `--json` prints a machine-readable report; the exit code is 1 when there is an error. With the server running, `GET /api/diagnostico` returns the same report.
 
 ### Optional: desktop widget
 
@@ -410,7 +419,7 @@ PYTHONPATH=. .venv/bin/pytest monitoring/ -v            # every pytest suite
 .venv/bin/python monitoring/test_adk.py          # Google ADK scenarios
 ```
 
-The pytest suites cover, among others: machine detection with fake hardware (`test_perfil_maquina.py`), skills/MCP/IDE mode with real ADK objects and MCP servers (`test_skills_mcp_ide.py`), child-process secrets, the SSRF guard and tool-result limits (`test_seguranca_execucao.py`), provider failure handling and per-session chat queues (`test_resiliencia.py`), plugin manifests (`test_plugins_manifesto.py`) and the diagnostics (`test_diagnostico.py`).
+The pytest suites cover, among others: machine detection with fake hardware (`test_perfil_maquina.py`), skills/MCP/IDE mode with real ADK objects and MCP servers (`test_skills_mcp_ide.py`), child-process secrets, the SSRF guard and tool-result limits (`test_seguranca_execucao.py`), provider failure handling and per-session chat queues (`test_resiliencia.py`), plugin manifests (`test_plugins_manifesto.py`), the diagnostics (`test_diagnostico.py`) and ADK 2.x compatibility (`test_compatibilidade_adk.py`).
 
 No real API key is needed: the suites run offline with dummy credentials. GitHub Actions also runs a syntax check, an import smoke test and Gitleaks on every push and pull request to `main`.
 

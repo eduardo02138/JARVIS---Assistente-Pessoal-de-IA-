@@ -12,13 +12,16 @@ Com o servidor rodando, GET /api/diagnostico (com o token) devolve o mesmo relat
 já com o estado real das conexões MCP.
 """
 
+import contextlib
 import glob
 import json
 import os
+import re
 import shutil
+import sqlite3
 import sys
 from dataclasses import asdict, dataclass
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from servidor import ENV_PATH, host_local_do_servidor  # carrega o .env antes dos demais módulos
 
@@ -32,6 +35,44 @@ class Achado:
     titulo: str
     detalhe: str = ""
     correcao: str = ""
+
+
+# ----------------- Dependências -----------------
+
+# Faixas testadas. Uma major nova muda a API (veja as notas de migração 1.x -> 2.0 do ADK):
+# (versão mínima, major que já não é suportada, como corrigir)
+DEPENDENCIAS_SUPORTADAS = {
+    "google-adk": ((2, 9), 3, "pip install 'google-adk[db]>=2.9.1,<3'"),
+    "google-genai": ((2, 19), 3, "pip install -r requirements.txt"),
+    "mcp": ((2, 2), 3, "pip install 'mcp>=2.2,<3' (google-adk[mcp] e [all] instalam mcp<2, sem a API que o servidor MCP usa)"),
+}
+
+
+def _versao(texto: str) -> tuple:
+    numeros = re.match(r"(\d+)(?:\.(\d+))?", texto or "")
+    return (int(numeros.group(1)), int(numeros.group(2) or 0)) if numeros else (0, 0)
+
+
+def _dependencias() -> List[Achado]:
+    import importlib.metadata as metadados
+
+    achados, instaladas = [], []
+    for pacote, (minima, major_limite, correcao) in DEPENDENCIAS_SUPORTADAS.items():
+        try:
+            versao = metadados.version(pacote)
+        except metadados.PackageNotFoundError:
+            achados.append(Achado(f"dependencias.{pacote}", ERRO, f"{pacote} não está instalado", "",
+                                  "pip install -r requirements.txt"))
+            continue
+        numeros = _versao(versao)
+        if numeros < minima or numeros[0] >= major_limite:
+            achados.append(Achado(f"dependencias.{pacote}", ERRO, f"{pacote} {versao} fora da faixa suportada",
+                                  f"O JARVIS usa {pacote} >= {minima[0]}.{minima[1]} e < {major_limite}.", correcao))
+        else:
+            instaladas.append(f"{pacote} {versao}")
+    if instaladas and not achados:
+        achados.append(Achado("dependencias.versoes", OK, "Dependências nas versões suportadas", ", ".join(instaladas)))
+    return achados
 
 
 # ----------------- Configuração e segurança -----------------
@@ -290,6 +331,15 @@ def _armazenamento() -> List[Achado]:
         else:
             achados.append(Achado("armazenamento.sessoes", ERRO, "Sem permissão para gravar o banco de sessões",
                                   pasta, "Ajuste SESSION_DB_URL ou as permissões da pasta."))
+        if os.path.isfile(caminho) and versao_do_schema_de_sessoes(caminho) == "0":
+            novo = os.path.splitext(caminho)[0] + "_v1.db"
+            achados.append(Achado(
+                "armazenamento.schema_sessoes", AVISO, "Banco de sessões no formato antigo do ADK (v0)",
+                "O ADK 2.x ainda lê o schema v0, que serializa eventos com pickle, mas vai deixar de suportá-lo.",
+                f"Com o servidor parado: adk migrate session --source_db_url sqlite:///{caminho} "
+                f"--dest_db_url sqlite:///{novo} e depois troque o arquivo antigo pelo novo "
+                "(use --allow-unsafe-unpickling só se o banco for seu e a migração pedir).",
+            ))
     else:
         achados.append(Achado("armazenamento.sessoes", OK, "Sessões em banco externo", url.split("://", 1)[0]))
     if os.access(gemini_bridge.GEMINI_DIR, os.W_OK):
@@ -300,8 +350,24 @@ def _armazenamento() -> List[Achado]:
     return achados
 
 
+def versao_do_schema_de_sessoes(caminho: str) -> Optional[str]:
+    """Schema de um banco de sessões SQLite do ADK: "1" (JSON), "0" (pickle legado) ou None (vazio)."""
+    with contextlib.closing(sqlite3.connect(f"file:{os.path.abspath(caminho)}?mode=ro", uri=True)) as conexao:
+        tabelas = {linha[0] for linha in conexao.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "adk_internal_metadata" in tabelas:
+            linha = conexao.execute(
+                "SELECT value FROM adk_internal_metadata WHERE \"key\" = 'schema_version'").fetchone()
+            return str(linha[0]) if linha else None
+        if "events" in tabelas:
+            colunas = {coluna[1] for coluna in conexao.execute("PRAGMA table_info(events)")}
+            if "actions" in colunas and "event_data" not in colunas:
+                return "0"
+    return None
+
+
 VERIFICACOES: List[Callable[[], List[Achado]]] = [
-    _configuracao, _seguranca, _funcoes_da_maquina, _plugins, _skills, _mcp, _omniroute, _armazenamento,
+    _dependencias, _configuracao, _seguranca, _funcoes_da_maquina, _plugins, _skills, _mcp, _omniroute,
+    _armazenamento,
 ]
 
 

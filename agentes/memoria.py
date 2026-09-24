@@ -5,14 +5,16 @@ Permite ingestão contínua de sessões e busca semântica/palavras-chave entre 
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import os
 import threading
-from typing import Optional
+from typing import Optional, Sequence
 
 from google.adk.events import Event
 from google.adk.memory import InMemoryMemoryService
+from google.adk.memory.memory_entry import MemoryEntry
 from google.genai.types import Content, Part
 
 logger = logging.getLogger("jarvis.memoria")
@@ -22,6 +24,8 @@ CAMINHO_PADRAO_MEMORIA = os.environ.get(
     "JARVIS_MEMORY_FILE", os.path.join(RAIZ, "memoria.json")
 )
 MAX_EVENTOS_POR_SESSAO = int(os.environ.get("JARVIS_MEMORY_MAX_EVENTS_PER_SESSION", "100"))
+# Memórias explícitas (Context.add_memory do ADK 2.x) ficam num grupo próprio de cada usuário
+SESSAO_DE_MEMORIAS_EXPLICITAS = "memorias_explicitas"
 
 
 class JarvisMemoryService(InMemoryMemoryService):
@@ -61,10 +65,11 @@ class JarvisMemoryService(InMemoryMemoryService):
                         for item in lista_eventos:
                             partes = [Part(text=p) for p in item.get("textos", [])]
                             content = Content(parts=partes) if partes else None
+                            # O id salvo mantém a deduplicação do ADK entre reinícios
                             ev = Event(
                                 author=item.get("author", "user"),
                                 content=content,
-                                session_id=sess_id,
+                                **({"id": item["id"]} if item.get("id") else {}),
                             )
                             if "timestamp" in item:
                                 ev.timestamp = item["timestamp"]
@@ -103,6 +108,7 @@ class JarvisMemoryService(InMemoryMemoryService):
                                 if textos:
                                     serializados.append(
                                         {
+                                            "id": ev.id,
                                             "author": ev.author,
                                             "textos": textos,
                                             "timestamp": getattr(ev, "timestamp", 0.0),
@@ -157,14 +163,40 @@ class JarvisMemoryService(InMemoryMemoryService):
         *,
         app_name: str,
         user_id: str,
-        memories: list,
+        memories: Sequence[MemoryEntry],
         custom_metadata: Optional[dict] = None,
     ) -> None:
-        """Adiciona memórias avulsas e persiste em disco de forma assíncrona."""
-        await super().add_memory(
+        """Grava memórias explícitas (Context.add_memory do ADK 2.x) e persiste em disco.
+
+        O InMemoryMemoryService do ADK não implementa add_memory: chamar a classe base
+        levantava NotImplementedError. Cada MemoryEntry vira um evento no grupo de
+        memórias explícitas do usuário, encontrado pelo load_memory e salvo no JSON;
+        uma entrada com id repetido não é gravada duas vezes.
+        """
+        eventos = [evento for evento in map(_evento_da_memoria, memories) if evento is not None]
+        if not eventos:
+            return
+        await self.add_events_to_memory(
             app_name=app_name,
             user_id=user_id,
-            memories=memories,
+            events=eventos,
+            session_id=SESSAO_DE_MEMORIAS_EXPLICITAS,
             custom_metadata=custom_metadata,
         )
-        await self._salvar_no_disco_async()
+
+
+def _evento_da_memoria(entrada: MemoryEntry) -> Optional[Event]:
+    """Converte uma MemoryEntry do ADK no evento que a memória do JARVIS guarda e busca."""
+    if not entrada.content or not entrada.content.parts:
+        return None
+    evento = Event(
+        author=entrada.author or "memoria",
+        content=entrada.content,
+        **({"id": entrada.id} if entrada.id else {}),
+    )
+    if entrada.timestamp:
+        try:
+            evento.timestamp = datetime.datetime.fromisoformat(entrada.timestamp).timestamp()
+        except ValueError:
+            pass
+    return evento

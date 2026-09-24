@@ -58,6 +58,7 @@ Avoid:
 - hidden global state that can leak between sessions;
 - credentials or machine-specific absolute paths;
 - `subprocess.Popen` for apps, the browser or CLIs: use `processos.abrir_desanexado`/`processos.executar`, which drop JARVIS's secrets;
+- ADK 2.0 pitfalls (enforced by `monitoring/test_compatibilidade_adk.py`): overriding `_run_async_impl`/`_run_live_impl` (ignored in 2.0, use callbacks), appending events to a session by hand, catching `BaseException` or using a bare `except` without re-raising, and passing `Event(...)` fields that don't exist;
 - fetching URLs chosen by the model without `rede_segura.ler_url_publica`.
 
 ## Adding a plugin or ADK Skill

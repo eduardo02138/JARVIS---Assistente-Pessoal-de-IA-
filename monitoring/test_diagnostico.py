@@ -85,3 +85,48 @@ def test_endpoint_exige_token_e_devolve_o_relatorio():
     resposta = cliente.get("/api/diagnostico", headers={"X-Jarvis-Token": server.JARVIS_SECRET_TOKEN})
     assert resposta.status_code == 200
     assert {"resumo", "achados"} <= set(resposta.json())
+
+
+def test_dependencia_fora_da_faixa_vira_erro_com_a_correcao(monkeypatch):
+    import importlib.metadata as metadados
+    reais = metadados.version
+    falsas = {"google-adk": "3.0.0", "mcp": "1.24.0"}
+    monkeypatch.setattr(metadados, "version", lambda pacote: falsas.get(pacote) or reais(pacote))
+    achados = {a.id: a for a in diagnostico._dependencias()}
+    assert achados["dependencias.google-adk"].nivel == diagnostico.ERRO, "ADK 3.x pode trazer mudanças incompatíveis"
+    assert achados["dependencias.mcp"].nivel == diagnostico.ERRO
+    assert "google-adk[mcp]" in achados["dependencias.mcp"].correcao
+    assert "dependencias.google-genai" not in achados, "a que está na faixa não gera erro"
+
+
+def test_banco_de_sessoes_legado_v0_recebe_o_comando_de_migracao(tmp_path, monkeypatch):
+    import sqlalchemy
+    from google.adk.sessions.schemas.v0 import Base as BaseV0
+
+    legado = tmp_path / "sessoes.db"
+    motor = sqlalchemy.create_engine(f"sqlite:///{legado}")
+    BaseV0.metadata.create_all(motor)
+    motor.dispose()
+    monkeypatch.setenv("SESSION_DB_URL", f"sqlite+aiosqlite:///{legado}")
+
+    assert diagnostico.versao_do_schema_de_sessoes(str(legado)) == "0"
+    achado = next(a for a in diagnostico._armazenamento() if a.id == "armazenamento.schema_sessoes")
+    assert achado.nivel == diagnostico.AVISO
+    assert f"adk migrate session --source_db_url sqlite:///{legado}" in achado.correcao
+
+
+def test_banco_de_sessoes_atual_do_adk_nao_gera_aviso(tmp_path, monkeypatch):
+    import asyncio
+    from google.adk.sessions import DatabaseSessionService
+
+    atual = tmp_path / "sessoes.db"
+
+    async def criar():
+        servico = DatabaseSessionService(db_url=f"sqlite+aiosqlite:///{atual}")
+        await servico.create_session(app_name="assistente", user_id="u")
+        await servico.db_engine.dispose()
+
+    asyncio.run(criar())
+    monkeypatch.setenv("SESSION_DB_URL", f"sqlite+aiosqlite:///{atual}")
+    assert diagnostico.versao_do_schema_de_sessoes(str(atual)) == "1"
+    assert all(a.id != "armazenamento.schema_sessoes" for a in diagnostico._armazenamento())
