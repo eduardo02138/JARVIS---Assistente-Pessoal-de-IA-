@@ -3,12 +3,10 @@ controller_engine.py - Módulo de Controle Físico de Mouse, Teclado e Janelas d
 Utiliza evdev (uinput) no nível de kernel com suporte universal a Wayland (GNOME / CachyOS).
 """
 
-import os
 import time
 import subprocess
 import re
 import psutil
-import glob
 import logging
 logger = logging.getLogger("JARVIS_CONTROLLER")
 
@@ -29,12 +27,6 @@ except ImportError:
     e = _EcodesIndisponivel()
     logger.warning("evdev não encontrado: o controle físico de mouse e teclado está desativado.")
 
-
-def _erro_sem_evdev() -> dict:
-    return {
-        "sucesso": False,
-        "erro": "Controle físico indisponível: o módulo evdev não está instalado neste ambiente."
-    }
 
 # Capacidades do dispositivo virtual completo (Mouse + Teclado)
 CAPABILITIES = {

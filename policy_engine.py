@@ -167,16 +167,6 @@ HOTKEYS_PERIGOSAS = {
     ("ctrl", "q"),
 }
 
-COMMANDS_BLOQUEADOS = (
-    "rm -rf /",
-    "mkfs",
-    ":(){ :|:& };:",
-    "dd if=",
-    "> /dev/sda",
-    "chmod -R 777 /",
-    "chown -R",
-)
-
 # Padrões de texto que indicam comandos destrutivos digitados em terminal
 PADROES_TEXTO_PERIGOSO = re.compile(
     r"\b(sudo|rm\s+-[rf]|mkfs|dd\s+if=|shutdown|reboot|poweroff|chmod\s+777|"

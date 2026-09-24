@@ -5,9 +5,7 @@ entre o usuário, J.A.R.V.I.S. e a IDE Antigravity.
 """
 
 import os
-import sys
 import json
-import time
 import asyncio
 import subprocess
 import logging
@@ -84,7 +82,7 @@ def open_gemini_bridge() -> dict:
         return {
             "sucesso": True,
             "caminho": GEMINI_DIR,
-            "mensagem": f"Pasta de auditoria 'gemini' aberta com sucesso na IDE Antigravity, senhor."
+            "mensagem": "Pasta de auditoria 'gemini' aberta com sucesso na IDE Antigravity, senhor."
         }
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir a pasta gemini na IDE Antigravity: {str(e)}"}
@@ -179,7 +177,7 @@ async def gemini_file_watcher_task():
                         if token:
                             headers["Authorization"] = f"Bearer {token}"
                         req = urllib.request.Request(url, data=data, headers=headers)
-                        with urllib.request.urlopen(req, timeout=3) as resp:
+                        with urllib.request.urlopen(req, timeout=3):
                             pass
                     except Exception:
                         pass

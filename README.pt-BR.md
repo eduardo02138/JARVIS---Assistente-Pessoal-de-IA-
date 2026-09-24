@@ -34,7 +34,7 @@ O projeto é especialmente relevante para quem pesquisa ou desenvolve **voice ag
 - 🔐 Policy Engine com classificação de risco, confirmação e leases temporárias.
 - 🖥️ HUD web holográfico e widget desktop flutuante em PySide6.
 - 🧩 Arquitetura de plugins e Skills ADK.
-- 🔌 Servidor MCP para IDEs e agentes externos.
+- 🔌 MCP nos dois sentidos: servidor para IDEs/agentes externos e cliente para servidores MCP externos.
 - 🐧 Projeto Linux-first com suporte a Wayland/X11.
 
 ---
@@ -71,26 +71,59 @@ Usuário / Voz
               │
         Policy Engine
               │
-      ┌───────┼──────────┐
-      │       │          │
- System Tools Plugins   MCP
+      ┌───────┼──────────────┐
+      │       │              │
+ System Tools Plugins/Skills MCP (servidor + cliente)
 ```
+
+Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini Live, o runtime Google ADK (texto e voz), os clientes web e o painel de depuração. Não existe mais um servidor ADK separado.
 
 ### Principais componentes
 
 | Componente | Função |
 | --- | --- |
-| `server.py` | Runtime FastAPI principal e bridge Gemini Live |
-| `servidor_adk.py` | Runtime nativo Google ADK para texto/voz |
-| `agentes/` | Agentes, roteamento e integração de ferramentas ADK |
+| `server.py` | Runtime FastAPI unificado: Gemini Live nativo (`/ws/live`), voz ADK (`/ws/live_adk`), chat ADK (`/api/chat`), confirmações e plugins |
+| `live_protocolo.py` | Protocolo Live compartilhado: parser único de confirmação/recusa, ajuste de ping e encerramento limpo |
+| `provider_router.py` | Pool de chaves Google AI Studio (primário) e failover OmniRoute (secundário, só texto) |
+| `transcricao.py` | Configuração de transcrição Live e transcritor dedicado opcional |
+| `agentes/` | Agentes ADK (rápido, coordenador, voz), roteador, adaptadores de ferramentas e memória persistente |
 | `agentes/computer_use/` | Controle de navegador via Playwright / Computer Use |
-| `policy_engine.py` | Governança, risco, confirmações e autoridade temporária |
-| `system_tools.py` | Ferramentas do Linux, hardware e automação local |
-| `plugin_manager.py` | Descoberta e carregamento de plugins |
-| `plugin_sdk.py` | Contratos para criação de plugins |
-| `adk_skill_loader.py` | Carregamento de Skills ADK |
+| `policy_engine.py` | Governança, risco, confirmações e leases de controle/IDE/computador |
+| `system_tools.py` | Ferramentas do Linux, hardware e automação local + declarações de função do Gemini |
+| `controller_engine.py` | Mouse/teclado virtual via `evdev`/`uinput` (degrada sem quebrar se indisponível) |
+| `preferences_manager.py` | Preferências persistentes (apps padrão, plataforma de música, launchers) |
+| `plugin_manager.py` / `plugin_sdk.py` | Descoberta, ciclo de vida e contratos de plugins |
+| `plugins/` | Código de runtime dos plugins (`plugins/<id>/plugin.py`) |
+| `skills/` | Skills ADK (`skills/<nome-da-skill>/SKILL.md` + `assets/`), fonte única das instruções |
+| `adk_skill_loader.py` | Carregamento de Skills ADK e SkillToolset |
 | `jarvis_mcp_server.py` | Servidor MCP para agentes e IDEs externas |
-| `monitoring/` | Trust Gates, regressões e auditoria |
+| `mcp_client_manager.py` | Cliente MCP: conecta servidores MCP externos aos agentes ADK com políticas de risco |
+| `gemini_bridge.py` / `gemini/` | Ponte por arquivos e log de auditoria com a IDE Antigravity |
+| `static/` | HUD web holográfico (em `/`) |
+| `static_adk/` | Cliente de voz ADK (em `/static_adk/`) |
+| `gemini-live-widget/` | Frontend do widget desktop (em `/widget/`, embrulhado pelo `app.py`) |
+| `monitoring/` | Logger estruturado, painel de depuração (`/debug`), Trust Gates e regressões |
+
+### Endpoints principais
+
+| Endpoint | Função |
+| --- | --- |
+| `GET /` | HUD web |
+| `GET /widget/` | Interface do widget desktop |
+| `GET /static_adk/` | Cliente de voz ADK |
+| `GET /debug` | Painel de depuração em tempo real |
+| `WS /ws/live` | Sessão Gemini Live nativa (Extended Thinking completo + ferramentas NON_BLOCKING) |
+| `WS /ws/live_adk` | Sessão Live do Google ADK (agentes, memória, skills, toolsets MCP) |
+| `POST /api/chat` | Turno de texto roteado entre agente rápido, coordenador e Computer Use |
+| `GET /api/health` | Modelos, pool de chaves, provedor ativo e status MCP |
+
+Rotas de mutação e os dois WebSockets exigem `JARVIS_TOKEN`; clientes locais obtêm o token em `GET /api/auth/session` (somente loopback).
+
+### Modelos e provedores
+
+Os modelos padrão ficam no `.env`: `gemini-3.8-live` para voz, `gemini-3.8-live-extended-thinking` para raciocínio em segundo plano (`LIVE_THINKING_LEVEL`), `gemini-2.5-flash-native-audio-latest` como reserva de voz e `gemini-flash-latest` para texto.
+
+`GEMINI_API_KEYS` aceita um pool de chaves separadas por vírgula: a sessão Live rotaciona para a próxima chave em caso de cota ou erro transitório. No chat de texto, um proxy OmniRoute local opcional (`OMNIROUTE_URL`) atua como segundo provedor, acionado automaticamente quando o Google AI Studio está indisponível ou diretamente quando selecionado no HUD. A voz Live sempre roda no Google.
 
 ---
 
@@ -130,12 +163,13 @@ Configure pelo menos:
 
 ```env
 GEMINI_API_KEY="sua_chave_gemini"
+# Pool opcional para rotação automática: GEMINI_API_KEYS="chave1,chave2"
 JARVIS_TOKEN="um_segredo_local_longo_e_aleatorio"
-HOST="127.0.0.1"
+JARVIS_HOST="127.0.0.1"
 PORT=8000
 ```
 
-Nunca publique `.env` ou chaves reais de API.
+O `.env.example` documenta todas as demais opções (modelos, voz, idioma, leases, transcrição, OmniRoute, MCP, memória). Nunca publique `.env` ou chaves reais de API.
 
 ### 4. Execute
 
@@ -152,8 +186,11 @@ ou:
 Abra:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8000          # HUD web
+http://127.0.0.1:8000/debug    # painel de depuração
 ```
+
+O runtime Google ADK faz parte do mesmo servidor: o cliente de voz ADK fica em `http://127.0.0.1:8000/static_adk/` e os turnos de texto ADK passam por `POST /api/chat`.
 
 ### Widget desktop
 
@@ -161,11 +198,7 @@ http://127.0.0.1:8000
 ./run_app.sh
 ```
 
-### Servidor Google ADK
-
-```bash
-.venv/bin/python servidor_adk.py
-```
+O `app.py` exibe o `/widget/` numa janela PySide6 sem bordas e inicia o backend se ele não estiver rodando.
 
 ### Computer Use
 
@@ -195,31 +228,40 @@ Veja também [`SECURITY.md`](SECURITY.md).
 
 ## Plugins e Skills ADK
 
-O catálogo é modular e inclui áreas como:
+O código de cada plugin fica em `plugins/<id>/plugin.py`; a Skill ADK correspondente (`SKILL.md` e `assets/` opcionais) fica em `skills/<nome-da-skill>/`. Assim o modelo recebe instruções focadas só das skills ativas.
 
-- Google Workspace;
-- pesquisa profunda;
-- ferramentas financeiras demonstrativas;
-- IA para vídeo/movimento;
-- game companion;
-- casa inteligente;
-- live streaming;
-- integrações sociais;
-- sistema e hardware Linux.
+| Plugin | Skill | Situação |
+| --- | --- | --- |
+| `game_companion` | `game-companion` | Real (jogos locais, launchers, timers táticos) — ativo por padrão |
+| `google_workspace` | `google-workspace` | Simulado (dados de demonstração) |
+| `deep_research` | `deep-research` | Simulado (dados de demonstração) |
+| `google_finance` | `google-finance` | Simulado (carteira e cotações de demonstração) |
+| `ginjutsu_studio` | `ginjutsu-studio` | Simulado (demo de IA de vídeo/movimento) |
+| `smart_home` | `smart-home` | Simulado (dispositivos de demonstração) |
+| `live_stream` | `live-stream` | Simulado (chat/alertas de demonstração) |
+| `social_feed` | `social-feed` | Simulado (notificações de demonstração) |
 
-Cada plugin pode expor uma Skill ADK focada, evitando colocar todas as instruções de todas as ferramentas no mesmo contexto do modelo.
+Os plugins simulados ficam **desligados por padrão** para o assistente nunca relatar dados inventados como reais. Use `JARVIS_ATIVAR_MOCKS=1` para ativá-los em demonstrações. As ferramentas de sistema e hardware Linux são nativas (`system_tools.py`) e sempre disponíveis.
+
+### Cliente MCP
+
+Copie `mcp_servers.example.json` para `mcp_servers.json` (ou aponte `MCP_SERVERS_CONFIG` para um arquivo) para conectar servidores MCP externos (stdio, SSE ou HTTP) aos agentes ADK. Cada servidor declara `tool_filter` e níveis de risco por ferramenta, então as ferramentas externas também passam pelo Policy Engine.
 
 ---
 
 ## Testes
 
+As mesmas suítes executadas pelo CI:
+
 ```bash
-PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_reproduction_p0.py -v
-.venv/bin/python monitoring/test_suite.py --p0
-.venv/bin/python monitoring/test_adk.py
+export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
+PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py -v
+.venv/bin/python monitoring/test_suite.py --p0   # gates de segurança e arquitetura (P0)
+.venv/bin/python monitoring/test_adk.py          # cenários Google ADK
 ```
 
-O projeto também possui pipeline de CI pelo GitHub Actions.
+Não é preciso chave real: as suítes rodam offline com credenciais fictícias. O GitHub Actions também faz checagem de sintaxe, smoke test de imports e Gitleaks em todo push e pull request para `main`.
 
 ---
 
@@ -227,20 +269,33 @@ O projeto também possui pipeline de CI pelo GitHub Actions.
 
 ```text
 .
-├── agentes/                 # Agentes ADK e Computer Use
+├── agentes/                 # Agentes ADK, roteador, adaptadores, memória e Computer Use
 ├── assets/                  # Screenshots e mídia do projeto
+├── gemini/                  # Ponte por arquivos com a IDE Antigravity
 ├── gemini-live-widget/      # Widget desktop
-├── monitoring/              # Testes, Trust Gates e auditoria
-├── plugins/                 # Plugins e Skills
+├── monitoring/              # Logger, painel de depuração, Trust Gates e regressões
+├── plugins/                 # Código dos plugins (plugins/<id>/plugin.py)
+├── skills/                  # Skills ADK (skills/<nome>/SKILL.md + assets/)
 ├── static/                  # HUD web principal
-├── static_adk/              # Cliente web ADK
-├── app.py                   # Aplicativo PySide6
-├── server.py                # Runtime principal
-├── servidor_adk.py          # Runtime ADK
+├── static_adk/              # Cliente de voz ADK
+├── app.py                   # Aplicativo PySide6 (embrulha o widget)
+├── server.py                # Runtime unificado (Gemini Live + ADK + API)
+├── live_protocolo.py        # Protocolo Live compartilhado
+├── provider_router.py       # Pool de chaves + failover OmniRoute
+├── transcricao.py           # Configuração de transcrição Live
 ├── policy_engine.py         # Governança de ferramentas
-├── system_tools.py          # Ferramentas do sistema
+├── system_tools.py          # Ferramentas do sistema + declarações de função
+├── controller_engine.py     # Mouse/teclado virtual (evdev/uinput)
+├── preferences_manager.py   # Preferências persistentes
+├── plugin_manager.py        # Descoberta e ciclo de vida de plugins
+├── plugin_sdk.py            # Contratos de plugins
 ├── adk_skill_loader.py      # Loader de Skills ADK
-└── jarvis_mcp_server.py     # Servidor MCP
+├── gemini_bridge.py         # Ponte Antigravity e log de auditoria
+├── jarvis_mcp_server.py     # Servidor MCP
+├── mcp_client_manager.py    # Cliente MCP (servidores externos → agentes ADK)
+├── mcp_servers.example.json # Modelo de configuração do cliente MCP
+├── run_jarvis.sh            # Inicia o servidor
+└── run_app.sh               # Inicia o widget desktop
 ```
 
 ---

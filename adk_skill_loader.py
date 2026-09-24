@@ -19,6 +19,7 @@ equivalente que preserva o modelo Skill do ADK.
 import os
 import glob
 import logging
+import re
 
 from typing import Optional
 
@@ -39,13 +40,8 @@ except Exception:  # PyYAML ausente
     yaml = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PLUGINS_DIR = os.path.join(BASE_DIR, "plugins")
 SKILLS_DIR = os.path.join(BASE_DIR, "skills")
 
-# subdiretórios da camada L3
-L3_DIRS = ("references", "assets", "scripts")
-
-import re
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -247,22 +243,12 @@ class ADKSkillLoader:
 
     def bloco_de_instrucoes(self, apenas_ativas: bool = True) -> str:
         """Instrução agregada das skills (L2), usada para injetar contexto no prompt."""
-        alvo = set(self._skills)
-        if apenas_ativas:
-            alvo &= set(self.ids_ativos())
-        # Evita duplicações causadas por aliases
-        skills_unicas = {}
-        for k in sorted(alvo):
-            sk = self._skills[k]
-            skills_unicas[sk.frontmatter.name] = sk
-
-        blocos = []
-        for name in sorted(skills_unicas):
-            skill = skills_unicas[name]
-            blocos.append(
-                f"--- SKILL {name} ---\n"
-                f"{skill.instructions.strip()}"
-            )
+        # skills_unicas já descarta as duplicações causadas por aliases
+        skills = sorted(self.skills_unicas(apenas_ativas), key=lambda s: s.frontmatter.name)
+        blocos = [
+            f"--- SKILL {skill.frontmatter.name} ---\n{skill.instructions.strip()}"
+            for skill in skills
+        ]
         if not blocos:
             return ""
         return "\n\n" + "\n\n".join(blocos) + "\n"

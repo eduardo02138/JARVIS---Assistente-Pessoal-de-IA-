@@ -6,15 +6,10 @@ import os
 from dotenv import load_dotenv
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 load_dotenv(ENV_PATH, override=True)
-import sys
 import json
 import base64
 import time
-import socket
 import asyncio
-import logging
-import urllib.request
-import urllib.error
 import inspect
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, Set
@@ -153,8 +148,6 @@ async def verify_jarvis_token(
         raise HTTPException(status_code=401, detail="Não autorizado: JARVIS_TOKEN inválido ou ausente.")
     return req_token
 
-verify_auth_token = verify_jarvis_token
-
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
@@ -219,11 +212,6 @@ async def get_index():
 async def get_debug_dashboard():
     return FileResponse(os.path.join(MONITORING_DIR, "dashboard.html"))
 
-def check_omniroute_status() -> dict:
-    """Verifica se o OmniRoute (segundo provedor) está operacional via OmniRouteProvider."""
-    return OmniRouteProvider.check_status()
-
-
 def _status_mcp_sanitizado() -> list:
     """Status dos servidores MCP sem expor binários, URLs ou filtros (health é público)."""
     from mcp_client_manager import mcp_client_manager
@@ -237,11 +225,11 @@ def _status_mcp_sanitizado() -> list:
 async def health_check():
     key_pool = GoogleStudioProvider.get_keys()
     has_key = bool(key_pool)
-    omni = check_omniroute_status()
+    omni = OmniRouteProvider.check_status()
     return {
         "status": "online",
         "gemini_api_key_configured": has_key,
-        "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
+        "accounts_count": len(key_pool),
         "primary_provider": "google_studio",
         "secondary_provider": "omniroute",
         "active_provider": provider_router.active_provider,
@@ -255,7 +243,7 @@ async def health_check():
         "modelo_texto_reserva": MODELO_TEXTO_RESERVA,
         "modelo_computador": MODELO_COMPUTER,
         "chave_configurada": has_key,
-        "chaves_no_pool": len(key_pool) if key_pool else (1 if has_key else 0),
+        "chaves_no_pool": len(key_pool),
         "sessoes": type(session_service_adk).__name__,
         "voz": VOZ,
         "modo_computador": policy_engine.computer_lease_status(),
@@ -275,7 +263,7 @@ async def listar_servidores_mcp(_=Depends(verify_jarvis_token)):
 async def get_providers_endpoint():
     key_pool = GoogleStudioProvider.get_keys()
     has_key = bool(key_pool)
-    omni = check_omniroute_status()
+    omni = OmniRouteProvider.check_status()
     act = provider_router.active_provider
 
     return {
@@ -291,7 +279,7 @@ async def get_providers_endpoint():
                 "is_active": act == "google_studio",
                 "status": "online" if has_key else "missing_keys",
                 "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-live"),
-                "accounts_count": len(key_pool) if key_pool else (1 if has_key else 0),
+                "accounts_count": len(key_pool),
                 "features": ["Native Audio 24kHz", "Latência <500ms", "Live WebSockets", "Visão & 55 Ferramentas"],
                 "description": "Provedor primário oficial com velocidade máxima e áudio bidirecional em tempo real."
             },
@@ -347,10 +335,7 @@ async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     enabled = payload.get("enabled")
     res = plugin_manager.toggle_plugin(plugin_id, enabled)
-    try:
-        runners_adk.clear()
-    except NameError:
-        pass
+    runners_adk.clear()
     record_event("plugin_toggle", {"plugin_id": plugin_id, "result": res})
     return res
 
@@ -358,10 +343,7 @@ async def toggle_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
 async def install_plugin_endpoint(payload: dict, _=Depends(verify_jarvis_token)):
     plugin_id = payload.get("plugin_id")
     res = plugin_manager.install_plugin(plugin_id)
-    try:
-        runners_adk.clear()
-    except NameError:
-        pass
+    runners_adk.clear()
     record_event("plugin_install", {"plugin_id": plugin_id, "result": res})
     return res
 
@@ -1427,7 +1409,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
-    voice_name = init_data.get("voice") or os.environ.get("JARVIS_VOICE", "Charon")
+    voice_name = init_data.get("voice") or VOZ
     # O modelo pedido pelo cliente é respeitado; o .env define o padrão.
     # O bloqueio anterior forçava o downgrade de qualquer modelo 3.8 para o 2.5.
     req_model = (init_data.get("model") or "").strip()
@@ -1435,16 +1417,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
     is_extended = "extended-thinking" in model_name
     # LIVE_AUTO_LANG: detecta e alterna idioma sozinho durante a conversa.
     # Sem a flag, o idioma fixo (JARVIS_LANGUAGE) evita troca por ruído.
-    auto_lang = os.environ.get("LIVE_AUTO_LANG", "0").strip().lower() in ("1", "true", "yes", "on")
+    auto_lang = _env_flag("LIVE_AUTO_LANG")
     req_provider = (init_data.get("provider") or "").strip() or provider_router.active_provider
-    allow_barge_in = bool(init_data.get("barge_in", False)) or os.environ.get("JARVIS_BARGE_IN", "false").lower() in ("true", "1", "yes")
+    allow_barge_in = bool(init_data.get("barge_in", False)) or _env_flag("JARVIS_BARGE_IN")
     activity_handling = (
         types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
         if allow_barge_in
         else types.ActivityHandling.NO_INTERRUPTION
     )
 
-    speech_lang_kwargs = {} if auto_lang else {"language_code": os.environ.get("JARVIS_LANGUAGE", "pt-BR")}
+    speech_lang_kwargs = {} if auto_lang else {"language_code": IDIOMA}
     live_connect_kwargs = {
         "response_modalities": [types.Modality.AUDIO],
         "speech_config": types.SpeechConfig(
@@ -1583,12 +1565,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             "type": "user_transcription",
                             "text": texto
                         })
-                        # Aprovação por comando de voz no WebSocket nativo
-                        palavras_sim = {"sim", "autorizar", "autorizado", "confirmar", "confirmado", "pode", "ok", "yes", "permitir", "conceder"}
-                        palavras_nao = {"nao", "não", "negar", "negado", "cancelar", "cancela", "recusar", "recuso"}
-                        trans_lower = "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
-                        tokens_voz = set(trans_lower.split())
-                        if (trans_lower in palavras_sim or bool(tokens_voz & palavras_sim)) and not (tokens_voz & palavras_nao):
+                        # Aprovação por comando de voz no WebSocket nativo (parser único de live_protocolo)
+                        if palavra_confirma(texto):
                             for cid, fut in list(pending_confirmations.items()):
                                 if not fut.done():
                                     fut.set_result(True)
@@ -1835,9 +1813,6 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             gemini_bridge.log_audit_event("JARVIS", f"tool_result:{func_name}", res, {"args": args})
                             await safe_send_json({"type": "tool_result", "name": func_name, "result": res})
 
-                            if func_name == "set_ide_mode":
-                                await safe_send_json({"type": "ide_mode", "active": res.get("ide_mode", False)})
-
                             if func_name == "toggle_telemetry_overlay":
                                 await safe_send_json({
                                     "type": "toggle_telemetry",
@@ -2039,7 +2014,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                         # Execução assíncrona: não bloqueia o recebimento de
                                         # raciocínio e áudio do Gemini enquanto a ferramenta roda.
-                                        asyncio.create_task(executar_ferramenta(func_name, call_id, args))
+                                        # A referência fica retida (contra GC) e é cancelada no fim da conexão.
+                                        tarefa = asyncio.create_task(executar_ferramenta(func_name, call_id, args))
+                                        _conn_background_tasks.add(tarefa)
+                                        tarefa.add_done_callback(_conn_background_tasks.discard)
 
                         except Exception as gemini_err:
                             codigo_fechamento = getattr(gemini_err, "code", None)
@@ -2171,9 +2149,9 @@ if __name__ == "__main__":
     import uvicorn
     host = os.environ.get("JARVIS_HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8000))
-    print(f"\n=======================================================")
+    print("\n=======================================================")
     print(f"⚡ J.A.R.V.I.S. Online - Interface em: http://{host}:{port}")
     print(f"⚡ Central de Depuração & Logs em: http://{host}:{port}/debug")
     print(f"🔒 Rede: Vinculado a {host} (Proteção contra acesso externo)")
-    print(f"=======================================================\n")
+    print("=======================================================\n")
     uvicorn.run(app, host=host, port=port)

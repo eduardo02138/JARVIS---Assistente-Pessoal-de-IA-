@@ -13,7 +13,6 @@ Destaques da implementação:
 - Isolamento de recursão (ignora conexões com o próprio servidor 'jarvis').
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -231,17 +230,6 @@ class McpClientManager:
                 logger.warning("Erro ao fechar servidor MCP '%s': %s", nome, e)
         self._toolsets.clear()
         self._loaded = False
-
-    def close_all_sync(self):
-        """Auxiliar síncrono para encerramento de conexões quando fora de loop assíncrono."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.close_all())
-            else:
-                loop.run_until_complete(self.close_all())
-        except Exception:
-            asyncio.run(self.close_all())
 
     def status(self) -> List[Dict[str, Any]]:
         """Retorna o status de todos os servidores MCP configurados."""

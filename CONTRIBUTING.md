@@ -27,10 +27,14 @@ Use development/test credentials only.
 Run the relevant test suites before submitting:
 
 ```bash
-PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_reproduction_p0.py -v
+export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
+PYTHONPATH=. .venv/bin/pytest monitoring/test_trust_gates.py monitoring/test_mcp_client.py \
+    monitoring/test_live_protocolo.py monitoring/test_reproduction_p0.py -v
 .venv/bin/python monitoring/test_suite.py --p0
 .venv/bin/python monitoring/test_adk.py
 ```
+
+New `test_*` functions in `monitoring/test_suite.py` or `monitoring/test_adk.py` must also be added to the explicit runner of that file (`run_p0_suite`/`main` or `executar_todos_testes_adk`); CI fails otherwise.
 
 If your change touches a specific plugin or subsystem, add a focused regression test for that behavior.
 

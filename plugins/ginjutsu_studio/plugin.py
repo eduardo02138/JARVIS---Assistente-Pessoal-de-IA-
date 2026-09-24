@@ -7,7 +7,7 @@ para novos personagens e estilos visuais mantendo fidelidade cinemática.
 import uuid
 import time
 import logging
-from typing import Optional, List, Dict
+from typing import Dict
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.ginjutsu_studio")
@@ -126,7 +126,7 @@ class GinjutsuStudioPlugin(JarvisPlugin):
             "mock": True,
             "executado_externamente": False,
             "prompt_otimizado": prompt_mestre,
-            "mensagem": f"Prompt mestre estruturado no padrão Ginjutsu gerado com sucesso, senhor. Pronto para envio ao pipeline de renderização."
+            "mensagem": "Prompt mestre estruturado no padrão Ginjutsu gerado com sucesso, senhor. Pronto para envio ao pipeline de renderização."
         }
 
     def list_jobs(self) -> dict:

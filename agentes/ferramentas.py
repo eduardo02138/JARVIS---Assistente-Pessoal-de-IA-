@@ -6,9 +6,12 @@ modelo, então os tipos e a descrição aqui são parte da interface com o Gemin
 
 import asyncio
 import datetime
+import functools
+import inspect
+from typing import Any, Callable
 
 import psutil
-from google.adk.tools import ToolContext
+from google.adk.tools import BaseTool, FunctionTool, ToolContext
 
 
 def hora_atual() -> dict:
@@ -60,14 +63,8 @@ def consultar_preferencias(tool_context: ToolContext) -> dict:
     return {"status": "ok", "preferencias": guardadas, "total": len(guardadas)}
 
 
-import functools
-import inspect
-from typing import Callable, Any
-from google.adk.tools import FunctionTool, BaseTool
-
-
 def obter_todas_ferramentas_adk() -> list[BaseTool]:
-    """Retorna todas as 56 ferramentas do ecossistema JARVIS convertidas para o Google ADK.
+    """Retorna todas as ferramentas do ecossistema JARVIS (sistema + plug-ins ativos) convertidas para o Google ADK.
 
     Garante que cada ferramenta preserve seu nome oficial, descrição completa
     e assinatura de parâmetros tipada, integrando-se perfeitamente ao Policy Engine.

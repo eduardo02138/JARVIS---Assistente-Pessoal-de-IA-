@@ -3,7 +3,6 @@
 Monitor CLI de Telemetria e Depuração em Tempo Real para JARVIS / Gemini Live
 Exibe métricas ao vivo de áudio, transcrições, chamadas de tools e rotações de chaves no terminal.
 """
-import os
 import sys
 import time
 import json

@@ -7,7 +7,7 @@ analisar alocação de ativos e gerar insights financeiros por comando de voz.
 import json
 import logging
 import os
-from typing import Optional, List, Dict
+from typing import List, Dict
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.google_finance")

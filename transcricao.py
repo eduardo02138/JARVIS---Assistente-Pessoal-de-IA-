@@ -19,7 +19,7 @@ Variáveis de ambiente:
 import asyncio
 import logging
 import os
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 try:
     from monitoring.logger import logger

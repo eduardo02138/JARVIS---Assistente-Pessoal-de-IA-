@@ -8,7 +8,7 @@ import time
 import uuid
 import asyncio
 import logging
-from typing import Optional, List, Dict
+from typing import Dict
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.deep_research")

@@ -3,10 +3,8 @@ Plug-in: Google Workspace (Gmail, Google Docs, Google Keep)
 Permite redigir documentos, buscar mensagens na caixa de entrada e capturar ideias por voz.
 """
 
-import os
-import json
 import logging
-from typing import Optional, List, Dict
+from typing import List, Dict
 from plugin_sdk import JarvisPlugin, PluginMeta
 
 logger = logging.getLogger("jarvis.plugins.google_workspace")

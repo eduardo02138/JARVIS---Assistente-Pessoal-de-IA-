@@ -2,7 +2,6 @@
 Ferramentas de sistema operacional e automações do JARVIS.
 """
 import os
-import sys
 import subprocess
 import datetime
 import psutil
@@ -466,7 +465,7 @@ def open_application(app_name: str) -> dict:
                 "distribuidora": chosen_game["distribuidora"],
                 "mensagem": f"Iniciando o jogo '{chosen_game['nome']}' através da {chosen_game['distribuidora']}, senhor. Bom jogo!"
             }
-    except Exception as exc:
+    except Exception:
         pass
 
     # 2. Aliases e catálogo de aplicativos conhecidos (bloqueia binários arbitrários)
@@ -578,14 +577,14 @@ def adjust_volume(action: str, percent: int = 10) -> dict:
         else:
             msg = f"Ação de volume '{action}' não compreendida."
         return {"sucesso": True, "mensagem": msg}
-    except Exception as e:
+    except Exception:
         # Tenta fallback com amixer
         try:
             if action == "aumentar":
                 subprocess.run(["amixer", "-D", "pulse", "sset", "Master", f"{percent}%+"], check=True)
             elif action == "diminuir":
                 subprocess.run(["amixer", "-D", "pulse", "sset", "Master", f"{percent}%-"], check=True)
-            return {"sucesso": True, "mensagem": f"Volume ajustado via amixer, senhor."}
+            return {"sucesso": True, "mensagem": "Volume ajustado via amixer, senhor."}
         except Exception as e2:
             return {"sucesso": False, "mensagem": f"Não foi possível alterar o volume: {str(e2)}"}
 
@@ -921,7 +920,7 @@ def open_default_app(app_type: str, target: str = None) -> dict:
                 subprocess.Popen([clean_bin, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
                 subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            return {"sucesso": True, "mensagem": f"Navegador padrão aberto com sucesso, senhor."}
+            return {"sucesso": True, "mensagem": "Navegador padrão aberto com sucesso, senhor."}
 
         elif clean_type == "text_editor":
             editor = app_pref if app_pref != "default" else "antigravity"
@@ -1678,7 +1677,6 @@ def rebuild_registry(dynamic_tools: list):
     Restaura o registro base do sistema e injeta exclusivamente as ferramentas
     dos plug-ins ativos, garantindo que desativações expurguem as funções do modelo.
     """
-    global TOOL_REGISTRY, GEMINI_FUNCTION_DECLARATIONS
     TOOL_REGISTRY.clear()
     TOOL_REGISTRY.update(BASE_TOOL_REGISTRY)
 

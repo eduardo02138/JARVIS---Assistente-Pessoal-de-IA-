@@ -89,7 +89,6 @@ class LiveStreamPlugin(JarvisPlugin):
         return {"sucesso": True, "mock": True, "executado_externamente": False, "no_ar": self.streaming, "mensagem": msg}
 
     def read_chat_summary(self) -> dict:
-        qtd = len(self.recent_chat)
         destaque = ", ".join([f"{m['user']}: \"{m['text']}\"" for m in self.recent_chat[-2:]])
         return {
             "sucesso": True, "mock": True, "executado_externamente": False,

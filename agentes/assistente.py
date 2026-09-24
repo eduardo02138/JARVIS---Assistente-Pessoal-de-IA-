@@ -24,7 +24,7 @@ from google.adk.tools import ToolContext, load_memory
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
 
-from policy_engine import policy_engine, RiskLevel
+from policy_engine import policy_engine
 from .ferramentas import (
     consultar_preferencias,
     hora_atual,
@@ -237,7 +237,7 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
     return Agent(
         name="assistente",
         model=modelo or MODELO_TEXTO,
-        description=f"Assistente J.A.R.V.I.S. com {len(obter_todas_ferramentas_adk())} ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
+        description=f"Assistente J.A.R.V.I.S. com {len(todas_ferramentas)} ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
         instruction=INSTRUCAO_COORDENADOR + ("" if skill_toolset is not None else _instrucoes_das_skills()),
         tools=[
             hora_atual,

@@ -14,7 +14,7 @@ import socket
 import time
 import urllib.request
 import urllib.error
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from urllib.parse import urlparse
 
 logger = logging.getLogger("jarvis.providers")
@@ -223,12 +223,6 @@ class ProviderRouter:
             self._active_provider = pid
             return True
         return False
-
-    def get_active(self):
-        """Retorna classe do provedor ativo para chat texto."""
-        if self._active_provider == "omniroute":
-            return OmniRouteProvider
-        return GoogleStudioProvider
 
     def live_provider(self) -> Dict[str, Any]:
         """Live bidirecional só existe no Google. OmniRoute = chat HTTP, sem WS Live."""

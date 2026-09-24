@@ -1,11 +1,12 @@
 """Protocolo compartilhado da sessão Gemini Live do J.A.R.V.I.S.
 
 Centraliza lógica antes duplicada em server.py (e no servidor ADK extinto):
-1. Interpretação de palavras de confirmação/recusa ditas ou digitadas pelo usuário.
-2. Carga do pool de chaves Gemini — delega a GoogleStudioProvider (provider_router.py),
-   fonte canônica; aqui não há loader próprio.
-3. Desativação do timeout de ping do WebSocket Live (evita queda após silêncio).
-4. Encerramento limpo da sessão Live: close code 1000 é shutdown normal, não erro.
+1. Interpretação de palavras de confirmação/recusa ditas ou digitadas pelo usuário
+   (único parser: /ws/live, /ws/live_adk e /api/chat usam as mesmas regras).
+2. Desativação do timeout de ping do WebSocket Live (evita queda após silêncio).
+3. Encerramento limpo da sessão Live: close code 1000 é shutdown normal, não erro.
+
+O pool de chaves Gemini vive em GoogleStudioProvider (provider_router.py).
 
 server.py é o único importador: sem drift.
 """
