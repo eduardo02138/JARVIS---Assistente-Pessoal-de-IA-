@@ -2,7 +2,7 @@
 
 Agente dedicado que opera o navegador Chromium via Playwright sob o modelo
 "gemini-2.5-computer-use-preview". E um agente single-tool (ComputerUseToolset),
-por isso nao espalha as 56 ferramentas do ecossistema.
+por isso nao espalha as ferramentas do ecossistema.
 
 Governanca: nenhuma tool do toolset executa sem o "Modo Computador" ativo.
 O usuario ativa o modo pelo endpoint /api/computer/mode (ou confirmacao de voz),

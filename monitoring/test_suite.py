@@ -836,13 +836,23 @@ def test_mensagens_de_mock_sao_honestas():
     return success
 
 
+def _fonte_do_backend() -> str:
+    """Código-fonte do server.py e de todos os módulos do pacote servidor/."""
+    import glob
+    arquivos = [os.path.join(RAIZ_PROJETO, "server.py")]
+    arquivos += sorted(glob.glob(os.path.join(RAIZ_PROJETO, "servidor", "*.py")))
+    partes = []
+    for caminho in arquivos:
+        with open(caminho, encoding="utf-8") as f:
+            partes.append(f.read())
+    return "\n".join(partes)
+
+
 def test_configuracao_de_voz_e_texto():
     """Idioma fixo, sem texto duplicado no HUD e mocks desligados por padrão."""
-    import inspect
-    import server
     import plugin_manager as pm
 
-    fonte = inspect.getsource(server)
+    fonte = _fonte_do_backend()
     idioma_fixo = 'os.environ.get("JARVIS_LANGUAGE", "pt-BR")' in fonte
     sem_duplicata = fonte.count('"type": "text"') in (1, 2)
     tolerancia_microfone = "MIC_GRACE_S" in fonte
@@ -876,14 +886,26 @@ def test_visao_de_tela_no_modo_controle():
     aceita_frames = '"video"' in fonte_servidor and "msg_type" in fonte_servidor
     exige_lease = "policy_engine.is_control_lease_active(sessao_id)" in fonte_servidor
     envia_ao_modelo = "video=types.Blob(data=frame" in fonte_servidor
-    comprime_contexto = "context_window_compression" in inspect.getsource(server)
+    comprime_contexto = "context_window_compression" in _fonte_do_backend()
+
+    # A captura (getDisplayMedia) vive no módulo comum; cada interface o carrega e o aciona.
+    with open(os.path.join(base, "static", "common", "jarvis-comum.js"), encoding="utf-8") as f:
+        comum = f.read()
+    captura_comum = "getDisplayMedia" in comum and "criarVisaoDeTela" in comum
 
     clientes = []
-    for caminho in [("static", "app.js"), ("gemini-live-widget", "widget.js")]:
+    for caminho, pagina in [
+        (("static", "app.js"), ("static", "index.html")),
+        (("gemini-live-widget", "widget.js"), ("gemini-live-widget", "index.html")),
+    ]:
         with open(os.path.join(base, *caminho), encoding="utf-8") as f:
             codigo = f.read()
+        with open(os.path.join(base, *pagina), encoding="utf-8") as f:
+            html = f.read()
         clientes.append(
-            "getDisplayMedia" in codigo
+            captura_comum
+            and "/static/common/jarvis-comum.js" in html
+            and "JarvisComum.criarVisaoDeTela" in codigo
             and "iniciarVisaoDeTela" in codigo
             and "pararVisaoDeTela" in codigo
         )

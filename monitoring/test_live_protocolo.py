@@ -6,7 +6,7 @@ guardas de regressão após a unificação dos cinco parsers originais.
 
 import pytest
 
-from live_protocolo import EncerramentoLimpoDaSessao, _limpar, palavra_confirma, palavra_recusa
+from live_protocolo import EncerramentoLimpoDaSessao, _limpar, eh_recusa_pura, palavra_confirma, palavra_recusa
 
 
 def test_confirma_simples():
@@ -37,6 +37,17 @@ def test_recusa_simples():
     assert palavra_confirma("no") is False
     assert palavra_recusa("recuso") is True
     assert palavra_recusa("não pode") is True
+
+
+def test_no_isolado_recusa_mas_contracao_nao_veta():
+    # "no" sozinho é recusa (inglês); dentro da frase é a contração portuguesa "em + o"
+    assert palavra_recusa("no") is True
+    assert palavra_recusa("No.") is True
+    assert eh_recusa_pura("no") is True
+    assert palavra_confirma("sim, abre no navegador") is True
+    assert palavra_recusa("abre no navegador") is False
+    assert eh_recusa_pura("não") is True
+    assert eh_recusa_pura("não, espera") is False
 
 
 def test_confirma_com_negacao_sem_recusa_intencional():

@@ -28,8 +28,11 @@ PALAVRAS_SIM = {
 FRASES_SIM = {"fazer teste"}
 PALAVRAS_NAO = {
     "nao", "não", "negar", "negado", "cancelar", "cancela",
-    "recusar", "recuso", "no",
+    "recusar", "recuso",
 }
+# Recusas que só valem como resposta isolada. "no" é recusa em inglês, mas em
+# português é contração ("abre no navegador") e não pode vetar uma confirmação.
+RECUSAS_ISOLADAS = {"no"}
 # Verbos/frases que o modelo usa para PEDIR informação, não para autorizar.
 # "pode repetir?" ou "pode continuar?" não são confirmações de ação pendente.
 VERBOS_PEDIDO = {
@@ -41,6 +44,18 @@ VERBOS_PEDIDO = {
 
 def _limpar(texto: str) -> str:
     return "".join(c for c in texto.lower() if c.isalnum() or c.isspace()).strip()
+
+
+def _tem_nao(texto_limpo: str, tokens: set) -> bool:
+    """Palavra de recusa em qualquer posição OU recusa isolada (ex.: "no" sozinho)."""
+    return bool(tokens & PALAVRAS_NAO) or texto_limpo in RECUSAS_ISOLADAS
+
+
+def eh_recusa_pura(texto: str) -> bool:
+    """True se a resposta inteira é só uma recusa ("não", "cancelar", "no")."""
+    if not texto:
+        return False
+    return _limpar(texto) in (PALAVRAS_NAO | RECUSAS_ISOLADAS)
 
 
 def _tem_sim(texto_limpo: str, tokens: set) -> bool:
@@ -64,7 +79,7 @@ def palavra_confirma(texto: str) -> bool:
     if not texto_limpo:
         return False
     tokens = set(texto_limpo.split())
-    negado = bool(tokens & PALAVRAS_NAO)
+    negado = _tem_nao(texto_limpo, tokens)
     pedido = bool(tokens & VERBOS_PEDIDO)
     if pedido:
         return False
@@ -75,7 +90,8 @@ def palavra_recusa(texto: str) -> bool:
     """True se o texto contém palavra de negação ou cancelamento."""
     if not texto:
         return False
-    return bool(set(_limpar(texto).split()) & PALAVRAS_NAO)
+    texto_limpo = _limpar(texto)
+    return _tem_nao(texto_limpo, set(texto_limpo.split()))
 
 
 class EncerramentoLimpoDaSessao(Exception):

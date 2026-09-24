@@ -5,7 +5,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/home/edu/Documentos"
+        "/caminho/absoluto/da/pasta/permitida"
       ],
       "tool_filter": [
         "list_directory",

@@ -16,7 +16,7 @@ Thanks for your interest in improving JARVIS. Contributions are welcome across t
 python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 

@@ -45,8 +45,6 @@ class PendingAction:
 # Mapeamento inicial de ferramentas nativas e de plug-ins para seus níveis de risco
 TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     # Módulo Google ADK
-    "hora_atual": RiskLevel.READ,
-    "status_do_sistema": RiskLevel.READ,
     "pesquisar_na_web": RiskLevel.LOW_WRITE,
     "lembrar_preferencia": RiskLevel.LOW_WRITE,
     "consultar_preferencias": RiskLevel.READ,

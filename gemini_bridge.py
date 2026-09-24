@@ -7,6 +7,7 @@ entre o usuário, J.A.R.V.I.S. e a IDE Antigravity.
 import os
 import json
 import asyncio
+import shutil
 import subprocess
 import logging
 from datetime import datetime
@@ -19,6 +20,16 @@ AUDIT_JSONL = os.path.join(GEMINI_DIR, "audit.jsonl")
 COMMANDS_LOG = os.path.join(GEMINI_DIR, "commands.log")
 INPUT_TXT = os.path.join(GEMINI_DIR, "input.txt")
 LATEST_RESPONSE_MD = os.path.join(GEMINI_DIR, "latest_response.md")
+
+# Integração com a IDE Antigravity. Ordem de resolução: variável de ambiente, PATH e
+# local de instalação padrão. O workspace padrão é o próprio projeto do JARVIS.
+WORKSPACE_DIR = os.path.expanduser(os.environ.get("JARVIS_WORKSPACE_DIR", "").strip() or BASE_DIR)
+ANTIGRAVITY_BIN = os.path.expanduser(
+    os.environ.get("ANTIGRAVITY_BIN", "").strip() or shutil.which("antigravity") or "/usr/bin/antigravity"
+)
+AGY_BIN = os.path.expanduser(
+    os.environ.get("AGY_BIN", "").strip() or shutil.which("agy") or "~/.local/bin/agy"
+)
 
 PLACEHOLDER_TEXT = "# Digite seu comando ou instrução para o Antigravity aqui e salve o arquivo."
 
@@ -77,7 +88,7 @@ def open_gemini_bridge() -> dict:
         pass
 
     try:
-        subprocess.Popen(["/usr/bin/antigravity", GEMINI_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([ANTIGRAVITY_BIN, GEMINI_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log_audit_event("JARVIS", "open_workspace", {"path": GEMINI_DIR})
         return {
             "sucesso": True,

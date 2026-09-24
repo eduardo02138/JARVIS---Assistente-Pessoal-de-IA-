@@ -82,7 +82,13 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 
 | Componente | Função |
 | --- | --- |
-| `server.py` | Runtime FastAPI unificado: Gemini Live nativo (`/ws/live`), voz ADK (`/ws/live_adk`), chat ADK (`/api/chat`), confirmações e plugins |
+| `server.py` | Ponto de entrada: monta o FastAPI a partir dos routers de `servidor/`, serve os clientes web e reexporta os nomes públicos usados por scripts e testes |
+| `servidor/seguranca.py` | Token, sessões emitidas (`/api/auth/session`), verificação de token e liberação de leases |
+| `servidor/runtime_adk.py` | Serviços de sessão/memória do ADK, fábrica de runners e rotação de chaves |
+| `servidor/rotas_sistema.py` | Rotas de saúde, provedores, plugins, depuração e preferências |
+| `servidor/rotas_agente.py` | Chat ADK (`/api/chat`), confirmações pendentes e Modo Computador |
+| `servidor/live_nativo.py` | WebSocket Gemini Live nativo (`/ws/live`) com ferramentas em segundo plano |
+| `servidor/live_adk.py` | WebSocket Live do ADK (`/ws/live_adk`) |
 | `live_protocolo.py` | Protocolo Live compartilhado: parser único de confirmação/recusa, ajuste de ping e encerramento limpo |
 | `provider_router.py` | Pool de chaves Google AI Studio (primário) e failover OmniRoute (secundário, só texto) |
 | `transcricao.py` | Configuração de transcrição Live e transcritor dedicado opcional |
@@ -100,6 +106,7 @@ Um único processo FastAPI (`server.py`) hospeda tudo: a bridge nativa do Gemini
 | `mcp_client_manager.py` | Cliente MCP: conecta servidores MCP externos aos agentes ADK com políticas de risco |
 | `gemini_bridge.py` / `gemini/` | Ponte por arquivos e log de auditoria com a IDE Antigravity |
 | `static/` | HUD web holográfico (em `/`) |
+| `static/common/` | JS compartilhado entre HUD e widget (token, áudio PCM, interrupção da reprodução, visão de tela) |
 | `static_adk/` | Cliente de voz ADK (em `/static_adk/`) |
 | `gemini-live-widget/` | Frontend do widget desktop (em `/widget/`, embrulhado pelo `app.py`) |
 | `monitoring/` | Logger estruturado, painel de depuração (`/debug`), Trust Gates e regressões |
@@ -150,7 +157,8 @@ cd JARVIS---Assistente-Pessoal-de-IA-
 python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r requirements.txt       # runtime
+pip install -r requirements-dev.txt   # runtime + ferramentas de teste (pytest)
 ```
 
 ### 3. Configure o ambiente
@@ -251,7 +259,7 @@ Copie `mcp_servers.example.json` para `mcp_servers.json` (ou aponte `MCP_SERVERS
 
 ## Testes
 
-As mesmas suítes executadas pelo CI:
+As mesmas suítes executadas pelo CI (instale antes o `requirements-dev.txt`):
 
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
@@ -276,10 +284,11 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── monitoring/              # Logger, painel de depuração, Trust Gates e regressões
 ├── plugins/                 # Código dos plugins (plugins/<id>/plugin.py)
 ├── skills/                  # Skills ADK (skills/<nome>/SKILL.md + assets/)
-├── static/                  # HUD web principal
+├── servidor/                # Módulos do backend (segurança, runtime ADK, rotas, WebSockets Live)
+├── static/                  # HUD web principal (+ static/common/ com JS compartilhado)
 ├── static_adk/              # Cliente de voz ADK
 ├── app.py                   # Aplicativo PySide6 (embrulha o widget)
-├── server.py                # Runtime unificado (Gemini Live + ADK + API)
+├── server.py                # Ponto de entrada: app FastAPI montado a partir de servidor/
 ├── live_protocolo.py        # Protocolo Live compartilhado
 ├── provider_router.py       # Pool de chaves + failover OmniRoute
 ├── transcricao.py           # Configuração de transcrição Live
@@ -294,6 +303,8 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── jarvis_mcp_server.py     # Servidor MCP
 ├── mcp_client_manager.py    # Cliente MCP (servidores externos → agentes ADK)
 ├── mcp_servers.example.json # Modelo de configuração do cliente MCP
+├── requirements.txt         # Dependências de runtime
+├── requirements-dev.txt     # Dependências de teste (pytest)
 ├── run_jarvis.sh            # Inicia o servidor
 └── run_app.sh               # Inicia o widget desktop
 ```

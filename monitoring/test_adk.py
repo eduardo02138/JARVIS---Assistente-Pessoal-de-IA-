@@ -308,7 +308,7 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     mock_runner_obj = MagicMock()
     mock_runner_obj.run_async = mock_run_async
 
-    with patch("server.obter_runner_adk", return_value=mock_runner_obj):
+    with patch("servidor.rotas_agente.obter_runner_adk", return_value=mock_runner_obj):
         resp_1 = client_server.post(
             "/api/chat",
             json={"texto": "sim", "sessao": sess_1, "usuario": "usuario-impostor-ignorado"},
@@ -325,7 +325,7 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     sess_invasor = "sessao-chat-invasor"
     pending_3 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_3, user_id=sess_3)
 
-    with patch("server.obter_runner_adk", return_value=mock_runner_obj):
+    with patch("servidor.rotas_agente.obter_runner_adk", return_value=mock_runner_obj):
         client_server.post(
             "/api/chat",
             json={"texto": "sim", "sessao": sess_invasor, "usuario": sess_3},
@@ -338,7 +338,7 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
 
 
 def test_todas_ferramentas_conectadas_ao_agente():
-    """Garante que todas as 56 ferramentas do ecossistema estão conectadas ao agente ADK."""
+    """Garante que todas as ferramentas do ecossistema (sistema + plug-ins ativos) estão conectadas ao agente ADK."""
     import system_tools
     from plugin_manager import plugin_manager
     from agentes.assistente import criar_agente_coordenador, criar_agente_de_voz, criar_agente_rapido
@@ -393,7 +393,7 @@ def test_todas_ferramentas_conectadas_ao_agente():
     for essencial in ("get_system_status", "get_gpu_status", "adjust_volume", "list_installed_games"):
         assert essencial in nomes_rapido, f"Ferramenta essencial '{essencial}' ausente no agente rápido!"
 
-    print(f" [✔ PASS] Conexão Total de Ferramentas: {len(nomes_coord)} ferramentas conectadas ao Agente (56 do ecossistema + especialistas)")
+    print(f" [✔ PASS] Conexão Total de Ferramentas: {len(nomes_coord)} ferramentas conectadas ao Agente (sistema + plug-ins ativos + especialistas)")
 
 
 def test_compaction_config_e_app():

@@ -27,9 +27,7 @@ from google.adk.tools.base_tool import BaseTool
 from policy_engine import policy_engine
 from .ferramentas import (
     consultar_preferencias,
-    hora_atual,
     lembrar_preferencia,
-    status_do_sistema,
     obter_todas_ferramentas_adk,
     obter_dicionario_ferramentas_adk,
 )
@@ -184,8 +182,6 @@ def criar_agente_rapido(modelo: Optional[str] = None) -> Agent:
         description="Responde pedidos diretos: GPU, telemetria, jogos, volume, hora, status, pesquisa e controle.",
         instruction=INSTRUCAO_BASE + ("" if skill_toolset is not None else _instrucoes_das_skills()),
         tools=[
-            hora_atual,
-            status_do_sistema,
             load_memory,
             *ferramentas,
         ],
@@ -198,8 +194,10 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
     ferramentas_map = obter_dicionario_ferramentas_adk()
     todas_ferramentas = list(ferramentas_map.values())
 
-    tools_especialista_sistema = [hora_atual, status_do_sistema, consultar_preferencias]
-    for nome in ("get_gpu_status", "adjust_volume", "toggle_telemetry_overlay", "list_installed_games", "list_open_windows"):
+    # Hora e telemetria vêm das mesmas ferramentas de sistema do catálogo (sem duplicatas para o modelo)
+    tools_especialista_sistema: list = [consultar_preferencias]
+    for nome in ("get_current_datetime", "get_system_status", "get_gpu_status", "adjust_volume",
+                 "toggle_telemetry_overlay", "list_installed_games", "list_open_windows"):
         if nome in ferramentas_map:
             tools_especialista_sistema.append(ferramentas_map[nome])
 
@@ -240,8 +238,6 @@ def criar_agente_coordenador(modelo: Optional[str] = None) -> Agent:
         description=f"Assistente J.A.R.V.I.S. com {len(todas_ferramentas)} ferramentas do sistema, plug-ins, especialistas e servidores MCP.",
         instruction=INSTRUCAO_COORDENADOR + ("" if skill_toolset is not None else _instrucoes_das_skills()),
         tools=[
-            hora_atual,
-            status_do_sistema,
             lembrar_preferencia,
             consultar_preferencias,
             load_memory,

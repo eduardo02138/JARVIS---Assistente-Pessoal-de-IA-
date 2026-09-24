@@ -17,34 +17,36 @@ O J.A.R.V.I.S. é um assistente pessoal por comando de voz com tempo de resposta
 ## 2. Mapa da Estrutura de Arquivos
 
 ```
-/home/edu/Documentos/assistente/
+<raiz-do-projeto>/
 │
-├── .venv/                   # Ambiente virtual isolado (Python 3.14 / uv)
-├── requirements.txt         # Lista de dependências fixadas
-├── .env.example             # Modelo para variáveis de ambiente (GEMINI_API_KEY, PORT, etc.)
+├── .venv/                   # Ambiente virtual isolado (Python 3.11+)
+├── requirements.txt         # Dependências de runtime (requirements-dev.txt: testes)
+├── .env.example             # Modelo de variáveis de ambiente (GEMINI_API_KEY, PORT, etc.)
 │
 ├── ESBOCO_PROJETO.md        # [Este arquivo] Especificação técnica e guia do desenvolvedor
-├── README.md                # Instruções rápidas de uso e comandos suportados
-├── run_jarvis.sh            # Script utilitário para iniciar o assistente com 1 clique
+├── README.md                # Instalação, arquitetura e testes
+├── run_jarvis.sh            # Inicia o servidor com 1 clique
+├── run_app.sh               # Abre o App Desktop com 1 clique
+├── app.py                   # App Desktop flutuante (PySide6 / QtWebEngine) sobre /widget/
 │
-├── app.py                   # [NOVO] Aplicativo Desktop Nativo Flutuante (PySide6 / QtWebEngine)
-├── run_app.sh               # Script para abrir o App Desktop com 1 clique
-├── server.py                # Núcleo do Backend:
-│                            # - Servidor FastAPI
-│                            # - WebSocket Bridge com a Gemini Live API
-│                            # - Despachante e validador de Function Calling
+├── server.py                # Ponto de entrada: monta o FastAPI a partir de servidor/
+├── servidor/                # Backend dividido por responsabilidade:
+│   ├── seguranca.py         #   token, sessões emitidas e liberação de leases
+│   ├── runtime_adk.py       #   sessões, memória, runners e rotação de chaves do ADK
+│   ├── rotas_sistema.py     #   saúde, provedores, plug-ins, depuração e preferências
+│   ├── rotas_agente.py      #   chat ADK, confirmações e Modo Computador
+│   ├── live_adk.py          #   WebSocket /ws/live_adk (Live pelo ADK)
+│   └── live_nativo.py       #   WebSocket /ws/live (Gemini Live nativo + Function Calling)
 │
-├── system_tools.py          # Habilidades e Ferramentas do Sistema Operacional:
-│                            # - Telemetria de Hardware (CPU, RAM, Disco, Bateria, Uptime)
-│                            # - Lançador de Aplicativos (Chrome, VSCode, Terminal, etc.)
-│                            # - Controle de Volume e Áudio
-│                            # - Pesquisa na Web
-│                            # - Bloco de Notas / Lembretes
+├── agentes/                 # Agentes ADK, roteador, memória e Computer Use
+├── system_tools.py          # Ferramentas do SO (telemetria, apps, volume, web, notas, Antigravity)
+├── policy_engine.py         # Classificação de risco, confirmações e leases
+├── plugins/ + skills/       # Plug-ins (código) e Skills ADK (SKILL.md + assets)
 │
-└── static/                  # Frontend Web Holográfico (HUD Sci-Fi):
-    ├── index.html           # Estrutura do HUD, Reator Arc e painéis
-    ├── style.css            # Estilos em Glassmorphism, animações e cores Neon
-    └── app.js               # Web Audio API (16kHz in / 24kHz out) + Canvas 60 FPS
+├── static/                  # Frontend Web Holográfico (HUD Sci-Fi)
+├── static/common/           # Módulo JS compartilhado entre HUD e widget (áudio, visão, token)
+├── gemini-live-widget/      # Frontend do widget desktop
+└── static_adk/              # Cliente de voz do caminho ADK
 ```
 
 ---
@@ -58,7 +60,7 @@ O J.A.R.V.I.S. é um assistente pessoal por comando de voz com tempo de resposta
 [ Captura de Áudio: PCM 16-bit, 16.000 Hz, 1 Canal Mono ]
       │
       ▼ (Chunks Base64 via WebSocket /ws/live)
-[ Servidor FastAPI: server.py ]
+[ Servidor FastAPI: servidor/live_nativo.py ]
       │
       ▼ (types.Blob mime_type="audio/pcm;rate=16000")
 [ Gemini Multimodal Live API (gemini-3.8-live) ]
@@ -108,7 +110,7 @@ Cada ferramenta é registrada com um schema JSON que o Gemini reconhece para dec
 
 O projeto integra diretamente com o **OmniRoute**:
 - **Combo Dedicado**: `jarvis` configurado no OmniRoute com estratégia `round-robin`.
-- **Pool de Contas**: Suporte a failover automático entre as **7 contas Gemini** cadastradas. Se uma conta atingir limite de cota (*Rate Limit 429*), o JARVIS rotaciona de forma transparente para a próxima conta disponível sem interromper a sessão.
+- **Pool de Contas**: Suporte a failover automático entre as contas Gemini do pool (`GEMINI_API_KEYS`). Se uma conta atingir limite de cota (*Rate Limit 429*), o JARVIS rotaciona de forma transparente para a próxima conta disponível sem interromper a sessão.
 - **Configuração Segura**: Chaves carregadas via `.env` com permissões restritas `0600`.
 
 

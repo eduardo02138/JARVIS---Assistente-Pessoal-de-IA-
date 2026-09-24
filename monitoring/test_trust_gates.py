@@ -299,6 +299,8 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 const src = fs.readFileSync(process.env.WIDGET_PATH, "utf8");
+// A página do widget carrega o módulo comum antes do widget.js (window.JarvisComum)
+const srcComum = fs.readFileSync(process.env.COMUM_PATH, "utf8");
 
 const fetchCalls = [];
 const ctx2d = { clearRect(){}, fillRect(){}, arc(){}, fill(){}, beginPath(){}, moveTo(){}, lineTo(){}, stroke(){}, setTransform(){}, getImageData: () => ({ data: [] }), putImageData(){}, drawImage(){} };
@@ -324,6 +326,7 @@ const sandbox = {
 };
 sandbox.window = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(srcComum, sandbox, { timeout: 5000 });
 vm.runInContext(src, sandbox, { timeout: 5000 });
 
 (async () => {
@@ -349,7 +352,11 @@ vm.runInContext(src, sandbox, { timeout: 5000 });
         proc = subprocess.run(
             [node, harness_path], capture_output=True, text=True, timeout=60,
             cwd=repo_root,
-            env={**os.environ, "WIDGET_PATH": os.path.join(repo_root, "gemini-live-widget", "widget.js")},
+            env={
+                **os.environ,
+                "WIDGET_PATH": os.path.join(repo_root, "gemini-live-widget", "widget.js"),
+                "COMUM_PATH": os.path.join(repo_root, "static", "common", "jarvis-comum.js"),
+            },
         )
         assert proc.returncode == 0, f"FALHA GATE 5: node harness terminou com erro: {proc.stderr}"
 
@@ -397,7 +404,7 @@ def test_gate4_chat_dispatches_to_omniroute_when_selected():
 
     with patch("provider_router.OmniRouteProvider.chat", new_callable=AsyncMock) as mock_omni:
         mock_omni.return_value = "Resposta de teste do OmniRoute"
-        with patch("server.obter_runner_adk") as mock_runner:
+        with patch("servidor.rotas_agente.obter_runner_adk") as mock_runner:
             resp = client.post(
                 "/api/chat",
                 json={"texto": "Olá assistente", "sessao": "sess_prov", "usuario": "usr_prov"},
@@ -534,6 +541,8 @@ def test_gate6_frontend_widget_has_hardware_and_backend_mute_signaling():
     };
 
     vm.createContext(sandbox);
+    // A página do widget carrega o módulo comum antes do widget.js (window.JarvisComum)
+    vm.runInContext(fs.readFileSync('static/common/jarvis-comum.js', 'utf-8'), sandbox);
     const code = fs.readFileSync('gemini-live-widget/widget.js', 'utf-8');
     vm.runInContext(code, sandbox);
 
@@ -784,7 +793,7 @@ def test_gate6_live_adk_drops_audio_when_muted():
             )
 
     with patch.object(runner, "run_live", side_effect=mock_run_live):
-        with patch.object(server_mod, "LiveRequestQueue") as mock_queue_cls:
+        with patch("servidor.live_adk.LiveRequestQueue") as mock_queue_cls:
             mock_queue = MagicMock()
             mock_queue_cls.return_value = mock_queue
 
@@ -846,6 +855,11 @@ def test_gate7_system_status_cpu_check_is_non_blocking():
     import agentes.ferramentas as af
     from unittest.mock import patch
 
+    # Os agentes ADK usam get_system_status do catálogo; não há mais cópia paralela
+    assert not hasattr(af, "status_do_sistema"), (
+        "FALHA GATE 7: agentes.ferramentas voltou a duplicar a ferramenta de status do sistema!"
+    )
+
     chamadas = []
 
     def fake_cpu_percent(interval=None, percpu=None):
@@ -858,14 +872,6 @@ def test_gate7_system_status_cpu_check_is_non_blocking():
         "FALHA GATE 7: system_tools.get_system_status não usa cpu_percent(interval=None)!"
     )
     assert "cpu_percent" in st_sys
-
-    chamadas.clear()
-    with patch.object(af.psutil, "cpu_percent", side_effect=fake_cpu_percent):
-        st_af = af.status_do_sistema()
-    assert chamadas and chamadas[0]["interval"] is None, (
-        "FALHA GATE 7: agentes.ferramentas.status_do_sistema não usa cpu_percent(interval=None)!"
-    )
-    assert "cpu_percentual" in st_af
 
 
 def test_gate7_tool_execution_does_not_block_live_event_loop():

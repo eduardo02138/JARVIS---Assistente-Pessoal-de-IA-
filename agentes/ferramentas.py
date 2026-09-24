@@ -5,40 +5,11 @@ modelo, então os tipos e a descrição aqui são parte da interface com o Gemin
 """
 
 import asyncio
-import datetime
 import functools
 import inspect
 from typing import Any, Callable
 
-import psutil
 from google.adk.tools import BaseTool, FunctionTool, ToolContext
-
-
-def hora_atual() -> dict:
-    """Retorna a data e a hora atuais do computador do usuário."""
-    agora = datetime.datetime.now()
-    return {
-        "status": "ok",
-        "data": agora.strftime("%d/%m/%Y"),
-        "hora": agora.strftime("%H:%M"),
-        "dia_da_semana": agora.strftime("%A"),
-    }
-
-
-def status_do_sistema() -> dict:
-    """Informa uso de CPU, memória RAM e tempo ligado da máquina."""
-    memoria = psutil.virtual_memory()
-    inicializacao = datetime.datetime.fromtimestamp(psutil.boot_time())
-    ligado_ha = datetime.datetime.now() - inicializacao
-    return {
-        "status": "ok",
-        "cpu_percentual": psutil.cpu_percent(interval=None),
-        "cpu_nucleos": psutil.cpu_count(logical=True),
-        "ram_percentual": memoria.percent,
-        "ram_usada_gb": round(memoria.used / 1024**3, 1),
-        "ram_total_gb": round(memoria.total / 1024**3, 1),
-        "ligado_ha_horas": round(ligado_ha.total_seconds() / 3600, 1),
-    }
 
 
 def lembrar_preferencia(chave: str, valor: str, tool_context: ToolContext) -> dict:

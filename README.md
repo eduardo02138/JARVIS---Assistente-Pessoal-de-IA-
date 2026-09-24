@@ -121,7 +121,13 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 
 | Component | Purpose |
 | --- | --- |
-| `server.py` | Unified FastAPI runtime: native Gemini Live bridge (`/ws/live`), ADK voice (`/ws/live_adk`), ADK text chat (`/api/chat`), policy/confirmation and plugin endpoints |
+| `server.py` | Entry point: builds the FastAPI app from the `servidor/` routers, mounts the web clients and re-exports the public names used by scripts and tests |
+| `servidor/seguranca.py` | Session token, issued sessions (`/api/auth/session`), token checks and lease release |
+| `servidor/runtime_adk.py` | ADK session/memory services, runner factory and key rotation |
+| `servidor/rotas_sistema.py` | Health, providers, plugins, debug and preferences endpoints |
+| `servidor/rotas_agente.py` | ADK text chat (`/api/chat`), pending confirmations and Computer Mode |
+| `servidor/live_nativo.py` | Native Gemini Live WebSocket (`/ws/live`) with background tool execution |
+| `servidor/live_adk.py` | ADK Live WebSocket (`/ws/live_adk`) |
 | `live_protocolo.py` | Shared Live protocol helpers: the single confirm/deny parser, ping-timeout fix and clean-shutdown signal |
 | `provider_router.py` | Provider selection: Google AI Studio key pool (primary) and OmniRoute failover (secondary, text only) |
 | `transcricao.py` | Live input/output transcription config and the optional dedicated real-time transcriber |
@@ -139,6 +145,7 @@ A single FastAPI process (`server.py`) hosts everything: the native Gemini Live 
 | `mcp_client_manager.py` | MCP client: connects external MCP servers to the ADK agents as `McpToolset`s, with risk policies |
 | `gemini_bridge.py` / `gemini/` | File-based bridge and audit log between JARVIS and the Antigravity IDE |
 | `static/` | Holographic web HUD (served at `/`) |
+| `static/common/` | JS shared by the HUD and the widget (session token, PCM audio, playback interruption, screen vision) |
 | `static_adk/` | Lightweight ADK voice client (served at `/static_adk/`) |
 | `gemini-live-widget/` | Floating desktop widget frontend (served at `/widget/`, wrapped by `app.py`) |
 | `monitoring/` | Structured logging, debug dashboard (`/debug`), trust gates and regression tests |
@@ -220,7 +227,8 @@ cd JARVIS---Assistente-Pessoal-de-IA-
 python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r requirements.txt       # runtime
+pip install -r requirements-dev.txt   # runtime + test tools (pytest)
 ```
 
 ### 3. Configure environment variables
@@ -300,7 +308,7 @@ Simulated plugins are **disabled by default** so the assistant never reports inv
 
 ## Testing and trust gates
 
-The repository includes automated architecture, security and regression tests. These are the same suites the CI runs:
+The repository includes automated architecture, security and regression tests. These are the same suites the CI runs (install `requirements-dev.txt` first):
 
 ```bash
 export GEMINI_API_KEY="ci-dummy-key-test" JARVIS_TOKEN="ci-secret-token-test-123"
@@ -325,10 +333,11 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── monitoring/              # Logger, debug dashboard, trust gates and regression tests
 ├── plugins/                 # Plugin runtime code (plugins/<id>/plugin.py)
 ├── skills/                  # ADK Skills (skills/<skill-name>/SKILL.md + assets/)
-├── static/                  # Main holographic web HUD
+├── servidor/                # Backend modules (security, ADK runtime, routes, Live WebSockets)
+├── static/                  # Main holographic web HUD (+ static/common/ shared JS)
 ├── static_adk/              # ADK voice client
 ├── app.py                   # PySide6 desktop app (wraps the widget)
-├── server.py                # Unified runtime (Gemini Live + ADK + API)
+├── server.py                # Entry point: FastAPI app built from servidor/
 ├── live_protocolo.py        # Shared Live protocol helpers
 ├── provider_router.py       # Google AI Studio key pool + OmniRoute failover
 ├── transcricao.py           # Live transcription configuration
@@ -343,6 +352,8 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── jarvis_mcp_server.py     # MCP server
 ├── mcp_client_manager.py    # MCP client (external servers → ADK agents)
 ├── mcp_servers.example.json # MCP client configuration template
+├── requirements.txt         # Runtime dependencies
+├── requirements-dev.txt     # Test dependencies (pytest)
 ├── run_jarvis.sh            # Starts the server
 └── run_app.sh               # Starts the desktop widget
 ```

@@ -6,17 +6,8 @@
 
 let jarvisSessionToken = "";
 async function initSessionToken() {
-    try {
-        const res = await fetch("/api/auth/session");
-        if (res.ok) {
-            const data = await res.json();
-            jarvisSessionToken = data.token;
-            return jarvisSessionToken;
-        }
-    } catch (e) {
-        console.warn("Falha ao inicializar token local no widget:", e);
-    }
-    return "";
+    jarvisSessionToken = await JarvisComum.obterTokenDeSessao();
+    return jarvisSessionToken;
 }
 initSessionToken();
 
@@ -296,27 +287,6 @@ function updateVuMeter() {
 }
 requestAnimationFrame(updateVuMeter);
 
-function downsampleBuffer(buffer, inputSampleRate, targetSampleRate = 16000) {
-    if (inputSampleRate === targetSampleRate) return buffer;
-    if (inputSampleRate < targetSampleRate) return buffer;
-    const ratio = inputSampleRate / targetSampleRate;
-    const newLength = Math.round(buffer.length / ratio);
-    const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    while (offsetResult < result.length) {
-        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-        let accum = 0, count = 0;
-        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-            accum += buffer[i];
-            count++;
-        }
-        result[offsetResult] = count > 0 ? accum / count : 0;
-        offsetResult++;
-        offsetBuffer = nextOffsetBuffer;
-    }
-    return result;
-}
 
 // ---------------- WEB AUDIO: CAPTURA E REPRODUÇÃO PCM ----------------
 async function initAudio() {
@@ -399,7 +369,7 @@ async function initAudio() {
             if (!isSpeaking && speechHoldover <= 0) return;
 
             // Resample para 16kHz
-            const inputData = downsampleBuffer(rawInput, currentRate, 16000);
+            const inputData = JarvisComum.downsampleBuffer(rawInput, currentRate, 16000);
 
             const pcm16 = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
@@ -492,13 +462,9 @@ function playPCMResponse(base64Data) {
         state.audioCtx.resume();
     }
 
-    const binary = atob(base64Data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-    const int16Array = new Int16Array(bytes.buffer);
-    const float32Array = new Float32Array(int16Array.length);
-    for (let i = 0; i < int16Array.length; i++) float32Array[i] = int16Array[i] / 32768.0;
+    // PCM 16-bit base64 -> Float32 (payload ímpar não quebra mais o Int16Array)
+    const float32Array = JarvisComum.pcm16Base64ParaFloat32(base64Data);
+    if (!float32Array.length) return;
 
     const audioBuffer = state.audioCtx.createBuffer(1, float32Array.length, 24000);
     audioBuffer.getChannelData(0).set(float32Array);
@@ -542,19 +508,7 @@ function playPCMResponse(base64Data) {
 }
 
 function flushAudioQueue() {
-    if (state.activeAudioSources && state.activeAudioSources.size > 0) {
-        state.activeAudioSources.forEach(src => {
-            try {
-                src.stop(0);
-                src.disconnect();
-            } catch (e) {}
-        });
-        state.activeAudioSources.clear();
-    }
-    if (state.audioCtx) {
-        state.scheduledEndTime = state.audioCtx.currentTime;
-    }
-    state.speaking = false;
+    JarvisComum.interromperReproducao(state);
     dom.liveStatusText.textContent = "Ouvindo você...";
 }
 
@@ -562,53 +516,14 @@ function flushAudioQueue() {
 // ---------------- VISÃO DE TELA EM TEMPO REAL (MODO CONTROLE) ----------------
 // Enquanto o Modo Controle estiver ativo, a tela é compartilhada com a sessão Live,
 // como no compartilhamento de tela do Gemini Live. Sem isso o assistente opera às cegas.
-const VISAO_FPS = 1;
-const VISAO_LARGURA = 1024;
-const visao = { stream: null, timer: null, canvas: null, video: null };
+const visaoDeTela = JarvisComum.criarVisaoDeTela(() => state.ws, { fps: 1, largura: 1024 });
 
 async function iniciarVisaoDeTela() {
-    if (visao.stream) return true;
-    try {
-        visao.stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: VISAO_FPS, max: 5 } },
-            audio: false
-        });
-    } catch (e) {
-        console.warn("Compartilhamento de tela recusado:", e);
-        return false;
-    }
-
-    visao.video = document.createElement("video");
-    visao.video.srcObject = visao.stream;
-    visao.video.muted = true;
-    await visao.video.play();
-
-    visao.canvas = document.createElement("canvas");
-    const contexto = visao.canvas.getContext("2d");
-
-    // O usuário pode encerrar o compartilhamento pela barra do sistema
-    visao.stream.getVideoTracks()[0].addEventListener("ended", () => pararVisaoDeTela());
-
-    visao.timer = setInterval(() => {
-        if (!visao.video || !visao.video.videoWidth) return;
-        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-        const escala = VISAO_LARGURA / visao.video.videoWidth;
-        visao.canvas.width = VISAO_LARGURA;
-        visao.canvas.height = Math.round(visao.video.videoHeight * escala);
-        contexto.drawImage(visao.video, 0, 0, visao.canvas.width, visao.canvas.height);
-        const dados = visao.canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
-        state.ws.send(JSON.stringify({ type: "video", data: dados }));
-    }, Math.round(1000 / VISAO_FPS));
-    return true;
+    return visaoDeTela.iniciar();
 }
 
 function pararVisaoDeTela() {
-    if (visao.timer) clearInterval(visao.timer);
-    if (visao.stream) visao.stream.getTracks().forEach((t) => t.stop());
-    if (visao.video) visao.video.srcObject = null;
-    visao.timer = null;
-    visao.stream = null;
-    visao.video = null;
+    visaoDeTela.parar();
 }
 
 // ---------------- BANNER DE AUTORIZAÇÃO (POLICY ENGINE) ----------------

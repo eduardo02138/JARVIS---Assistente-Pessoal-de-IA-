@@ -13,6 +13,8 @@ import time
 import threading
 import preferences_manager
 import controller_engine
+import gemini_bridge
+from gemini_bridge import AGY_BIN, ANTIGRAVITY_BIN, WORKSPACE_DIR
 
 _last_gpu_result = None
 _last_gpu_time = 0.0
@@ -237,7 +239,7 @@ def list_installed_games(filter_name: str = "") -> dict:
                 elif "8a8c78608c7848a9" in bname.lower() or "windows" in bname.lower():
                     return "SSD Windows/Dados (NVMe 732GB)"
                 return f"SSD/Drive {bname}"
-        if caminho.startswith("/home/edu"):
+        if caminho.startswith(os.path.expanduser("~")):
             return "SSD Linux Principal (NVMe)"
         return "Armazenamento Local"
 
@@ -988,13 +990,13 @@ def take_screenshot(filename: str = None) -> dict:
         return {"sucesso": False, "mensagem": f"Erro ao capturar tela: {str(e)}"}
 
 # ----------------- INTEGRAÇÃO COM ANTIGRAVITY IDE & MCP -----------------
-def antigravity_open_workspace(path: str = "/home/edu/Documentos/assistente") -> dict:
+def antigravity_open_workspace(path: str = WORKSPACE_DIR) -> dict:
     """Abre um diretório ou projeto na IDE Antigravity."""
     target_path = os.path.expanduser(path)
     if not os.path.exists(target_path):
         return {"sucesso": False, "mensagem": f"O diretório '{target_path}' não foi encontrado, senhor."}
     try:
-        subprocess.Popen(["/usr/bin/antigravity", target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([ANTIGRAVITY_BIN, target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"sucesso": True, "mensagem": f"Projeto em '{target_path}' aberto com sucesso na IDE Antigravity, senhor."}
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir a IDE Antigravity: {str(e)}"}
@@ -1007,7 +1009,7 @@ def antigravity_open_file(file_path: str, line_number: int = 1) -> dict:
     if not os.path.exists(full_path):
         return {"sucesso": False, "mensagem": f"Arquivo '{full_path}' não localizado, senhor."}
     try:
-        cmd = ["/usr/bin/antigravity", "-g", f"{full_path}:{line_number or 1}"]
+        cmd = [ANTIGRAVITY_BIN, "-g", f"{full_path}:{line_number or 1}"]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"sucesso": True, "mensagem": f"Arquivo '{os.path.basename(full_path)}' aberto na linha {line_number or 1} na IDE Antigravity, senhor."}
     except Exception as e:
@@ -1016,7 +1018,7 @@ def antigravity_open_file(file_path: str, line_number: int = 1) -> dict:
 def antigravity_list_mcps() -> dict:
     """Lista todos os servidores MCP configurados e ativos na IDE Antigravity."""
     try:
-        res = subprocess.run(["/home/edu/.local/bin/agy", "mcp", "list"], capture_output=True, text=True, timeout=10)
+        res = subprocess.run([AGY_BIN, "mcp", "list"], capture_output=True, text=True, timeout=10)
         output = res.stdout.strip()
         return {
             "sucesso": True,
@@ -1150,7 +1152,6 @@ def keyboard_hotkey(keys: str) -> dict:
 
 def antigravity_open_gemini_bridge() -> dict:
     """Abre a pasta 'gemini' de auditoria e canal direto de mensagens na IDE Antigravity."""
-    import gemini_bridge
     return gemini_bridge.open_gemini_bridge()
 
 def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
@@ -1159,13 +1160,13 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
     if not clean_p:
         return {"sucesso": False, "mensagem": "Instrução para o Antigravity não pode ser vazia, senhor."}
     try:
-        cmd = ["/home/edu/.local/bin/agy"]
+        cmd = [AGY_BIN]
         if continue_session:
             cmd.append("-c")
         cmd.extend(["-p", clean_p])
         res = subprocess.run(
             cmd,
-            cwd="/home/edu/Documentos/assistente",
+            cwd=WORKSPACE_DIR,
             capture_output=True,
             text=True,
             timeout=85
@@ -1175,7 +1176,6 @@ def antigravity_run_prompt(prompt: str, continue_session: bool = True) -> dict:
 
         # Registra no log de auditoria da pasta gemini
         try:
-            import gemini_bridge
             gemini_bridge.log_audit_event("JARVIS_PROMPT", "dispatch_to_antigravity", clean_p)
             gemini_bridge.log_audit_event("ANTIGRAVITY", "response_received", ans)
             gemini_bridge.update_latest_response(f"Prompt: {clean_p[:60]}", ans)
@@ -1357,7 +1357,7 @@ GEMINI_FUNCTION_DECLARATIONS = [
             "properties": {
                 "file_path": {
                     "type": "STRING",
-                    "description": "Caminho do arquivo a ser aberto (ex: 'server.py' ou '/home/edu/Documentos/assistente/system_tools.py')."
+                    "description": "Caminho do arquivo a ser aberto (ex: 'server.py' ou '/caminho/absoluto/do/projeto/system_tools.py')."
                 },
                 "line_number": {
                     "type": "INTEGER",
