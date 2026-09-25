@@ -437,8 +437,52 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         finally:
                             pending_confirmations.pop(call_id, None)
 
+                    async def finalizar_turno():
+                        """Limpa o estado de turno após conclusão (turn_complete ou IDLE)."""
+                        if turno_concluido["done"]:
+                            return
+                        turno_concluido["done"] = True
+                        assistant_state["texto_recebido_no_turno"] = 0
+                        # Resiliência de voz: ferramenta concluída mas o modelo fechou o turno em silêncio
+                        if (assistant_state.get("ultima_ferramenta")
+                                and assistant_state.get("audio_recebido_no_turno", 0) == 0
+                                and assistant_state.get("texto_recebido_no_turno", 0) == 0):
+                            res_ferramenta = assistant_state.get("ultimo_resultado_ferramenta") or {}
+                            msg_fala = res_ferramenta.get("mensagem")
+                            if not msg_fala:
+                                if isinstance(res_ferramenta, dict):
+                                    itens = [f"{k}: {v}" for k, v in res_ferramenta.items() if k != "sucesso"]
+                                    msg_fala = f"Resultado de {assistant_state['ultima_ferramenta']}: {', '.join(itens)}"
+                                else:
+                                    msg_fala = str(res_ferramenta)
+                            logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
+                            record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
+                            model_textos_do_turno.append(msg_fala)
+                            await safe_send_json({"type": "fallback_text", "text": msg_fala})
+
+                        assistant_state["busy"] = False
+                        assistant_state["turno_texto_ativo"] = False
+                        assistant_state["ultima_ferramenta"] = None
+                        assistant_state["ultimo_resultado_ferramenta"] = None
+                        record_event("turn_complete")
+                        await safe_send_json({"type": "turn_complete"})
+
+                        # Persiste a conversa deste turno na memória de longo prazo
+                        if model_textos_do_turno:
+                            eventos_memoria_nativa.append(
+                                Event(
+                                    author="model",
+                                    content=types.Content(
+                                        parts=[types.Part(text="\n".join(model_textos_do_turno))]
+                                    ),
+                                )
+                            )
+                            model_textos_do_turno.clear()
+                        await _flush_memoria_nativa()
+
                     # Worker 1: Lê comandos e áudio do WebSocket sem interrupções
                     async def ws_client_worker():
+
                         client_muted = False
                         while True:
                             msg_text = await websocket.receive_text()
@@ -696,50 +740,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             finally:
                                 ferramentas_em_voo["n"] -= 1
 
-                        async def finalizar_turno():
-                            """Limpa o estado de turno após conclusão (turn_complete ou IDLE)."""
-                            if turno_concluido["done"]:
-                                return
-                            turno_concluido["done"] = True
-                            assistant_state["texto_recebido_no_turno"] = 0
-                            # Resiliência de voz: ferramenta concluída mas o modelo fechou o turno em silêncio
-                            if (assistant_state.get("ultima_ferramenta")
-                                    and assistant_state.get("audio_recebido_no_turno", 0) == 0
-                                    and assistant_state.get("texto_recebido_no_turno", 0) == 0):
-                                res_ferramenta = assistant_state.get("ultimo_resultado_ferramenta") or {}
-                                msg_fala = res_ferramenta.get("mensagem")
-                                if not msg_fala:
-                                    if isinstance(res_ferramenta, dict):
-                                        itens = [f"{k}: {v}" for k, v in res_ferramenta.items() if k != "sucesso"]
-                                        msg_fala = f"Resultado de {assistant_state['ultima_ferramenta']}: {', '.join(itens)}"
-                                    else:
-                                        msg_fala = str(res_ferramenta)
-                                logger.info("Modelo encerrou em silêncio após ferramenta. Enviando resposta de contingência: %s", msg_fala)
-                                record_event("model_text", {"text": msg_fala, "source": "tool_fallback"})
-                                model_textos_do_turno.append(msg_fala)
-                                await safe_send_json({"type": "fallback_text", "text": msg_fala})
-
-                            assistant_state["busy"] = False
-                            assistant_state["turno_texto_ativo"] = False
-                            assistant_state["ultima_ferramenta"] = None
-                            assistant_state["ultimo_resultado_ferramenta"] = None
-                            record_event("turn_complete")
-                            await safe_send_json({"type": "turn_complete"})
-
-                            # Persiste a conversa deste turno na memória de longo prazo
-                            if model_textos_do_turno:
-                                eventos_memoria_nativa.append(
-                                    Event(
-                                        author="model",
-                                        content=types.Content(
-                                            parts=[types.Part(text="\n".join(model_textos_do_turno))]
-                                        ),
-                                    )
-                                )
-                                model_textos_do_turno.clear()
-                            await _flush_memoria_nativa()
-
                         while True:
+
                             try:
                                 async for response in session.receive():
                                     # Estado de iteração do Extended Thinking (IN_PROGRESS/IDLE).
