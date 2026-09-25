@@ -321,12 +321,13 @@ def test_clientes_locais_usam_a_porta_configurada(monkeypatch):
 def test_nenhum_hardware_fixo_no_prompt_ou_na_interface():
     from servidor.instrucoes import JARVIS_SYSTEM_INSTRUCTION
 
-    assert "RTX 5060" not in JARVIS_SYSTEM_INSTRUCTION and "drive gamer" not in JARVIS_SYSTEM_INSTRUCTION
+    assert "drive gamer" not in JARVIS_SYSTEM_INSTRUCTION
     assert "identificada automaticamente" in JARVIS_SYSTEM_INSTRUCTION
     assert "get_machine_profile" in system_tools.TOOL_REGISTRY
     raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for arquivo in ("gemini-live-widget/widget.js", "gemini-live-widget/index.html", "system_tools.py", "controller_engine.py"):
+    for arquivo in ("gemini-live-widget/widget.js", "gemini-live-widget/index.html", "system_tools.py", "controller_engine.py", "servidor/instrucoes.py"):
         with open(os.path.join(raiz, arquivo), encoding="utf-8") as f:
             codigo = f.read()
-        for fixo in ("GPU NVIDIA RTX", "3000x2160", "1920x1080\"", "/home/edu", "SSD Gamer"):
+        for fixo in ("GPU NVIDIA RTX", "RTX 5060", "3000x2160", "1920x1080\"", "/home/edu", "SSD Gamer", "drive gamer"):
             assert fixo not in codigo, f"{arquivo} ainda assume a máquina de um usuário: {fixo}"
+
