@@ -70,7 +70,7 @@ const state = {
     micAnalyser: null,
     scheduledEndTime: 0,
     activeAudioSources: new Set(),
-    bargeIn: localStorage.getItem("gemini_barge_in") === "true",
+    bargeIn: localStorage.getItem("gemini_barge_in") !== "false",
     
     // Canvas
     canvas: null,
@@ -334,8 +334,8 @@ async function initAudio() {
         processor.onaudioprocess = (e) => {
             if (!state.connected || !state.listening || state.paused) return;
 
-            // Muta o envio enquanto o assistente esta falando ou processando para evitar falso barge-in
-            if (state.speaking || state.processing) return;
+            // Se o barge-in estiver desativado, muta o microfone enquanto o assistente fala ou processa
+            if (!state.bargeIn && (state.speaking || state.processing)) return;
 
             // Se enviou texto recentemente, nao envia audio do mic para nao colidir com o comando
             if (state.pauseMicUntil && Date.now() < state.pauseMicUntil) return;
@@ -352,6 +352,16 @@ async function initAudio() {
             // Limiar de fala natural (0.007 calibrado para não captar ruído ambiente/ventoinha e não podar voz normal/baixa; configurável via localStorage "gemini_vad_threshold")
             const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.007;
             const isSpeaking = rms >= vadThreshold;
+
+            // Barge-in: se o usuário começou a falar enquanto o assistente fala, corta o áudio imediatamente
+            if (isSpeaking && state.speaking) {
+                flushAudioQueue();
+                state.speaking = false;
+                if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    state.ws.send(JSON.stringify({ type: "interrupted" }));
+                }
+            }
+
             const currentRate = state.inputAudioCtx.sampleRate || 16000;
             const maxHoldover = Math.ceil((currentRate / 2048) * 0.8); // ~800ms de tolerância a pausas naturais
             if (isSpeaking) {
@@ -367,6 +377,7 @@ async function initAudio() {
             }
 
             if (!isSpeaking && speechHoldover <= 0) return;
+
 
             // Resample para 16kHz
             const inputData = JarvisComum.downsampleBuffer(rawInput, currentRate, 16000);

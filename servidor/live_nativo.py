@@ -371,6 +371,16 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             return
                         ultima_transcricao_usuario["texto"] = texto
                         ultima_transcricao_usuario["tempo"] = agora
+                        record_event("user_transcription", {"text": texto})
+                        gemini_bridge.log_audit_event("USER", "voice_input", texto)
+                        eventos_memoria_nativa.append(
+                            Event(
+                                author="user",
+                                content=types.Content(
+                                    parts=[types.Part(text=texto)]
+                                ),
+                            )
+                        )
                         try:
                             await safe_send_json({
                                 "type": "user_transcription",
@@ -390,6 +400,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         })
                         except Exception:
                             pass
+
 
                     transcritor_dedicado = transcricao.LiveTranscriber(
                         on_interim=on_transcricao_interim,
@@ -458,9 +469,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                                     # Repassa para a sessão do agente com controle refinado
                                     agora = time.time()
-                                    esperando_resposta = assistant_state["busy"] and (agora - assistant_state["ultimo_envio_usuario"] < 10.0)
                                     falando_agora = (agora - assistant_state["ultimo_audio"] < MIC_GRACE_S)
-                                    if allow_barge_in or (not esperando_resposta and not falando_agora):
+                                    if allow_barge_in or not falando_agora:
                                         await session.send_realtime_input(
                                             audio=types.Blob(
                                                 data=pcm_data,
@@ -470,9 +480,15 @@ async def websocket_live_endpoint(websocket: WebSocket):
 
                             elif msg_type in ("audio_stream_end", "end_of_audio", "fim_do_audio"):
                                 record_event("user_audio_stream_end")
+                                assistant_state["busy"] = True
+                                assistant_state["ultimo_envio_usuario"] = time.time()
+                                assistant_state["audio_recebido_no_turno"] = 0
+                                assistant_state["texto_recebido_no_turno"] = 0
+                                turno_concluido["done"] = False
                                 if transcritor_dedicado.is_active:
                                     _schedule_conn_task(transcritor_dedicado.send_audio_stream_end())
                                 await session.send_realtime_input(audio_stream_end=True)
+
 
                             elif msg_type == "text":
                                 user_text = msg.get("text", "").strip()
@@ -799,36 +815,41 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                             user_trans = server_content.input_transcription.text
                                             await on_transcricao_final(user_trans)
 
+                                        # Tratamento de Function Calling (Ferramentas do SO)
+                                        tool_call = getattr(response, "tool_call", None)
+                                        tem_tool_call = tool_call is not None and bool(getattr(tool_call, "function_calls", []))
+
                                         if server_content.turn_complete:
                                             # No gemini-3.8-live o turn_complete encerra o turno; no
-                                            # extended-thinking o fim real chega com status IDLE
-                                            # (turn_complete pode vir ainda com ferramentas em voo).
-                                            if not is_extended or interaction_state["status"] == "IDLE":
-                                                await finalizar_turno()
+                                            # extended-thinking o fim real chega com status IDLE.
+                                            # Se houver tool_call nesta mensagem ou ferramentas em voo,
+                                            # NÃO finaliza o turno prematuramente: aguarda o resultado e a fala do modelo.
+                                            if not tem_tool_call and ferramentas_em_voo["n"] == 0:
+                                                if not is_extended or interaction_state["status"] == "IDLE":
+                                                    await finalizar_turno()
 
-                                    # Tratamento de Function Calling (Ferramentas do SO)
-                                    tool_call = getattr(response, "tool_call", None)
-                                    if tool_call is not None:
-                                        assistant_state["busy"] = True
-                                        turno_concluido["done"] = False
-                                        for call in tool_call.function_calls:
-                                            func_name = call.name
-                                            call_id = call.id
-                                            args = call.args or {}
+                                        if tem_tool_call:
+                                            assistant_state["busy"] = True
+                                            turno_concluido["done"] = False
+                                            for call in tool_call.function_calls:
+                                                func_name = call.name
+                                                call_id = call.id
+                                                args = call.args or {}
 
-                                            record_event("tool_call", {"name": func_name, "args": args})
-                                            await safe_send_json({
-                                                "type": "tool_call",
-                                                "name": func_name,
-                                                "args": args
-                                            })
+                                                record_event("tool_call", {"name": func_name, "args": args})
+                                                await safe_send_json({
+                                                    "type": "tool_call",
+                                                    "name": func_name,
+                                                    "args": args
+                                                })
 
-                                            # Execução assíncrona: não bloqueia o recebimento de
-                                            # raciocínio e áudio do Gemini enquanto a ferramenta roda.
-                                            # A referência fica retida (contra GC) e é cancelada no fim da conexão.
-                                            tarefa = asyncio.create_task(executar_ferramenta(func_name, call_id, args))
-                                            _conn_background_tasks.add(tarefa)
-                                            tarefa.add_done_callback(_conn_background_tasks.discard)
+                                                # Execução assíncrona: não bloqueia o recebimento de
+                                                # raciocínio e áudio do Gemini enquanto a ferramenta roda.
+                                                # A referência fica retida (contra GC) e é cancelada no fim da conexão.
+                                                tarefa = asyncio.create_task(executar_ferramenta(func_name, call_id, args))
+                                                _conn_background_tasks.add(tarefa)
+                                                tarefa.add_done_callback(_conn_background_tasks.discard)
+
 
                             except Exception as gemini_err:
                                 codigo_fechamento = getattr(gemini_err, "code", None)
@@ -878,21 +899,35 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     "data": {"sucesso": True, "mensagem": "Autoridade de controle expirada, senhor. Modo Controle desativado."}
                                 })
 
-                    # Worker 5: Watchdog para recuperação automática se a Live API silenciar sem resposta
+                    # Worker 5: Watchdog para recuperação automática e auto-finalização de turno
                     async def turn_watchdog_worker():
                         while True:
-                            await asyncio.sleep(5)
-                            if assistant_state.get("busy"):
-                                agora = time.time()
+                            await asyncio.sleep(1)
+                            agora = time.time()
+                            ultimo_aud = assistant_state.get("ultimo_audio", 0.0)
+
+                            # 1. Auto-finalização de resposta falada:
+                            # Se o modelo transmitiu áudio (>0), parou há mais de 1.8s,
+                            # nenhuma ferramenta está executando e o turno ainda não foi finalizado:
+                            if (ultimo_aud > 0.0
+                                    and (agora - ultimo_aud > 1.8)
+                                    and ferramentas_em_voo["n"] == 0
+                                    and not turno_concluido["done"]
+                                    and (assistant_state.get("audio_recebido_no_turno", 0) > 0 or assistant_state.get("texto_recebido_no_turno", 0) > 0)):
+                                await finalizar_turno()
+                                continue
+
+                            # 2. Watchdog de turno inerte (para texto ou voz):
+                            # Se o usuário enviou áudio ou texto, mas a API do Gemini não respondeu em 12s:
+                            if assistant_state.get("busy") and ferramentas_em_voo["n"] == 0:
                                 ultimo_envio = assistant_state.get("ultimo_envio_usuario", 0.0)
-                                ultimo_aud = assistant_state.get("ultimo_audio", 0.0)
-                                decorrido = agora - max(ultimo_envio, ultimo_aud)
-                                if decorrido > 20.0:
-                                    logger.warning("Watchdog: turno inerte por mais de 20s sem resposta. Destravando sessão.")
+                                if ultimo_envio > 0.0 and (agora - ultimo_envio > 12.0) and (agora - ultimo_aud > 3.0):
+                                    logger.warning("Watchdog: turno inerte por mais de 12s sem resposta da Live API. Destravando sessão.")
                                     assistant_state["busy"] = False
                                     assistant_state["turno_texto_ativo"] = False
                                     turno_concluido["done"] = True
                                     await safe_send_json({"type": "turn_complete"})
+
 
                     # TaskGroup garante o cancelamento dos demais workers quando um deles termina
                     # ou falha: sem isso, o injection_worker antigo continuaria consumindo a fila global.

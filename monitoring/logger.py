@@ -109,6 +109,12 @@ def record_event(event_type: str, data: dict = None):
         _TELEMETRY["last_user_transcript"] = txt
         logger.info(f"👤 [USUÁRIO]: \"{txt}\"")
 
+    elif event_type == "user_transcription":
+        txt = d.get("text", "")
+        _TELEMETRY["user_messages"] += 1
+        _TELEMETRY["last_user_transcript"] = txt
+        logger.info(f"🎤 [VOZ DO USUÁRIO]: \"{txt}\"")
+
     elif event_type == "model_text":
         txt = d.get("text", "")
         _TELEMETRY["model_messages"] += 1
