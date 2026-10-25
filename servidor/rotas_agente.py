@@ -833,4 +833,209 @@ async def obter_relatorio_deep_research(
     return {"status": "ok", "relatorio": rep.model_dump(mode="json")}
 
 
+# ---------------- Documentos, Índice RAG Local com ACL e Copilot Pages (Fase F4) ----------------
+
+
+@router.post("/api/documents/upload")
+async def upload_documentos_rag(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    conv_id = payload.get("conversation_id") or f"conv_{sessao}"
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        if payload.get("filename"):
+            files = [payload]
+        else:
+            return JSONResponse({"status": "erro", "mensagem": "Nenhum arquivo enviado."}, status_code=400)
+
+    from documentos_rag_pages import rag_index
+
+    try:
+        ingested = rag_index.ingest_batch(user_id=sessao, conversation_id=conv_id, files=files)
+        return {
+            "status": "ok",
+            "documentos": [d.model_dump(mode="json") for d in ingested],
+        }
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+
+
+@router.get("/api/documents")
+async def listar_documentos_rag(
+    sessao: Optional[str] = Query(None),
+    conversation_id: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import rag_index
+
+    docs = rag_index.list_documents(user_id=sessao, conversation_id=conversation_id)
+    return {"status": "ok", "documentos": [d.model_dump(mode="json") for d in docs]}
+
+
+@router.delete("/api/documents/{doc_id}")
+async def excluir_documento_rag(
+    doc_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import rag_index
+
+    ok = rag_index.delete_document(user_id=sessao, doc_id=doc_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Documento não encontrado nesta sessão."}, status_code=404)
+    return {"status": "ok", "excluido": doc_id}
+
+
+@router.post("/api/documents/query")
+async def consultar_indice_rag(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    query_text = (payload.get("query") or payload.get("q") or "").strip()
+    if not query_text:
+        return JSONResponse({"status": "erro", "mensagem": "Consulta vazia."}, status_code=400)
+    from documentos_rag_pages import rag_index
+
+    chunks = rag_index.query(
+        user_id=sessao,
+        query_text=query_text,
+        conversation_id=payload.get("conversation_id"),
+        top_k=int(payload.get("top_k", 5)),
+    )
+    return {"status": "ok", "resultados": chunks}
+
+
+@router.post("/api/pages")
+async def criar_copilot_page(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    title = (payload.get("title") or payload.get("titulo") or "Nova Página").strip()
+    content = payload.get("content_markdown") or payload.get("content") or ""
+    conv_id = payload.get("conversation_id") or f"conv_{sessao}"
+    from documentos_rag_pages import pages_manager
+
+    page = pages_manager.create_page(
+        user_id=sessao,
+        conversation_id=conv_id,
+        title=title,
+        content_markdown=content,
+        summary=payload.get("summary") or "Versão inicial",
+    )
+    return {"status": "ok", "page": page.model_dump(mode="json")}
+
+
+@router.get("/api/pages")
+async def listar_copilot_pages(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import pages_manager
+
+    return {"status": "ok", "pages": pages_manager.list_pages(user_id=sessao)}
+
+
+@router.get("/api/pages/{page_id}")
+async def obter_copilot_page(
+    page_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import pages_manager
+
+    page = pages_manager.get_page(user_id=sessao, page_id=page_id)
+    if not page:
+        return JSONResponse({"status": "erro", "mensagem": "Página não encontrada."}, status_code=404)
+    return {"status": "ok", "page": page.model_dump(mode="json")}
+
+
+@router.put("/api/pages/{page_id}")
+@router.post("/api/pages/{page_id}/update")
+async def atualizar_copilot_page(
+    page_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    content = payload.get("content_markdown") if "content_markdown" in payload else payload.get("content", "")
+    from documentos_rag_pages import pages_manager
+
+    page = pages_manager.update_page(
+        user_id=sessao,
+        page_id=page_id,
+        content_markdown=str(content),
+        title=payload.get("title"),
+        summary=payload.get("summary") or "Edição iterativa",
+    )
+    if not page:
+        return JSONResponse({"status": "erro", "mensagem": "Página não encontrada nesta sessão."}, status_code=404)
+    return {"status": "ok", "page": page.model_dump(mode="json")}
+
+
+@router.post("/api/pages/{page_id}/restore")
+async def restaurar_versao_copilot_page(
+    page_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    ver_num = int(payload.get("version_number", 1))
+    from documentos_rag_pages import pages_manager
+
+    page = pages_manager.restore_version(user_id=sessao, page_id=page_id, version_number=ver_num)
+    if not page:
+        return JSONResponse({"status": "erro", "mensagem": "Página ou versão não encontrada."}, status_code=404)
+    return {"status": "ok", "page": page.model_dump(mode="json")}
+
+
+@router.get("/api/pages/{page_id}/export")
+async def exportar_copilot_page(
+    page_id: str,
+    sessao: Optional[str] = Query(None),
+    formato: str = Query("md"),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import pages_manager
+
+    try:
+        exp = pages_manager.export_page(user_id=sessao, page_id=page_id, fmt=formato)
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    if not exp:
+        return JSONResponse({"status": "erro", "mensagem": "Página não encontrada."}, status_code=404)
+    return {"status": "ok", "exportacao": exp}
+
+
+@router.delete("/api/pages/{page_id}")
+async def excluir_copilot_page(
+    page_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from documentos_rag_pages import pages_manager
+
+    ok = pages_manager.delete_page(user_id=sessao, page_id=page_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Página não encontrada."}, status_code=404)
+    return {"status": "ok", "excluida": page_id}
+
+
+
 

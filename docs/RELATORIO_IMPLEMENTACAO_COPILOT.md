@@ -52,6 +52,19 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   3. Suíte `monitoring/test_chat_memoria_pesquisa.py` 100% verde.
 - **Status**: `DONE`
 
+---
+
+### Ciclo F4 — Documentos, Índice RAG Local com ACL e Copilot Pages (P1)
+- **Tarefa**: `T-F4.1`
+- **Base SHA**: `4c5021174678397ff48fbd67f4ed012a3763f239`
+- **Entregas**:
+  1. Criação de `documentos_rag_pages.py` com extração real local para `PDF`, `DOCX`, `XLSX`, `PPTX`, `CSV`, `JSON`, `MD`, `TXT`, `PNG`, `JPEG` e `WEBP`; validação estrita de assinatura binária (bloqueando executáveis `ELF`, `PE/MZ` e extensões falsificadas); limite de 20 arquivos por conversa e 50 MB por arquivo.
+  2. `LocalRAGIndex`: indexação e ranking BM25 com filtro de ACL estrito por `user_id` antes do cálculo de similaridade e propagação imediata de exclusão de chunks em `delete_document`.
+  3. `CopilotPagesManager`: artefatos persistentes editáveis com histórico de versões imutável (`PageVersion`), restauração de versão e exportação (`md`, `html` anti-XSS, `txt`, `json`).
+  4. Rotas REST `/api/documents/*` e `/api/pages/*` integradas em `servidor/rotas_agente.py` e suíte `monitoring/test_documentos_rag_pages.py` 100% verde.
+- **Status**: `DONE`
+
+
 
 
 ---
@@ -89,6 +102,19 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   2. Integração em `servidor/rotas_agente.py`: suporte a `modo` (`rapido`, `profundo`, `estudo`, `pesquisa`, `smart`) e `conversation_id` no `POST /api/chat`, além das rotas `/api/history/*`, `/api/memory/*` e `/api/research/deep`.
   3. Suíte `monitoring/test_chat_memoria_pesquisa.py` 100% verde.
 - **Status**: `DONE`
+
+---
+
+### Ciclo F4 — Documentos, Índice RAG Local com ACL e Copilot Pages (P1)
+- **Tarefa**: `T-F4.1`
+- **Base SHA**: `4c5021174678397ff48fbd67f4ed012a3763f239`
+- **Entregas**:
+  1. Criação de `documentos_rag_pages.py` com extração real local para `PDF`, `DOCX`, `XLSX`, `PPTX`, `CSV`, `JSON`, `MD`, `TXT`, `PNG`, `JPEG` e `WEBP`; validação estrita de assinatura binária (bloqueando executáveis `ELF`, `PE/MZ` e extensões falsificadas); limite de 20 arquivos por conversa e 50 MB por arquivo.
+  2. `LocalRAGIndex`: indexação e ranking BM25 com filtro de ACL estrito por `user_id` antes do cálculo de similaridade e propagação imediata de exclusão de chunks em `delete_document`.
+  3. `CopilotPagesManager`: artefatos persistentes editáveis com histórico de versões imutável (`PageVersion`), restauração de versão e exportação (`md`, `html` anti-XSS, `txt`, `json`).
+  4. Rotas REST `/api/documents/*` e `/api/pages/*` integradas em `servidor/rotas_agente.py` e suíte `monitoring/test_documentos_rag_pages.py` 100% verde.
+- **Status**: `DONE`
+
 
 
 
