@@ -32,11 +32,11 @@ jobs:
 
       - name: Static Syntax Compilation Check
         run: |
-          python -m py_compile server.py servidor/*.py perfil_maquina.py processos.py rede_segura.py resultados_de_ferramentas.py diagnostico.py plugins/*/plugin.py live_protocolo.py gemini_bridge.py preferences_manager.py transcricao.py provider_router.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py mcp_client_manager.py monitoring/test_suite.py monitoring/test_live_protocolo.py monitoring/test_mcp_client.py monitoring/test_trust_gates.py monitoring/test_perfil_maquina.py monitoring/test_skills_mcp_ide.py monitoring/test_seguranca_execucao.py monitoring/test_resiliencia.py monitoring/test_plugins_manifesto.py monitoring/test_diagnostico.py monitoring/test_compatibilidade_adk.py monitoring/conftest.py app.py agentes/assistente.py agentes/contexto.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
+          python -m py_compile server.py servidor/*.py perfil_maquina.py processos.py rede_segura.py resultados_de_ferramentas.py diagnostico.py plugins/*/plugin.py live_protocolo.py gemini_bridge.py preferences_manager.py transcricao.py provider_router.py system_tools.py plugin_manager.py plugin_sdk.py policy_engine.py controller_engine.py jarvis_mcp_server.py mcp_client_manager.py authority_kernel.py orquestrador.py pesquisa_e_memoria.py documentos_rag_pages.py voz_visao_linux.py browser_journeys.py conectores_oauth.py cowork_scheduler.py geracao_imagens.py compras_e_saude.py monitoring/test_suite.py monitoring/test_live_protocolo.py monitoring/test_mcp_client.py monitoring/test_trust_gates.py monitoring/test_perfil_maquina.py monitoring/test_skills_mcp_ide.py monitoring/test_seguranca_execucao.py monitoring/test_resiliencia.py monitoring/test_plugins_manifesto.py monitoring/test_diagnostico.py monitoring/test_compatibilidade_adk.py monitoring/test_authority_kernel.py monitoring/test_orquestrador.py monitoring/test_chat_memoria_pesquisa.py monitoring/test_documentos_rag_pages.py monitoring/test_voz_visao.py monitoring/test_browser_journeys.py monitoring/test_conectores_oauth.py monitoring/test_cowork_scheduler.py monitoring/test_imagens.py monitoring/test_compras_saude.py monitoring/conftest.py app.py agentes/assistente.py agentes/contexto.py agentes/roteador.py agentes/ferramentas.py agentes/memoria.py adk_skill_loader.py agentes/computer_use/agente.py agentes/computer_use/playwright_computer.py
 
       - name: Runtime Module Import Check (Smoke Test)
         run: |
-          python -c "import server; import servidor.live_nativo; import servidor.live_adk; import servidor.falhas; import perfil_maquina; import processos; import rede_segura; import resultados_de_ferramentas; import diagnostico; import live_protocolo; import provider_router; import policy_engine; import system_tools; import mcp_client_manager; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
+          python -c "import server; import servidor.live_nativo; import servidor.live_adk; import servidor.falhas; import perfil_maquina; import processos; import rede_segura; import resultados_de_ferramentas; import diagnostico; import live_protocolo; import provider_router; import policy_engine; import system_tools; import mcp_client_manager; import authority_kernel; import orquestrador; import pesquisa_e_memoria; import documentos_rag_pages; import voz_visao_linux; import browser_journeys; import conectores_oauth; import cowork_scheduler; import geracao_imagens; import compras_e_saude; import agentes.memoria; import adk_skill_loader; import agentes.computer_use.agente; from agentes.computer_use.playwright_computer import PlaywrightComputer; print('Todos os modulos importados com sucesso em runtime!')"
 
       - name: Guard - Toda funcao test_* deve estar no runner explicito das suites por script
         env:
@@ -149,6 +149,13 @@ jobs:
           JARVIS_TOKEN: "ci-secret-token-test-123"
         run: |
           PYTHONPATH=. pytest monitoring/test_reproduction_p0.py -v
+
+      - name: Run Microsoft Copilot Capability Parity Suites (F1-F10)
+        env:
+          GEMINI_API_KEY: "ci-dummy-key-test"
+          JARVIS_TOKEN: "ci-secret-token-test-123"
+        run: |
+          PYTHONPATH=. pytest monitoring/test_authority_kernel.py monitoring/test_orquestrador.py monitoring/test_chat_memoria_pesquisa.py monitoring/test_documentos_rag_pages.py monitoring/test_voz_visao.py monitoring/test_browser_journeys.py monitoring/test_conectores_oauth.py monitoring/test_cowork_scheduler.py monitoring/test_imagens.py monitoring/test_compras_saude.py -v
 
       - name: Run Architecture & Security Test Suite (P0)
         env:

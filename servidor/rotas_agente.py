@@ -1857,6 +1857,99 @@ async def limpar_historico_saude(
     return {"status": "ok", "registros_removidos": removidos}
 
 
+# ---------------------------------------------------------------------------
+# F11: Catálogo e Estado Unificado de Capacidades Copilot no Workspace
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/copilot/capabilities")
+@router.get("/api/copilot/workspace")
+async def obter_estado_unificado_copilot(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    """
+    Retorna a matriz de capacidades equivalentes ao Microsoft Copilot e o estado
+    da sessão atual (AuthorityKernel, Orquestrador, Memória, Pages, Vision,
+    Journeys, Conectores OAuth, Cowork, Imagens, Compras e Saúde).
+    """
+    from authority_kernel import authority_kernel
+    from browser_journeys import journeys_manager
+    from compras_e_saude import health_space
+    from conectores_oauth import oauth_connector_manager
+    from cowork_scheduler import cowork_scheduler_service
+    from documentos_rag_pages import pages_manager, rag_index
+    from geracao_imagens import image_generation_service
+    from orquestrador import orchestrator
+    from pesquisa_e_memoria import history_manager, user_memory_manager
+    from voz_visao_linux import (
+        consented_vision_service,
+        detect_linux_multimedia_stack,
+        read_aloud_service,
+        voice_dictation_service,
+    )
+
+    uid = sessao if (sessao and sessao_aceita(sessao)) else None
+    vision_ok, vision_reason, _ = (
+        consented_vision_service.check_consent(session_id=uid, source="screen")
+        if uid
+        else (False, "sem_sessao", None)
+    )
+
+    return {
+        "status": "ok",
+        "sessao": uid,
+        "modes_available": ["rapido", "profundo", "pesquisa", "estudo"],
+        "authority_kernel": {
+            "registered_executors_count": len(authority_kernel.list_executors()),
+            "journal_entries_count": len(authority_kernel.get_journal(limit=50)),
+        },
+        "capabilities": {
+            "chat_multimodel_and_modes": True,
+            "history_and_personalized_memory": True,
+            "web_search_and_deep_research_real": True,
+            "documents_rag_with_acl": True,
+            "copilot_pages_canvas": True,
+            "voice_live_dictation_read_aloud": True,
+            "copilot_vision_consented": True,
+            "autonomous_browser_and_journeys": True,
+            "oauth_pkce_connectors": True,
+            "cowork_and_scheduled_tasks": True,
+            "image_generation_and_iterative_editing": True,
+            "shopping_and_isolated_health_space": True,
+        },
+        "user_workspace": (
+            {
+                "conversations_count": len(history_manager.list_conversations(user_id=uid)),
+                "memories_count": len(user_memory_manager.search_facts(user_id=uid)),
+                "memory_retention": user_memory_manager.get_retention_policy(user_id=uid).model_dump(mode="json"),
+                "documents_count": len(rag_index.list_documents(user_id=uid)),
+                "pages_count": len(pages_manager.list_pages(user_id=uid)),
+                "dictation": voice_dictation_service.get_state(session_id=uid).model_dump(mode="json"),
+                "read_aloud": read_aloud_service.get_state(session_id=uid).model_dump(mode="json"),
+                "vision_authorized": vision_ok,
+                "vision_reason": vision_reason,
+                "journeys_settings": journeys_manager.get_settings(user_id=uid).model_dump(mode="json"),
+                "journeys_count": len(journeys_manager.list_journeys(user_id=uid)),
+                "connectors": oauth_connector_manager.list_connectors_status(user_id=uid),
+                "cowork_jobs_count": len(cowork_scheduler_service.list_jobs(user_id=uid)),
+                "schedules_count": len(cowork_scheduler_service.list_schedules(user_id=uid)),
+                "orchestrator_tasks_count": len(orchestrator.list_tasks(session_id=uid)),
+                "image_provider_available": image_generation_service.is_provider_configured(),
+                "image_gallery_count": len(image_generation_service.list_gallery(user_id=uid)),
+                "health_opt_in": health_space.is_opted_in(user_id=uid),
+                "pending_approvals": [
+                    p.to_dict() for p in policy_engine.list_pending_actions(session_id=uid, user_id=uid)
+                ],
+            }
+            if uid
+            else None
+        ),
+        "linux_multimedia": detect_linux_multimedia_stack(),
+    }
+
+
+
 
 
 

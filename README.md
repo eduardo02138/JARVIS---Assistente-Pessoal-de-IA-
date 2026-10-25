@@ -459,6 +459,16 @@ No real API key is needed: the suites run offline with dummy credentials. GitHub
 ├── processos.py             # Child processes without JARVIS's secrets
 ├── rede_segura.py           # SSRF guard for read_web_page
 ├── resultados_de_ferramentas.py # JSON-safe, size-capped tool results
+├── authority_kernel.py      # Single authority kernel, one-shot capabilities & causal journal
+├── orquestrador.py          # Durable orchestrator (Planner -> Router -> Executor -> Verifier)
+├── pesquisa_e_memoria.py    # Conversation history, per-user memory & verified Deep Research
+├── documentos_rag_pages.py  # Multi-format document ingestion, ACL RAG & Copilot Pages
+├── voz_visao_linux.py       # Voice turn debouncer, dictation, Read Aloud & Consented Vision
+├── browser_journeys.py      # Autonomous browser policy guard & opt-in Copilot Journeys
+├── conectores_oauth.py      # OAuth 2.0 + PKCE connectors with 0600 local token vault
+├── cowork_scheduler.py      # Durable multi-step Cowork jobs & recurring task scheduler
+├── geracao_imagens.py       # Iterative image generation/editing pipeline with provenance
+├── compras_e_saude.py       # Structured shopping assistant & isolated opt-in health space
 ├── diagnostico.py           # Machine/configuration doctor
 ├── requirements.txt         # Runtime dependencies
 ├── requirements-dev.txt     # Test dependencies (pytest)

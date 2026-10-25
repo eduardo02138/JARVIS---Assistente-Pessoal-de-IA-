@@ -405,6 +405,16 @@ Não é preciso chave real: as suítes rodam offline com credenciais fictícias.
 ├── processos.py             # Processos filhos sem os segredos do JARVIS
 ├── rede_segura.py           # Proteção contra SSRF do read_web_page
 ├── resultados_de_ferramentas.py # Resultados de ferramentas serializáveis e limitados
+├── authority_kernel.py      # Autoridade única one-shot, journal causal e proteção anti-injection
+├── orquestrador.py          # Orquestrador durável (Planner -> Router -> Executor -> Verifier)
+├── pesquisa_e_memoria.py    # Histórico, memória personalizada por usuário e Deep Research real
+├── documentos_rag_pages.py  # Ingestão documental multi-formato, RAG com ACL e Copilot Pages
+├── voz_visao_linux.py       # Debounce de turnos de voz, ditado, Read Aloud e Copilot Vision
+├── browser_journeys.py      # Guarda de navegador autônomo e Copilot Journeys (opt-in)
+├── conectores_oauth.py      # Conectores pessoais/corporativos com OAuth 2.0 + PKCE (cofre 0600)
+├── cowork_scheduler.py      # Copilot Cowork multi-etapa e tarefas agendadas persistentes
+├── geracao_imagens.py       # Pipeline de geração e edição iterativa de imagens com proveniência
+├── compras_e_saude.py       # Assistente de compras e espaço informativo de saúde isolado
 ├── diagnostico.py           # Diagnóstico da máquina e da configuração
 ├── requirements.txt         # Dependências de runtime
 ├── requirements-dev.txt     # Dependências de teste (pytest)

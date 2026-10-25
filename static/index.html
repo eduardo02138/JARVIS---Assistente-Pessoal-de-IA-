@@ -39,6 +39,7 @@
                 <div id="ideModeIndicator" class="ide-mode-badge hidden">⚡ MODO IDE ATIVO (ANTIGRAVITY)</div>
                 <div id="controlModeIndicator" class="control-mode-badge hidden">🎮 MODO CONTROLE ATIVO (MOUSE & TECLADO)</div>
                 <div id="computerModeIndicator" class="computer-mode-badge hidden">🖥️ MODO COMPUTADOR (PLAYWRIGHT AGENT)</div>
+                <div id="visionConsentIndicator" class="computer-mode-badge hidden">👁️ COPILOT VISION (CONSENTIMENTO ATIVO)</div>
             </div>
 
             <div class="header-right">
@@ -189,7 +190,18 @@
 
                     <!-- Sugestões de Comandos Rápidos -->
                     <div class="quick-commands-box">
-                        <div class="quick-title">PROTOCOLOS SUGERIDOS:</div>
+                        <div class="quick-title">MODO COPILOT & PROTOCOLOS SUGERIDOS:</div>
+                        <div class="copilot-mode-bar" style="display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;">
+                            <select id="copilotCognitiveMode" class="hud-select" title="Selecionar Modo Cognitivo (Rápido, Think Deeper, Deep Research, Study)" style="max-width:220px; padding:4px 8px; font-size:12px;">
+                                <option value="rapido" selected>⚡ Modo Rápido (Fast)</option>
+                                <option value="profundo">🧠 Think Deeper (Profundo)</option>
+                                <option value="pesquisa">🔬 Deep Research (Fontes Verificadas)</option>
+                                <option value="estudo">📚 Study &amp; Learn (Socrático)</option>
+                            </select>
+                            <span id="copilotWorkspaceBadges" style="font-size:11px; opacity:0.85; align-self:center;">
+                                Pages · Memória · RAG · OAuth PKCE · Journeys · Cowork · Vision
+                            </span>
+                        </div>
                         <div class="quick-chips">
                             <button class="chip-btn" data-prompt="Jarvis, qual é o status do sistema e da bateria?">📊 Status do Sistema</button>
                             <button class="chip-btn" data-prompt="Jarvis, que horas são e qual é a data de hoje?">🕒 Horário Atual</button>
