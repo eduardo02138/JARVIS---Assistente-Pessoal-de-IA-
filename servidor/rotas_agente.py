@@ -1554,6 +1554,134 @@ async def executar_acao_conector(
     return res
 
 
+# ---------------------------------------------------------------------------
+# F8: Rotas de Copilot Cowork e Tarefas Agendadas (Scheduler)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/cowork/jobs")
+async def criar_e_executar_job_cowork(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    title = (payload.get("title") or payload.get("titulo") or "Job Cowork").strip()
+    steps = payload.get("steps") or []
+    if not isinstance(steps, list) or not steps:
+        return JSONResponse({"status": "erro", "mensagem": "Lista 'steps' obrigatória."}, status_code=400)
+    from cowork_scheduler import cowork_scheduler_service
+
+    job = cowork_scheduler_service.create_job(user_id=sessao, title=title, steps=steps)
+    if bool(payload.get("auto_run", True)):
+        job = cowork_scheduler_service.run_or_resume_job(user_id=sessao, job_id=job.job_id)
+    return {"status": "ok", "job": job.model_dump(mode="json")}
+
+
+@router.post("/api/cowork/jobs/{job_id}/resume")
+async def retomar_job_cowork(
+    job_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from cowork_scheduler import cowork_scheduler_service
+
+    try:
+        job = cowork_scheduler_service.run_or_resume_job(user_id=sessao, job_id=job_id)
+    except KeyError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=404)
+    return {"status": "ok", "job": job.model_dump(mode="json")}
+
+
+@router.post("/api/cowork/jobs/{job_id}/cancel")
+async def cancelar_job_cowork(
+    job_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from cowork_scheduler import cowork_scheduler_service
+
+    job = cowork_scheduler_service.cancel_job(user_id=sessao, job_id=job_id)
+    if not job:
+        return JSONResponse({"status": "erro", "mensagem": "Job não encontrado."}, status_code=404)
+    return {"status": "ok", "job": job.model_dump(mode="json")}
+
+
+@router.get("/api/cowork/jobs")
+async def listar_jobs_cowork(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from cowork_scheduler import cowork_scheduler_service
+
+    jobs = cowork_scheduler_service.list_jobs(user_id=sessao)
+    notifs = cowork_scheduler_service.list_notifications(user_id=sessao)
+    return {
+        "status": "ok",
+        "jobs": [j.model_dump(mode="json") for j in jobs],
+        "notifications": [n.model_dump(mode="json") for n in notifs],
+    }
+
+
+@router.post("/api/schedules")
+async def criar_tarefa_agendada(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    title = (payload.get("title") or payload.get("titulo") or "Agendamento").strip()
+    goal = (payload.get("prompt_or_goal") or payload.get("goal") or payload.get("prompt") or "").strip()
+    if not goal:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'prompt_or_goal' obrigatório."}, status_code=400)
+    from cowork_scheduler import cowork_scheduler_service
+
+    sched = cowork_scheduler_service.create_schedule(
+        user_id=sessao,
+        title=title,
+        prompt_or_goal=goal,
+        schedule_type=payload.get("schedule_type") or "recurring",
+        interval_seconds=float(payload.get("interval_seconds") or 3600.0),
+        first_run_at=payload.get("first_run_at"),
+        steps_template=payload.get("steps_template"),
+    )
+    return {"status": "ok", "schedule": sched.model_dump(mode="json")}
+
+
+@router.get("/api/schedules")
+async def listar_tarefas_agendadas(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from cowork_scheduler import cowork_scheduler_service
+
+    scheds = cowork_scheduler_service.list_schedules(user_id=sessao)
+    return {"status": "ok", "schedules": [s.model_dump(mode="json") for s in scheds]}
+
+
+@router.delete("/api/schedules/{schedule_id}")
+async def excluir_tarefa_agendada(
+    schedule_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from cowork_scheduler import cowork_scheduler_service
+
+    ok = cowork_scheduler_service.delete_schedule(user_id=sessao, schedule_id=schedule_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Agendamento não encontrado."}, status_code=404)
+    return {"status": "ok", "excluido": schedule_id}
+
+
+
 
 
 
