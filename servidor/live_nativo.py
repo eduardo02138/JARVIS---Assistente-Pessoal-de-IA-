@@ -45,6 +45,7 @@ from servidor.seguranca import (
     registrar_rejeicao_de_token,
     verify_jarvis_token,
 )
+from voz_visao_linux import VoiceTurnDebouncer
 
 router = APIRouter()
 
@@ -492,6 +493,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                     async def ws_client_worker():
 
                         client_muted = False
+                        turn_debouncer = VoiceTurnDebouncer()
                         while True:
                             msg_text = await websocket.receive_text()
                             msg = json.loads(msg_text)
@@ -501,9 +503,11 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 client_muted = bool(msg.get("muted", msg.get("mutado", False)))
                                 record_event("microphone_state_changed", {"muted": client_muted})
                                 if client_muted:
-                                    if transcritor_dedicado.is_active:
-                                        _schedule_conn_task(transcritor_dedicado.send_audio_stream_end())
-                                    await session.send_realtime_input(audio_stream_end=True)
+                                    should_end, _ = turn_debouncer.should_emit_stream_end()
+                                    if should_end:
+                                        if transcritor_dedicado.is_active:
+                                            _schedule_conn_task(transcritor_dedicado.send_audio_stream_end())
+                                        await session.send_realtime_input(audio_stream_end=True)
                                 continue
 
                             if msg_type == "audio":
@@ -513,6 +517,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 audio_b64 = msg.get("data", "")
                                 if audio_b64:
                                     pcm_data = base64.b64decode(audio_b64)
+                                    turn_debouncer.record_audio_chunk(pcm_data)
                                     record_event("user_audio_chunk", {"bytes": len(pcm_data)})
 
                                     # Encaminha imediatamente para o transcritor de baixa latência
@@ -531,6 +536,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                         )
 
                             elif msg_type in ("audio_stream_end", "end_of_audio", "fim_do_audio"):
+                                should_end, motivo = turn_debouncer.should_emit_stream_end()
+                                if not should_end:
+                                    record_event("user_audio_stream_end_debounced", {"reason": motivo})
+                                    continue
                                 record_event("user_audio_stream_end")
                                 assistant_state["busy"] = True
                                 assistant_state["ultimo_envio_usuario"] = time.time()

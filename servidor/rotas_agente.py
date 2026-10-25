@@ -1,5 +1,6 @@
 """Rotas do agente ADK: chat de texto, confirmações pendentes e Modo Computador."""
 
+import base64
 import time
 from typing import Optional
 
@@ -1035,6 +1036,228 @@ async def excluir_copilot_page(
     if not ok:
         return JSONResponse({"status": "erro", "mensagem": "Página não encontrada."}, status_code=404)
     return {"status": "ok", "excluida": page_id}
+
+
+# ---------------------------------------------------------------------------
+# F5: Rotas de Voz (Ditado, Read Aloud) e Visão Consentida (Copilot Vision)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/voice/dictation/start")
+async def iniciar_modo_ditado(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import voice_dictation_service
+
+    state = voice_dictation_service.start_dictation(
+        session_id=sessao,
+        language_code=payload.get("language_code") or "pt-BR",
+        clear=bool(payload.get("clear", False)),
+    )
+    return {"status": "ok", "dictation": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/dictation/append")
+async def adicionar_segmento_ditado(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import voice_dictation_service
+
+    try:
+        state = voice_dictation_service.append_segment(
+            session_id=sessao,
+            text_segment=str(payload.get("text") or payload.get("segment") or ""),
+        )
+    except PermissionError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=403)
+    return {"status": "ok", "dictation": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/dictation/stop")
+async def parar_modo_ditado(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import voice_dictation_service
+
+    state = voice_dictation_service.stop_dictation(session_id=sessao)
+    return {"status": "ok", "dictation": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/dictation/clear")
+async def limpar_buffer_ditado(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import voice_dictation_service
+
+    state = voice_dictation_service.clear_buffer(session_id=sessao)
+    return {"status": "ok", "dictation": state.model_dump(mode="json")}
+
+
+@router.get("/api/voice/dictation/state")
+async def obter_estado_ditado(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from voz_visao_linux import voice_dictation_service
+
+    state = voice_dictation_service.get_state(session_id=sessao)
+    return {"status": "ok", "dictation": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/read_aloud/start")
+async def iniciar_leitura_voz_alta(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import read_aloud_service
+
+    state = read_aloud_service.start_read_aloud(
+        session_id=sessao,
+        text=str(payload.get("text") or payload.get("texto") or ""),
+        voice_name=str(payload.get("voice_name") or payload.get("voz") or "Aoede"),
+        rate=float(payload.get("rate") or payload.get("velocidade") or 1.0),
+        language_code=str(payload.get("language_code") or "pt-BR"),
+    )
+    return {"status": "ok", "read_aloud": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/read_aloud/pause")
+async def pausar_leitura_voz_alta(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import read_aloud_service
+
+    state = read_aloud_service.pause(session_id=sessao)
+    return {"status": "ok", "read_aloud": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/read_aloud/resume")
+async def retomar_leitura_voz_alta(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import read_aloud_service
+
+    state = read_aloud_service.resume(session_id=sessao)
+    return {"status": "ok", "read_aloud": state.model_dump(mode="json")}
+
+
+@router.post("/api/voice/read_aloud/stop")
+async def parar_leitura_voz_alta(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import read_aloud_service
+
+    state = read_aloud_service.stop(session_id=sessao)
+    return {"status": "ok", "read_aloud": state.model_dump(mode="json")}
+
+
+@router.get("/api/voice/read_aloud/state")
+async def estado_leitura_voz_alta(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from voz_visao_linux import read_aloud_service
+
+    state = read_aloud_service.get_state(session_id=sessao)
+    return {"status": "ok", "read_aloud": state.model_dump(mode="json")}
+
+
+@router.post("/api/vision/consent/grant")
+async def conceder_consentimento_visual(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    sources = payload.get("sources") or ["screen", "window", "upload"]
+    if isinstance(sources, str):
+        sources = [sources]
+    from voz_visao_linux import consented_vision_service
+
+    try:
+        rec = consented_vision_service.grant_consent(
+            session_id=sessao,
+            sources=sources,
+            ttl_seconds=float(payload.get("ttl_seconds") or 900.0),
+            target_window_title=payload.get("target_window_title"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return {"status": "ok", "consent": rec.model_dump(mode="json")}
+
+
+@router.post("/api/vision/consent/revoke")
+async def revogar_consentimento_visual(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from voz_visao_linux import consented_vision_service
+
+    revoked = consented_vision_service.revoke_consent(session_id=sessao)
+    return {"status": "ok", "revoked": revoked}
+
+
+@router.get("/api/vision/consent/status")
+async def status_consentimento_visual(
+    sessao: Optional[str] = Query(None),
+    source: str = Query("screen"),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from voz_visao_linux import consented_vision_service
+
+    ok, reason, rec = consented_vision_service.check_consent(session_id=sessao, source=source)  # type: ignore[arg-type]
+    return {
+        "status": "ok",
+        "authorized": ok,
+        "reason": reason,
+        "consent": rec.model_dump(mode="json") if rec else None,
+    }
+
+
+@router.post("/api/vision/analyze")
+async def analisar_visao_consentida(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    source = (payload.get("source") or "screen").strip()
+    question = (payload.get("question") or payload.get("pergunta") or "").strip()
+    if not question:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'question' obrigatório."}, status_code=400)
+    image_b64 = payload.get("image_base64") or payload.get("data") or ""
+    img_bytes = base64.b64decode(image_b64) if image_b64 else None
+    from voz_visao_linux import consented_vision_service
+
+    try:
+        res = consented_vision_service.analyze_visual_input(
+            session_id=sessao,
+            source=source,  # type: ignore[arg-type]
+            question=question,
+            image_bytes=img_bytes,
+            ocr_hint_text=payload.get("ocr_hint_text"),
+            requested_tools=payload.get("requested_tools"),
+        )
+    except PermissionError as exc:
+        return JSONResponse({"status": "bloqueado", "mensagem": str(exc)}, status_code=403)
+    return res
+
+
+@router.get("/api/linux/multimedia_stack")
+async def inspecionar_stack_multimidia_linux(_=Depends(verify_jarvis_token)):
+    from voz_visao_linux import detect_linux_multimedia_stack
+
+    return {"status": "ok", "stack": detect_linux_multimedia_stack()}
+
 
 
 

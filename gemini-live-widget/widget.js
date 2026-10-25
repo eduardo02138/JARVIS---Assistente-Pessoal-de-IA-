@@ -331,6 +331,8 @@ async function initAudio() {
 
         const processor = state.inputAudioCtx.createScriptProcessor(2048, 1, 1);
         let speechHoldover = 0;
+        let voicedFramesInBurst = 0;
+        const minVoicedFramesForTurn = 3;
         processor.onaudioprocess = (e) => {
             if (!state.connected || !state.listening || state.paused) return;
 
@@ -349,8 +351,8 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala natural (0.007 calibrado para não captar ruído ambiente/ventoinha e não podar voz normal/baixa; configurável via localStorage "gemini_vad_threshold")
-            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.007;
+            // Limiar de fala natural (0.012 calibrado contra ruído ambiente/ventoinha GPU; configurável via localStorage "gemini_vad_threshold")
+            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.012;
             const isSpeaking = rms >= vadThreshold;
 
             // Barge-in: se o usuário começou a falar enquanto o assistente fala, corta o áudio imediatamente
@@ -363,16 +365,18 @@ async function initAudio() {
             }
 
             const currentRate = state.inputAudioCtx.sampleRate || 16000;
-            const maxHoldover = Math.ceil((currentRate / 2048) * 0.8); // ~800ms de tolerância a pausas naturais
+            const maxHoldover = Math.ceil((currentRate / 2048) * 1.4); // ~1400ms de tolerância a pausas naturais sem picotar frases
             if (isSpeaking) {
+                voicedFramesInBurst++;
                 speechHoldover = maxHoldover;
             } else if (speechHoldover > 0) {
                 speechHoldover--;
                 if (speechHoldover === 0) {
-                    // VAD Híbrida da Live API: notifica término de fala após pausa real e sustentada
-                    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    // Só emite audio_stream_end se houve fala sustentada real (>= minVoicedFramesForTurn), evitando picos de ruído
+                    if (voicedFramesInBurst >= minVoicedFramesForTurn && state.ws && state.ws.readyState === WebSocket.OPEN) {
                         state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
                     }
+                    voicedFramesInBurst = 0;
                 }
             }
 
