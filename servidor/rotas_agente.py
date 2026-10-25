@@ -1436,6 +1436,125 @@ async def excluir_todas_journeys(
     return {"status": "ok", "journeys_excluidas": count}
 
 
+# ---------------------------------------------------------------------------
+# F7: Rotas de Conectores Pessoais e Corporativos com OAuth 2.0 + PKCE
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/connectors")
+async def listar_conectores_oauth(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from conectores_oauth import oauth_connector_manager
+
+    return {
+        "status": "ok",
+        "sessao": sessao,
+        "connectors": oauth_connector_manager.list_connectors_status(user_id=sessao),
+    }
+
+
+@router.post("/api/connectors/oauth/start")
+async def iniciar_fluxo_oauth_pkce(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    provider_id = (payload.get("provider_id") or payload.get("provider") or "").strip()
+    from conectores_oauth import oauth_connector_manager
+
+    try:
+        flow = oauth_connector_manager.start_authorization_flow(
+            user_id=sessao,
+            provider_id=provider_id,
+            scopes=payload.get("scopes"),
+            redirect_uri=payload.get("redirect_uri") or "http://127.0.0.1:8000/api/connectors/oauth/callback",
+            code_challenge_override=payload.get("code_challenge"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return {"status": "ok", "flow": flow}
+
+
+@router.post("/api/connectors/oauth/callback")
+async def concluir_fluxo_oauth_pkce(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from conectores_oauth import oauth_connector_manager
+
+    try:
+        tok = oauth_connector_manager.complete_authorization_flow(
+            user_id=sessao,
+            provider_id=str(payload.get("provider_id") or payload.get("provider") or ""),
+            state=str(payload.get("state") or ""),
+            code=str(payload.get("code") or ""),
+            code_verifier=str(payload.get("code_verifier") or ""),
+            granted_scopes=payload.get("granted_scopes"),
+            access_token_from_provider=payload.get("access_token"),
+            expires_in=float(payload.get("expires_in") or 3600.0),
+        )
+    except PermissionError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=403)
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return {
+        "status": "ok",
+        "token_id": tok.token_id,
+        "provider_id": tok.provider_id,
+        "scopes": tok.scopes,
+        "expires_at": tok.expires_at,
+    }
+
+
+@router.post("/api/connectors/{provider_id}/revoke")
+async def revogar_conector_oauth(
+    provider_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from conectores_oauth import oauth_connector_manager
+
+    ok = oauth_connector_manager.revoke_connector(user_id=sessao, provider_id=provider_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Conector não encontrado para este usuário."}, status_code=404)
+    return {"status": "ok", "revogado": provider_id}
+
+
+@router.post("/api/connectors/{provider_id}/execute")
+async def executar_acao_conector(
+    provider_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    action = (payload.get("action") or "").strip()
+    if not action:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'action' obrigatório."}, status_code=400)
+    from conectores_oauth import oauth_connector_manager
+
+    try:
+        res = oauth_connector_manager.execute_action(
+            user_id=sessao,
+            provider_id=provider_id,
+            action=action,
+            params=payload.get("params") or {},
+        )
+    except PermissionError as exc:
+        return JSONResponse({"status": "bloqueado", "mensagem": str(exc)}, status_code=403)
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return res
+
+
+
 
 
 
