@@ -41,6 +41,18 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   4. Suíte `monitoring/test_orquestrador.py` 100% verde.
 - **Status**: `DONE`
 
+---
+
+### Ciclo F3 — Chat, Memória Personalizada, Modos e Deep Research Real (P1)
+- **Tarefa**: `T-F3.1`
+- **Base SHA**: `7c1478f031c5f75cde97d25dd4d65ab05d974b2c`
+- **Entregas**:
+  1. Criação de `pesquisa_e_memoria.py` com `ConversationHistoryManager` (histórico isolado por usuário, listagem, reabertura, exclusão granular/total e snapshots estáticos de compartilhamento `SharedConversationSnapshot`), `UserMemoryManager` (memória personalizada isolada por usuário, busca por relevância, opt-out de personalização e expurgo automático por política de retenção) e `RealDeepResearchEngine` (decomposição em sub-perguntas, verificação SHA-256 de citações, rejeição de URLs maliciosas/SSRF e relatório Markdown auditável sem fabricação de citações).
+  2. Integração em `servidor/rotas_agente.py`: suporte a `modo` (`rapido`, `profundo`, `estudo`, `pesquisa`, `smart`) e `conversation_id` no `POST /api/chat`, além das rotas `/api/history/*`, `/api/memory/*` e `/api/research/deep`.
+  3. Suíte `monitoring/test_chat_memoria_pesquisa.py` 100% verde.
+- **Status**: `DONE`
+
+
 
 ---
 
@@ -66,5 +78,17 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   3. Rotas REST autenticadas e isoladas por sessão em `servidor/rotas_agente.py`: `/api/orchestrator/route`, `/api/orchestrator/tasks`, `/api/orchestrator/tasks/{task_id}`, `/api/orchestrator/tasks/{task_id}/run`, `/api/orchestrator/tasks/{task_id}/cancel`.
   4. Suíte `monitoring/test_orquestrador.py` 100% verde.
 - **Status**: `DONE`
+
+---
+
+### Ciclo F3 — Chat, Memória Personalizada, Modos e Deep Research Real (P1)
+- **Tarefa**: `T-F3.1`
+- **Base SHA**: `7c1478f031c5f75cde97d25dd4d65ab05d974b2c`
+- **Entregas**:
+  1. Criação de `pesquisa_e_memoria.py` com `ConversationHistoryManager` (histórico isolado por usuário, listagem, reabertura, exclusão granular/total e snapshots estáticos de compartilhamento `SharedConversationSnapshot`), `UserMemoryManager` (memória personalizada isolada por usuário, busca por relevância, opt-out de personalização e expurgo automático por política de retenção) e `RealDeepResearchEngine` (decomposição em sub-perguntas, verificação SHA-256 de citações, rejeição de URLs maliciosas/SSRF e relatório Markdown auditável sem fabricação de citações).
+  2. Integração em `servidor/rotas_agente.py`: suporte a `modo` (`rapido`, `profundo`, `estudo`, `pesquisa`, `smart`) e `conversation_id` no `POST /api/chat`, além das rotas `/api/history/*`, `/api/memory/*` e `/api/research/deep`.
+  3. Suíte `monitoring/test_chat_memoria_pesquisa.py` 100% verde.
+- **Status**: `DONE`
+
 
 

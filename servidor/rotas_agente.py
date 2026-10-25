@@ -187,11 +187,32 @@ async def api_chat_adk(payload: dict, _=Depends(verify_jarvis_token)):
     # Turnos da mesma sessão rodam em fila: dois pedidos simultâneos não intercalam
     # eventos na mesma conversa do ADK. Sessões diferentes seguem em paralelo.
     async with trava_da_sessao(sessao):
-        return await _turno_de_chat(texto, sessao, payload.get("caminho"))
+        return await _turno_de_chat(
+            texto,
+            sessao,
+            payload.get("caminho"),
+            modo_solicitado=payload.get("modo") or payload.get("mode"),
+            conversation_id=payload.get("conversation_id"),
+        )
 
 
-async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]):
+async def _turno_de_chat(
+    texto: str,
+    sessao: str,
+    caminho_forcado: Optional[str],
+    modo_solicitado: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+):
+    from orquestrador import ConversationMode, jarvis_orchestrator
+    from pesquisa_e_memoria import format_mode_instruction, history_manager
+
     usuario = sessao
+    decisao_rota = jarvis_orchestrator.router.route(
+        texto, requested_mode=modo_solicitado or ConversationMode.SMART
+    )
+    modo_efetivo = decisao_rota.effective_mode
+    conv_id = conversation_id or f"conv_{sessao}"
+
     marcas_navegador = (
         "modo computador",
         "use o navegador",
@@ -205,8 +226,21 @@ async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]
         caminho, motivo = caminho_forcado, "escolha explícita"
     elif any(marca in texto_min for marca in marcas_navegador):
         caminho, motivo = CAMINHO_COMPUTADOR, "solicitação de operação do navegador (Computer Use)"
+    elif modo_solicitado and modo_solicitado.strip().lower() in ("profundo", "analise", "estudo", "pesquisa"):
+        caminho, motivo = "complexo", decisao_rota.reason
+    elif modo_solicitado and modo_solicitado.strip().lower() == "rapido":
+        caminho, motivo = CAMINHO_RAPIDO, decisao_rota.reason
     else:
         caminho, motivo = escolher_caminho(texto)
+
+    # Registra turno do usuário no histórico isolado por sessão/usuário
+    history_manager.append_turn(
+        user_id=usuario,
+        conversation_id=conv_id,
+        role="user",
+        text=texto,
+        mode=modo_efetivo.value,
+    )
 
     # Se o provedor ativo for OmniRoute, despacha diretamente sem invocar runner Google
     if provider_router.active_provider == "omniroute":
@@ -359,13 +393,25 @@ async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]
 
     agendar_tarefa_do_servidor(_salvar_memoria_bg())
 
+    resposta_final = resposta.strip()
+    history_manager.append_turn(
+        user_id=usuario,
+        conversation_id=conv_id,
+        role="assistant",
+        text=resposta_final,
+        mode=modo_efetivo.value,
+    )
+
     return {
         "status": "ok",
         "caminho": caminho,
+        "modo": (modo_solicitado or "smart"),
+        "modo_efetivo": modo_efetivo.value,
+        "conversation_id": conv_id,
         "motivo_do_roteamento": motivo,
         "provedor": "google_studio",
         "modelo": runner.agent.model,
-        "resposta": resposta.strip(),
+        "resposta": resposta_final,
         "ferramentas": ferramentas_executadas,
     }
 
@@ -526,5 +572,265 @@ async def cancelar_tarefa_orquestrada(
     if not task:
         return JSONResponse({"status": "erro", "mensagem": "Tarefa não encontrada nesta sessão."}, status_code=404)
     return {"status": "ok", "task": task.model_dump(mode="json")}
+
+
+# ---------------- Histórico, Memória Personalizada e Deep Research Real (Fase F3) ----------------
+
+
+@router.get("/api/history/conversations")
+async def listar_conversas_usuario(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import history_manager
+
+    return {"status": "ok", "sessao": sessao, "conversas": history_manager.list_conversations(user_id=sessao)}
+
+
+@router.get("/api/history/conversations/{conversation_id}")
+async def reabrir_conversa_usuario(
+    conversation_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import history_manager
+
+    conv = history_manager.get_conversation(user_id=sessao, conversation_id=conversation_id)
+    if not conv:
+        return JSONResponse({"status": "erro", "mensagem": "Conversa não encontrada para este usuário."}, status_code=404)
+    return {"status": "ok", "conversa": conv.model_dump(mode="json")}
+
+
+@router.delete("/api/history/conversations/{conversation_id}")
+async def excluir_conversa_especifica(
+    conversation_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import history_manager
+
+    ok = history_manager.delete_conversation(user_id=sessao, conversation_id=conversation_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Conversa não encontrada."}, status_code=404)
+    return {"status": "ok", "excluida": conversation_id}
+
+
+@router.delete("/api/history/conversations")
+async def excluir_todo_historico_usuario(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import history_manager
+
+    removidas = history_manager.delete_all_conversations(user_id=sessao)
+    return {"status": "ok", "conversas_excluidas": removidas}
+
+
+@router.post("/api/history/share")
+async def criar_link_compartilhamento_estatico(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    conv_id = payload.get("conversation_id")
+    if not conv_id:
+        return JSONResponse({"status": "erro", "mensagem": "conversation_id obrigatório."}, status_code=400)
+    from pesquisa_e_memoria import history_manager
+
+    snap = history_manager.create_share_snapshot(
+        user_id=sessao,
+        conversation_id=conv_id,
+        title=payload.get("title"),
+    )
+    if not snap:
+        return JSONResponse({"status": "erro", "mensagem": "Conversa não encontrada nesta sessão."}, status_code=404)
+    return {
+        "status": "ok",
+        "share_id": snap.share_id,
+        "share_url": f"/api/history/shared/{snap.share_id}",
+        "created_at": snap.created_at,
+    }
+
+
+@router.get("/api/history/shared/{share_id}")
+async def visualizar_conversa_compartilhada(share_id: str):
+    """Retorna apenas o snapshot estático congelado (não expõe a sessão ativa nem mensagens posteriores)."""
+    from pesquisa_e_memoria import history_manager
+
+    snap = history_manager.get_shared_snapshot(share_id)
+    if not snap:
+        return JSONResponse({"status": "erro", "mensagem": "Link compartilhado inexistente ou revogado."}, status_code=404)
+    return {"status": "ok", "snapshot": snap}
+
+
+@router.delete("/api/history/shared/{share_id}")
+async def revogar_link_compartilhado(
+    share_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import history_manager
+
+    ok = history_manager.revoke_share_snapshot(user_id=sessao, share_id=share_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Link não encontrado para este usuário."}, status_code=404)
+    return {"status": "ok", "revogado": share_id}
+
+
+@router.post("/api/memory/facts")
+async def salvar_fato_memoria(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    key = (payload.get("key") or payload.get("chave") or "").strip()
+    value = (payload.get("value") or payload.get("valor") or "").strip()
+    if not key or not value:
+        return JSONResponse({"status": "erro", "mensagem": "Campos 'key' e 'value' obrigatórios."}, status_code=400)
+    from pesquisa_e_memoria import user_memory_manager
+
+    fact = user_memory_manager.remember_fact(
+        user_id=sessao,
+        key=key,
+        value=value,
+        category=payload.get("category") or "custom",
+        ttl_seconds=payload.get("ttl_seconds"),
+    )
+    if fact is None:
+        return {
+            "status": "ignorado_opt_out",
+            "mensagem": "Personalização de memória desativada para este usuário.",
+        }
+    return {"status": "ok", "memoria": fact.model_dump(mode="json")}
+
+
+@router.get("/api/memory/facts")
+async def buscar_fatos_memoria(
+    sessao: Optional[str] = Query(None),
+    q: str = Query(""),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import user_memory_manager
+
+    fatos = user_memory_manager.search_facts(user_id=sessao, query=q)
+    return {"status": "ok", "sessao": sessao, "memorias": [f.model_dump(mode="json") for f in fatos]}
+
+
+@router.delete("/api/memory/facts/{memory_id}")
+async def excluir_fato_memoria_especifico(
+    memory_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import user_memory_manager
+
+    ok = user_memory_manager.delete_fact(user_id=sessao, memory_id=memory_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Memória não encontrada."}, status_code=404)
+    return {"status": "ok", "excluida": memory_id}
+
+
+@router.delete("/api/memory/facts")
+async def excluir_todas_memorias_usuario(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import user_memory_manager
+
+    removidas = user_memory_manager.delete_all_facts(user_id=sessao)
+    return {"status": "ok", "memorias_excluidas": removidas}
+
+
+@router.get("/api/memory/retention")
+async def obter_politica_retencao_memoria(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import user_memory_manager
+
+    pol = user_memory_manager.get_retention_policy(user_id=sessao)
+    return {"status": "ok", "politica": pol.model_dump(mode="json")}
+
+
+@router.post("/api/memory/retention")
+async def configurar_politica_retencao_memoria(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from pesquisa_e_memoria import user_memory_manager
+
+    pol = user_memory_manager.set_retention_policy(
+        user_id=sessao,
+        personalization_enabled=payload.get("personalization_enabled"),
+        retention_days=payload.get("retention_days"),
+    )
+    return {"status": "ok", "politica": pol.model_dump(mode="json")}
+
+
+@router.post("/api/research/deep")
+async def executar_deep_research_real(payload: dict, _=Depends(verify_jarvis_token)):
+    """Executa o motor real de Deep Research com decomposição de sub-perguntas e citações SHA-256."""
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    topic = (payload.get("topic") or payload.get("topico") or payload.get("query") or "").strip()
+    if not topic:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'topic' obrigatório."}, status_code=400)
+    from pesquisa_e_memoria import deep_research_engine
+
+    report = deep_research_engine.execute_research(
+        topic=topic,
+        user_id=sessao,
+        session_id=sessao,
+        sources=payload.get("sources"),
+        fetch_urls=payload.get("fetch_urls"),
+        max_subquestions=int(payload.get("max_subquestions", 4)),
+    )
+    return {"status": "ok", "relatorio": report.model_dump(mode="json")}
+
+
+@router.get("/api/research/deep")
+async def listar_relatorios_deep_research(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import deep_research_engine
+
+    return {"status": "ok", "relatorios": deep_research_engine.list_reports(user_id=sessao)}
+
+
+@router.get("/api/research/deep/{report_id}")
+async def obter_relatorio_deep_research(
+    report_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from pesquisa_e_memoria import deep_research_engine
+
+    rep = deep_research_engine.get_report(report_id=report_id, user_id=sessao)
+    if not rep:
+        return JSONResponse({"status": "erro", "mensagem": "Relatório não encontrado nesta sessão."}, status_code=404)
+    return {"status": "ok", "relatorio": rep.model_dump(mode="json")}
+
 
 
