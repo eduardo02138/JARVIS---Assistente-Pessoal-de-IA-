@@ -1681,6 +1681,96 @@ async def excluir_tarefa_agendada(
     return {"status": "ok", "excluido": schedule_id}
 
 
+# ---------------------------------------------------------------------------
+# F9: Rotas de Geração e Edição Iterativa de Imagens com Proveniência
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/images/generate")
+async def gerar_imagem_copilot(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'prompt' obrigatório."}, status_code=400)
+    ref_b64 = payload.get("reference_image_base64") or ""
+    ref_bytes = base64.b64decode(ref_b64) if ref_b64 else None
+    from geracao_imagens import image_generation_service
+
+    try:
+        res = image_generation_service.generate_image(
+            user_id=sessao,
+            prompt=prompt,
+            aspect_ratio=str(payload.get("aspect_ratio") or "1:1"),
+            style=str(payload.get("style") or "natural"),
+            reference_image_bytes=ref_bytes,
+        )
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return res
+
+
+@router.post("/api/images/{asset_id}/edit")
+async def editar_imagem_iterativamente(
+    asset_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    instruction = (payload.get("edit_instruction") or payload.get("instruction") or "").strip()
+    from geracao_imagens import image_generation_service
+
+    try:
+        res = image_generation_service.edit_image_iteratively(
+            user_id=sessao,
+            parent_asset_id=asset_id,
+            edit_instruction=instruction,
+            style=payload.get("style"),
+        )
+    except KeyError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"status": "erro", "mensagem": str(exc)}, status_code=400)
+    return res
+
+
+@router.get("/api/images/gallery")
+async def listar_galeria_imagens(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from geracao_imagens import image_generation_service
+
+    items = image_generation_service.list_gallery(user_id=sessao)
+    return {
+        "status": "ok",
+        "provider_available": image_generation_service.is_provider_configured(),
+        "assets": [a.model_dump(mode="json") for a in items],
+    }
+
+
+@router.delete("/api/images/{asset_id}")
+async def excluir_ativo_imagem(
+    asset_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from geracao_imagens import image_generation_service
+
+    ok = image_generation_service.delete_asset(user_id=sessao, asset_id=asset_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Ativo não encontrado."}, status_code=404)
+    return {"status": "ok", "excluido": asset_id}
+
+
+
 
 
 
