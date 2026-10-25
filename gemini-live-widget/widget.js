@@ -331,8 +331,8 @@ async function initAudio() {
 
         const processor = state.inputAudioCtx.createScriptProcessor(2048, 1, 1);
         let speechHoldover = 0;
-        let voicedFramesInBurst = 0;
-        const minVoicedFramesForTurn = 3;
+        let speechFrames = 0;
+        let hadRealSpeech = false;
         processor.onaudioprocess = (e) => {
             if (!state.connected || !state.listening || state.paused) return;
 
@@ -351,8 +351,8 @@ async function initAudio() {
             }
             const rms = Math.sqrt(sumSq / rawInput.length);
 
-            // Limiar de fala natural (0.012 calibrado contra ruído ambiente/ventoinha GPU; configurável via localStorage "gemini_vad_threshold")
-            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.012;
+            // Limiar de fala natural (0.015 calibrado contra ruído ambiente/ventoinha GPU; configurável via localStorage "gemini_vad_threshold")
+            const vadThreshold = parseFloat(localStorage.getItem("gemini_vad_threshold")) || 0.015;
             const isSpeaking = rms >= vadThreshold;
 
             // Barge-in: se o usuário começou a falar enquanto o assistente fala, corta o áudio imediatamente
@@ -365,18 +365,24 @@ async function initAudio() {
             }
 
             const currentRate = state.inputAudioCtx.sampleRate || 16000;
-            const maxHoldover = Math.ceil((currentRate / 2048) * 1.4); // ~1400ms de tolerância a pausas naturais sem picotar frases
+            const speechHoldoverSeconds = parseFloat(localStorage.getItem("gemini_vad_holdover")) || 1.6;
+            const maxHoldover = Math.ceil((currentRate / 2048) * speechHoldoverSeconds); // ~1.6s (configurável 1.5–2.0s) de tolerância a pausas naturais sem picotar frases
+
             if (isSpeaking) {
-                voicedFramesInBurst++;
+                speechFrames++;
+                if (speechFrames >= 3) {
+                    hadRealSpeech = true;
+                }
                 speechHoldover = maxHoldover;
             } else if (speechHoldover > 0) {
                 speechHoldover--;
                 if (speechHoldover === 0) {
-                    // Só emite audio_stream_end se houve fala sustentada real (>= minVoicedFramesForTurn), evitando picos de ruído
-                    if (voicedFramesInBurst >= minVoicedFramesForTurn && state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    // Só emite audio_stream_end se houve fala sustentada real (>= 3 frames), evitando picos de ruído/ventoinha
+                    if (hadRealSpeech && state.ws && state.ws.readyState === WebSocket.OPEN) {
                         state.ws.send(JSON.stringify({ type: "audio_stream_end" }));
                     }
-                    voicedFramesInBurst = 0;
+                    hadRealSpeech = false;
+                    speechFrames = 0;
                 }
             }
 
