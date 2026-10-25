@@ -1259,6 +1259,184 @@ async def inspecionar_stack_multimidia_linux(_=Depends(verify_jarvis_token)):
     return {"status": "ok", "stack": detect_linux_multimedia_stack()}
 
 
+# ---------------------------------------------------------------------------
+# F6: Rotas de Navegador Autônomo Seguro (Browser Policy) e Copilot Journeys
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/browser/evaluate")
+async def avaliar_acao_navegador(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    action_name = (payload.get("action") or payload.get("action_name") or "").strip()
+    if not action_name:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'action' obrigatório."}, status_code=400)
+    from browser_journeys import browser_policy_guard
+
+    ev = browser_policy_guard.evaluate_browser_action(
+        session_id=sessao,
+        action_name=action_name,
+        args=payload.get("args") or {},
+        from_page_dom_context=bool(payload.get("from_page_dom_context", False)),
+        dom_snippet=payload.get("dom_snippet"),
+    )
+    return {"status": "ok", "evaluation": ev.model_dump(mode="json")}
+
+
+@router.post("/api/browser/sanitize_dom")
+async def sanitizar_dom_navegador(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from browser_journeys import browser_policy_guard
+
+    res = browser_policy_guard.sanitize_dom_content(str(payload.get("dom_text") or payload.get("text") or ""))
+    return {"status": "ok", **res}
+
+
+@router.get("/api/journeys/settings")
+async def obter_configuracao_journeys(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from browser_journeys import journeys_manager
+
+    s = journeys_manager.get_settings(user_id=sessao)
+    return {"status": "ok", "settings": s.model_dump(mode="json")}
+
+
+@router.post("/api/journeys/settings")
+async def configurar_journeys(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from browser_journeys import journeys_manager
+
+    s = journeys_manager.configure_settings(
+        user_id=sessao,
+        enabled=payload.get("enabled"),
+        retention_days=payload.get("retention_days"),
+    )
+    return {"status": "ok", "settings": s.model_dump(mode="json")}
+
+
+@router.post("/api/journeys")
+async def criar_journey(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    topic = (payload.get("topic") or payload.get("titulo") or "").strip()
+    if not topic:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'topic' obrigatório."}, status_code=400)
+    from browser_journeys import journeys_manager
+
+    jrn = journeys_manager.create_journey(
+        user_id=sessao,
+        topic=topic,
+        summary=str(payload.get("summary") or ""),
+    )
+    if jrn is None:
+        return JSONResponse(
+            {
+                "status": "opt_in_obrigatorio",
+                "mensagem": "Journeys está desativado por padrão (opt-in). Ative em /api/journeys/settings.",
+            },
+            status_code=403,
+        )
+    return {"status": "ok", "journey": jrn.model_dump(mode="json")}
+
+
+@router.post("/api/journeys/{journey_id}/steps")
+async def adicionar_passo_journey(
+    journey_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from browser_journeys import journeys_manager
+
+    jrn = journeys_manager.add_step(
+        user_id=sessao,
+        journey_id=journey_id,
+        title=str(payload.get("title") or "Página visitada"),
+        step_type=payload.get("step_type") or "page_visit",
+        url=payload.get("url"),
+        query_or_note=str(payload.get("query_or_note") or ""),
+    )
+    if jrn is None:
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Journey não encontrada ou opt-in desativado."},
+            status_code=404,
+        )
+    return {"status": "ok", "journey": jrn.model_dump(mode="json")}
+
+
+@router.get("/api/journeys")
+async def listar_journeys(
+    sessao: Optional[str] = Query(None),
+    q: str = Query(""),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from browser_journeys import journeys_manager
+
+    items = journeys_manager.list_journeys(user_id=sessao, query=q)
+    return {"status": "ok", "sessao": sessao, "journeys": [j.model_dump(mode="json") for j in items]}
+
+
+@router.post("/api/journeys/{journey_id}/resume")
+async def retomar_journey(
+    journey_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from browser_journeys import journeys_manager
+
+    jrn = journeys_manager.resume_journey(user_id=sessao, journey_id=journey_id)
+    if not jrn:
+        return JSONResponse({"status": "erro", "mensagem": "Journey não encontrada."}, status_code=404)
+    return {"status": "ok", "journey": jrn.model_dump(mode="json")}
+
+
+@router.delete("/api/journeys/{journey_id}")
+async def excluir_journey_especifica(
+    journey_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from browser_journeys import journeys_manager
+
+    ok = journeys_manager.delete_journey(user_id=sessao, journey_id=journey_id)
+    if not ok:
+        return JSONResponse({"status": "erro", "mensagem": "Journey não encontrada."}, status_code=404)
+    return {"status": "ok", "excluida": journey_id}
+
+
+@router.delete("/api/journeys")
+async def excluir_todas_journeys(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from browser_journeys import journeys_manager
+
+    count = journeys_manager.delete_all_journeys(user_id=sessao)
+    return {"status": "ok", "journeys_excluidas": count}
+
+
+
 
 
 

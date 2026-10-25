@@ -20,6 +20,7 @@ from google.adk.tools import ToolContext
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.computer_use.computer_use_toolset import ComputerUseToolset
 
+from browser_journeys import browser_policy_guard
 from policy_engine import policy_engine
 from ..contexto import identidade_da_sessao
 from .playwright_computer import PlaywrightComputer
@@ -43,23 +44,47 @@ def guarda_computador(
     args: dict[str, Any],
     tool_context: ToolContext,
 ) -> Optional[dict]:
-    """Exige lease ativa do Modo Computador antes de qualquer tool do browser."""
+    """Exige lease ativa do Modo Computador e aplica governança de ações sensíveis/DOM."""
     # Sem sessão identificável não há lease possível: bloqueia (fail-closed)
     session_id, _ = identidade_da_sessao(tool_context, padrao="")
-    if session_id and policy_engine.is_computer_lease_active(session_id):
-        return None
+    if not (session_id and policy_engine.is_computer_lease_active(session_id)):
+        return {
+            "status": "bloqueado",
+            "motivo": (
+                "Modo Computador inativo: ative-o antes de controlar o navegador "
+                "(endpoint /api/computer/mode ou confirme por voz)."
+            ),
+            "mensagem": (
+                "O controle do navegador exige o Modo Computador ativo. "
+                "Ative o Modo Computador com o comando 'ativar modo computador'."
+            ),
+        }
 
-    return {
-        "status": "bloqueado",
-        "motivo": (
-            "Modo Computador inativo: ative-o antes de controlar o navegador "
-            "(endpoint /api/computer/mode ou confirme por voz)."
-        ),
-        "mensagem": (
-            "O controle do navegador exige o Modo Computador ativo. "
-            "Ative o Modo Computador com o comando 'ativar modo computador'."
-        ),
-    }
+    tool_name = getattr(tool, "name", getattr(tool, "__name__", "browser_action"))
+    eval_res = browser_policy_guard.evaluate_browser_action(
+        session_id=session_id,
+        action_name=tool_name,
+        args=args or {},
+        from_page_dom_context=bool((args or {}).get("from_page_dom_context", False)),
+        dom_snippet=(args or {}).get("dom_snippet"),
+    )
+    if not eval_res.allowed:
+        if eval_res.requires_human_confirmation:
+            return {
+                "status": "aguardando_confirmacao",
+                "id_confirmacao": eval_res.confirmation_id,
+                "categoria": eval_res.category,
+                "motivo": eval_res.reason,
+                "mensagem": eval_res.reason,
+            }
+        return {
+            "status": "bloqueado",
+            "categoria": eval_res.category,
+            "motivo": eval_res.reason,
+            "mensagem": eval_res.reason,
+        }
+
+    return None
 
 
 def criar_agente_computer_use(modelo: Optional[str] = None) -> Agent:
