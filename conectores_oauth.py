@@ -371,7 +371,12 @@ class OAuthConnectorManager:
             raise ValueError("Código de autorização ('code') ausente ou inválido.")
 
         eff_scopes = granted_scopes if granted_scopes is not None else pending.requested_scopes
-        token_value = access_token_from_provider or f"ya29.{provider_id}.{secrets.token_urlsafe(24)}"
+        if not access_token_from_provider or not str(access_token_from_provider).strip():
+            raise ValueError(
+                "Token de acesso real não fornecido pelo provedor OAuth no callback de autorização. "
+                "Tokens simulados ou forjados são estritamente rejeitados."
+            )
+        token_value = str(access_token_from_provider).strip()
         return self.vault.store_token(
             user_id=user_id,
             provider_id=provider_id,
@@ -445,9 +450,10 @@ class OAuthConnectorManager:
         client_id = os.environ.get(spec["client_id_env"], "").strip()
         if not client_id:
             return {
-                "status": "UNAVAILABLE_CREDENTIALS",
+                "status": "UNAVAILABLE_EXTERNAL_INTEGRATION",
                 "provider_id": provider_id,
                 "action": action,
+                "executed": False,
                 "mensagem": (
                     f"Conector {spec['name']} autenticado na sessão, porém a variável de ambiente "
                     f"'{spec['client_id_env']}' não está configurada para chamadas de API externas reais."
@@ -455,10 +461,13 @@ class OAuthConnectorManager:
             }
 
         return {
-            "status": "ok",
+            "status": "UNAVAILABLE_EXTERNAL_INTEGRATION",
             "provider_id": provider_id,
             "action": action,
-            "executed": True,
+            "executed": False,
+            "mensagem": (
+                f"Nenhum adaptador de transporte externo registrado para executar '{action}' em {spec['name']}."
+            ),
             "params_summary": list(safe_params.keys()),
         }
 

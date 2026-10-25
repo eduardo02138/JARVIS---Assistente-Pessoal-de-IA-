@@ -168,6 +168,8 @@ def test_autenticacao_http_endpoints_adk():
     assert r_sem_sessao.status_code == 400, f"Esperado 400 por ausência de sessão, obtido {r_sem_sessao.status_code}"
 
     # 5. Requisições autenticadas com X-Jarvis-Token são aceitas
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao("sessao-valida")
     r_pend_auth = client.get("/api/acoes_pendentes?sessao=sessao-valida", headers=auth_headers)
     assert r_pend_auth.status_code == 200, f"Esperado 200 com token, obtido {r_pend_auth.status_code}"
     print(" [✔ PASS] Autenticação Obrigatória nos Endpoints ADK (401 sem token / 400 sem sessão)")
@@ -176,8 +178,10 @@ def test_autenticacao_http_endpoints_adk():
 def test_autenticacao_e_confirmacao_live_adk_por_texto():
     """Valida handshake autenticado e aprovação por texto digitado durante sessão Live ADK."""
     from server import app, JARVIS_SECRET_TOKEN
+    from servidor.seguranca import emitir_sessao
     client = TestClient(app)
     session_id = "sessao-live-texto-test"
+    emitir_sessao(session_id)
 
     # Cria ação pendente na sessão de teste (identity server-side: user_id = sessão)
     args = {"url": "https://brave.com"}
@@ -215,8 +219,10 @@ def test_autenticacao_e_confirmacao_live_adk_por_texto():
 def test_confirmacao_comportamental_voz_live_adk():
     """Valida o fluxo comportamental completo de aprovação por COMANDO DE VOZ via Gemini Live."""
     from server import app, JARVIS_SECRET_TOKEN, obter_runner_adk
+    from servidor.seguranca import emitir_sessao
     client = TestClient(app)
     session_id = "sessao-live-voice-test"
+    emitir_sessao(session_id)
 
     # 1. Cria ação sensível pendente vinculada à sessão (identity server-side)
     args = {"url": "https://github.com"}
@@ -297,6 +303,8 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     # 1. Teste na app unificada (server.py)
     client_server = TestClient(server.app)
     sess_1 = "sessao-chat-srv"
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao(sess_1)
     args_1 = {"url": "https://server.com"}
     pending_1 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_1, user_id=sess_1)
     assert pending_1.status == "pending"
@@ -323,6 +331,8 @@ def test_confirmacao_chat_http_texto_com_isolamento_user_id():
     # 2. Teste de rejeição por incompatibilidade de sessão
     sess_3 = "sessao-chat-dono"
     sess_invasor = "sessao-chat-invasor"
+    emitir_sessao(sess_3)
+    emitir_sessao(sess_invasor)
     pending_3 = policy_engine.create_pending_action("abrir_site", args_1, session_id=sess_3, user_id=sess_3)
 
     with patch("servidor.rotas_agente.obter_runner_adk", return_value=mock_runner_obj):

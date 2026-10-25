@@ -36,6 +36,10 @@ def test_gate1_session_a_cannot_approve_session_b():
     """
     client = TestClient(app)
     policy_engine.cleanup_expired_actions()
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao("sessao_A")
+    emitir_sessao("sessao_B")
+    emitir_sessao("sessao_C")
 
     # Sessão A cria pendência legítima (user_id derivado = sessão)
     pending = policy_engine.create_pending_action(
@@ -401,6 +405,8 @@ def test_gate4_chat_dispatches_to_omniroute_when_selected():
     """Gate 4: Quando OmniRoute é selecionado, o chat texto deve despachar diretamente para OmniRoute e ignorar runner Google."""
     client = TestClient(app)
     provider_router.set_active_provider("omniroute")
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao("sess_prov")
 
     with patch("provider_router.OmniRouteProvider.chat", new_callable=AsyncMock) as mock_omni:
         mock_omni.return_value = "Resposta de teste do OmniRoute"
@@ -425,6 +431,8 @@ def test_gate4_omniroute_observability_respects_custom_model(monkeypatch):
 
     client = TestClient(app)
     provider_router.set_active_provider("omniroute")
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao("sess_mod")
     with patch("provider_router.OmniRouteProvider.chat", new_callable=AsyncMock) as mock_omni:
         mock_omni.return_value = "Resposta Qwen"
         resp = client.post(
@@ -797,6 +805,8 @@ def test_gate6_live_adk_drops_audio_when_muted():
             mock_queue = MagicMock()
             mock_queue_cls.return_value = mock_queue
 
+            from servidor.seguranca import emitir_sessao
+            emitir_sessao("sess_mute_test")
             with client.websocket_connect("/ws/live_adk?sessao=sess_mute_test&usuario=user_mute_test") as ws:
                 ws.send_json({"type": "init", "token": JARVIS_SECRET_TOKEN})
                 msg_ready = ws.receive_json()

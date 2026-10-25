@@ -558,16 +558,17 @@ class PolicyEngine:
         args: Dict[str, Any],
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        ttl: float = 60.0
+        ttl: float = 60.0,
+        action_id: Optional[str] = None,
     ) -> PendingAction:
         import secrets
         with self._lock:
             self.cleanup_expired_actions()
-            action_id = secrets.token_hex(6)
+            act_id = action_id or secrets.token_hex(6)
             now = time.monotonic()
             args_hash = self._compute_args_hash(args)
             pending = PendingAction(
-                action_id=action_id,
+                action_id=act_id,
                 tool_name=tool_name,
                 args=args,
                 args_hash=args_hash,
@@ -577,7 +578,7 @@ class PolicyEngine:
                 expires_at=now + ttl,
                 status="pending"
             )
-            self._pending_actions[action_id] = pending
+            self._pending_actions[act_id] = pending
         logger.info(f"Ação pendente criada: {action_id} -> {tool_name} (Sessão: {session_id}, TTL {ttl}s monotônico)")
         return pending
 

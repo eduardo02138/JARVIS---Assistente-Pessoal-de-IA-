@@ -2,7 +2,7 @@ name: J.A.R.V.I.S. CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**" ]
   pull_request:
     branches: [ "main" ]
 

@@ -153,6 +153,30 @@ def registrar_autoridade_dos_modos(
         policy_engine.grant_control_lease(owner=sessao)
     else:
         policy_engine.revoke_control_lease(session_id=sessao)
+
+    try:
+        from authority_kernel import authority_kernel
+        tool_name = getattr(tool, "name", "unknown_tool")
+        sucesso = True
+        err_msg = None
+        if isinstance(tool_response, dict):
+            if tool_response.get("sucesso") is False:
+                sucesso = False
+                err_msg = str(tool_response.get("erro") or tool_response.get("mensagem") or "")
+            elif tool_response.get("status") in ("erro", "bloqueado"):
+                sucesso = False
+                err_msg = str(tool_response.get("motivo") or tool_response.get("mensagem") or "")
+        authority_kernel.record_tool_completion(
+            tool_name=tool_name,
+            args=args or {},
+            session_id=sessao,
+            principal=usuario,
+            success=sucesso,
+            result=tool_response if sucesso else None,
+            error=err_msg,
+        )
+    except Exception as exc:
+        logger.warning("Falha ao registrar execução no AuthorityKernel: %s", exc)
     return None
 
 

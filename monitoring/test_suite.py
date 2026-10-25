@@ -1175,6 +1175,9 @@ def test_acoes_pendentes_standalone():
     token = server.JARVIS_SECRET_TOKEN
     headers = {"Authorization": f"Bearer {token}"}
 
+    from servidor.seguranca import emitir_sessao
+    emitir_sessao("sessao-teste")
+
     resp = client.get("/api/acoes_pendentes?sessao=sessao-teste", headers=headers)
     assert resp.status_code == 200
     dados = resp.json()

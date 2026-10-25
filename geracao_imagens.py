@@ -51,6 +51,29 @@ def validate_reference_image_bytes(raw_bytes: bytes) -> Tuple[bool, str]:
     return False, "Formato de referência visual inválido (permitidos apenas PNG, JPEG ou WEBP)."
 
 
+def _build_default_imagen_adapter(api_key: str) -> Callable[[str, Dict[str, Any]], Tuple[bytes, str, str, str]]:
+    """Adaptador real para a API Google GenAI Imagen (imagen-3.0-generate-002)."""
+    def _adapter(prompt: str, opts: Dict[str, Any]) -> Tuple[bytes, str, str, str]:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        aspect = opts.get("aspect_ratio", "1:1")
+        resp = client.models.generate_images(
+            model="imagen-3.0-generate-002",
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio=aspect,
+                output_mime_type="image/png",
+            ),
+        )
+        if not resp.generated_images:
+            raise RuntimeError("Nenhuma imagem gerada retornada pela API Imagen.")
+        img_bytes = resp.generated_images[0].image.image_bytes
+        return img_bytes, "image/png", "google_imagen", "imagen-3.0-generate-002"
+    return _adapter
+
+
 class ImageProvenance(BaseModel):
     ai_generated: bool = True
     provider: str
@@ -126,10 +149,16 @@ class ImageGenerationService:
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.storage_path)
 
-    def is_provider_configured(self) -> bool:
+    def _resolve_adapter(self) -> Optional[Callable[[str, Dict[str, Any]], Tuple[bytes, str, str, str]]]:
         if self.provider_adapter is not None:
-            return True
-        return bool(os.environ.get("JARVIS_IMAGE_PROVIDER_KEY", "").strip())
+            return self.provider_adapter
+        key = os.environ.get("JARVIS_IMAGE_PROVIDER_KEY", "").strip()
+        if not key:
+            return None
+        return _build_default_imagen_adapter(key)
+
+    def is_provider_configured(self) -> bool:
+        return self._resolve_adapter() is not None
 
     def generate_image(
         self,
@@ -150,7 +179,8 @@ class ImageGenerationService:
                 raise ValueError(mime_or_err)
             ref_hash = hashlib.sha256(reference_image_bytes).hexdigest()
 
-        if not self.is_provider_configured():
+        adapter = self._resolve_adapter()
+        if adapter is None:
             return {
                 "status": "UNAVAILABLE_PROVIDER",
                 "provider_available": False,
@@ -169,16 +199,23 @@ class ImageGenerationService:
                     "mensagem": f"Limite diário de geração de imagens atingido ({self.daily_quota_per_user}).",
                 }
 
-        assert self.provider_adapter is not None
-        img_bytes, mime_type, prov_name, model_name = self.provider_adapter(
-            cleaned_prompt,
-            {
-                "mode": "generate",
-                "aspect_ratio": aspect_ratio,
-                "style": style,
-                "reference_image_bytes": reference_image_bytes,
-            },
-        )
+        try:
+            img_bytes, mime_type, prov_name, model_name = adapter(
+                cleaned_prompt,
+                {
+                    "mode": "generate",
+                    "aspect_ratio": aspect_ratio,
+                    "style": style,
+                    "reference_image_bytes": reference_image_bytes,
+                },
+            )
+        except Exception as exc:
+            logger.error("Falha ao gerar imagem pelo provedor: %s", exc)
+            return {
+                "status": "PROVIDER_ERROR",
+                "provider_available": True,
+                "mensagem": f"Falha na execução do provedor de geração de imagem: {exc}",
+            }
         prompt_hash = hashlib.sha256(cleaned_prompt.encode("utf-8")).hexdigest()
         asset_id = f"img_{secrets.token_urlsafe(8)}"
         rev = ImageEditRevision(
@@ -233,24 +270,32 @@ class ImageGenerationService:
             if parent is None or parent.user_id != user_id:
                 raise KeyError(f"Ativo de imagem '{parent_asset_id}' não encontrado para este usuário.")
 
-        if not self.is_provider_configured():
+        adapter = self._resolve_adapter()
+        if adapter is None:
             return {
                 "status": "UNAVAILABLE_PROVIDER",
                 "provider_available": False,
                 "mensagem": "Provedor de edição de imagem indisponível.",
             }
 
-        assert self.provider_adapter is not None
         combined_prompt = f"{parent.prompt} | Edição: {instruction}"
-        img_bytes, mime_type, prov_name, model_name = self.provider_adapter(
-            combined_prompt,
-            {
-                "mode": "edit",
-                "parent_asset_id": parent.asset_id,
-                "edit_instruction": instruction,
-                "style": style or parent.style,
-            },
-        )
+        try:
+            img_bytes, mime_type, prov_name, model_name = adapter(
+                combined_prompt,
+                {
+                    "mode": "edit",
+                    "parent_asset_id": parent.asset_id,
+                    "edit_instruction": instruction,
+                    "style": style or parent.style,
+                },
+            )
+        except Exception as exc:
+            logger.error("Falha ao editar imagem pelo provedor: %s", exc)
+            return {
+                "status": "PROVIDER_ERROR",
+                "provider_available": True,
+                "mensagem": f"Falha na execução do provedor de edição de imagem: {exc}",
+            }
         new_asset_id = f"img_{secrets.token_urlsafe(8)}"
         new_rev_num = parent.revision_number + 1
         new_rev = ImageEditRevision(

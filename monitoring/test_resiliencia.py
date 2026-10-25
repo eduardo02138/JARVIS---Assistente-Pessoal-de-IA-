@@ -99,7 +99,10 @@ def chat(monkeypatch):
     monkeypatch.setattr("servidor.rotas_agente.agendar_tarefa_do_servidor", lambda coro: coro.close())
     estado["omniroute"] = omniroute
 
+    from servidor.seguranca import emitir_sessao
+
     def enviar(texto="qual o status do sistema?", sessao="sessao-resiliencia"):
+        emitir_sessao(sessao)
         return server_client().post("/api/chat", json={"texto": texto, "sessao": sessao}, headers=CABECALHOS)
 
     estado["enviar"] = enviar
@@ -165,7 +168,11 @@ def test_turnos_da_mesma_sessao_rodam_em_fila_e_sessoes_diferentes_em_paralelo(m
     monkeypatch.setattr("servidor.rotas_agente.obter_runner_adk", lambda tipo, modelo=None: RunnerLento())
     monkeypatch.setattr("servidor.rotas_agente.agendar_tarefa_do_servidor", lambda coro: coro.close())
 
+    from servidor.seguranca import emitir_sessao
+
     async def disparar(sessoes):
+        for s in sessoes:
+            emitir_sessao(s)
         transporte = httpx.ASGITransport(app=server.app)
         async with httpx.AsyncClient(transport=transporte, base_url="http://testserver") as cliente:
             respostas = await asyncio.gather(*[

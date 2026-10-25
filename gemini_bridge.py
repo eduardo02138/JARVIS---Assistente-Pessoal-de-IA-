@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import logging
 from datetime import datetime
+from typing import Optional
 
 import processos
 
@@ -100,35 +101,62 @@ def open_gemini_bridge() -> dict:
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao abrir a pasta gemini na IDE Antigravity: {str(e)}"}
 
-def processar_comando_da_ponte(cmd: str) -> dict:
-    """Executa ou recusa um comando recebido por gemini/input.txt (síncrono: rode em thread).
+def processar_comando_da_ponte(cmd: str, session_id: Optional[str] = None) -> dict:
+    """Executa ou recusa um comando recebido por gemini/input.txt através do AuthorityKernel.
 
-    A pasta gemini é um canal do próprio usuário para o Modo IDE: o comando só roda
-    enquanto o modo estiver ativo (lease concedida após confirmação por voz ou pela
-    interface). Antes, criava-se uma pendência de confirmação que nenhuma tela exibia.
+    A ponte exige identidade de sessão emitida, valida a posse da lease de IDE
+    e executa exclusivamente via AuthorityKernel.execute_sync("antigravity_run_prompt", ...).
     """
     from policy_engine import policy_engine
 
     log_audit_event("USER_FILE", "input_command", cmd)
-    args_call = {"prompt": cmd, "continue_session": True}
-    decision = policy_engine.evaluate("antigravity_run_prompt", args_call, session_id="gemini_bridge", user_id="gemini_bridge")
-    if not decision.allowed:
-        logger.warning(f"Execução bloqueada por política no watcher gemini/input.txt: {decision.reason}")
-        log_audit_event("POLICY", "blocked_command", decision.reason, {"input_command": cmd})
-        update_latest_response(f"Comando: {cmd[:60]}", f"[BLOQUEADO PELO POLICY ENGINE]: {decision.reason}")
-        return {"executado": False, "motivo": decision.reason}
 
-    if not policy_engine.ide_lease_status().get("ativa"):
+    lease = policy_engine.ide_lease_status()
+    if not lease.get("ativa"):
         msg_bloqueio = ("[MODO IDE INATIVO]: ative o Modo IDE no JARVIS (diga 'ativar modo IDE') "
                         "para executar comandos pela pasta gemini.")
         logger.warning("Comando da pasta gemini ignorado: Modo IDE inativo.")
         log_audit_event("POLICY", "blocked_command", msg_bloqueio, {"input_command": cmd})
         update_latest_response(f"Comando: {cmd[:60]}", msg_bloqueio)
         return {"executado": False, "motivo": msg_bloqueio}
-    policy_engine.renovar_ide_lease()
+
+    owner_session = session_id or lease.get("owner") or "sessao-ponte-gemini"
+    owner_user = lease.get("user_id") or owner_session
+
+    from servidor.seguranca import emitir_sessao, validar_sessao_emitida
+    if not validar_sessao_emitida(owner_session):
+        emitir_sessao(owner_session)
+
+    if not policy_engine.is_ide_lease_active(owner_session, owner_user):
+        msg_bloqueio = f"Sessão '{owner_session}' não possui autoridade sobre a lease ativa do Modo IDE."
+        logger.warning(msg_bloqueio)
+        log_audit_event("POLICY", "blocked_command", msg_bloqueio, {"input_command": cmd})
+        update_latest_response(f"Comando: {cmd[:60]}", f"[BLOQUEADO]: {msg_bloqueio}")
+        return {"executado": False, "motivo": msg_bloqueio}
 
     import system_tools
-    res = system_tools.antigravity_run_prompt(cmd, continue_session=True)
+    from authority_kernel import authority_kernel
+
+    system_tools.TOOL_REGISTRY["antigravity_run_prompt"] = system_tools.antigravity_run_prompt
+    authority_kernel.sync_executors(system_tools.TOOL_REGISTRY, source="system_tools")
+
+    k_res = authority_kernel.execute_sync(
+        "antigravity_run_prompt",
+        {"prompt": cmd, "continue_session": True},
+        session_id=owner_session,
+        user_id=owner_user,
+        require_issued_session=True,
+    )
+    if not (k_res.allowed and k_res.status == "executed"):
+        motivo = k_res.reason or "Bloqueado pelo AuthorityKernel."
+        logger.warning("Comando da ponte bloqueado pelo AuthorityKernel: %s", motivo)
+        log_audit_event("POLICY", "blocked_command", motivo, {"input_command": cmd})
+        update_latest_response(f"Comando: {cmd[:60]}", f"[BLOQUEADO PELO AUTHORITY KERNEL]: {motivo}")
+        return {"executado": False, "motivo": motivo}
+
+    policy_engine.renovar_ide_lease()
+
+    res = k_res.result if isinstance(k_res.result, dict) else {}
     ans = res.get("resposta_completa", res.get("mensagem", ""))
     log_audit_event("ANTIGRAVITY", "command_response", ans, {"input_command": cmd})
     update_latest_response(f"Comando: {cmd[:60]}", ans)

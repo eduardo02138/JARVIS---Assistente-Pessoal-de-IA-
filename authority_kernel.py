@@ -227,6 +227,41 @@ class AuthorityKernel:
                 logger.warning("Falha ao persistir authority_journal.jsonl: %s", exc)
         return entry
 
+    def record_tool_completion(
+        self,
+        *,
+        tool_name: str,
+        args: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        principal: Optional[str] = None,
+        success: bool = True,
+        result: Any = None,
+        error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> CausalJournalEntry:
+        """Registra a conclusão de execução de ferramentas disparadas pelo runtime ADK ou Computer Use."""
+        args_dict = args or {}
+        digest = canonical_args_digest(args_dict)
+        eff_session = session_id or ""
+        eff_principal = principal or eff_session
+        risk_str = str(policy_engine.get_risk_level(tool_name) or "READ")
+        phase = "EXECUTION_SUCCEEDED" if success else "EXECUTION_FAILED"
+        outcome = "SUCCEEDED" if success else "FAILED"
+        reason = "Concluído via runtime gerenciado." if success else (error or "Falha na execução.")
+        uncertain = (not success) and risk_str in ("EXTERNAL_WRITE", "PRIVILEGED")
+        return self._append_journal(
+            phase=phase,
+            principal=eff_principal,
+            session_id=eff_session,
+            tool_name=tool_name,
+            args_digest=digest,
+            risk_level=risk_str,
+            outcome=outcome,
+            reason=reason,
+            effect_uncertain=uncertain,
+            metadata=metadata or {},
+        )
+
     def get_journal(
         self,
         session_id: Optional[str] = None,

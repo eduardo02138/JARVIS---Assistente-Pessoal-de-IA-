@@ -294,8 +294,12 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         "voice": voice_name
                     })
                     consecutive_failures = 0
-                    # Identidade desta sessão: a lease de controle físico pertence a ela
-                    sessao_id = secrets.token_urlsafe(12)
+                    from servidor.seguranca import emitir_sessao, validar_sessao_emitida
+                    req_sessao = (websocket.query_params.get("sessao") or "").strip()
+                    if req_sessao and validar_sessao_emitida(req_sessao):
+                        sessao_id = req_sessao
+                    else:
+                        sessao_id = emitir_sessao()
                     # A sessão Live nativa é a única identidade: dona E usuária das leases do Modo IDE
                     usuario_id = sessao_id
                     live_info = provider_router.live_provider()
@@ -305,6 +309,8 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         "message": f"Sistemas online. Conectado via {provedor_efetivo} ({model_name}) com a voz {voice_name}.",
                         "voice": voice_name,
                         "model": model_name,
+                        "sessao_id": sessao_id,
+                        "sessao": sessao_id,
                         "provider": provedor_efetivo,
                         "requested_provider": req_provider,
                         "live_supported": live_info["live_supported"],
@@ -421,6 +427,9 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         """Pede autorização ao usuário no HUD e espera a resposta."""
                         future: asyncio.Future = asyncio.get_running_loop().create_future()
                         pending_confirmations[call_id] = future
+                        policy_engine.create_pending_action(
+                            func_name, args, session_id=sessao_id, user_id=usuario_id, ttl=CONFIRMATION_TIMEOUT_S, action_id=call_id
+                        )
                         await safe_send_json({
                             "type": "tool_confirmation_request",
                             "id": call_id,
@@ -687,41 +696,34 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                 else:
                                     from authority_kernel import authority_kernel
                                     authority_kernel.sync_executors(system_tools.TOOL_REGISTRY, source="system_tools")
-                                    executor = authority_kernel.get_executor(func_name)
-                                    if executor:
-                                        cap = authority_kernel.issue_capability(
-                                            tool_name=func_name,
-                                            args=args,
-                                            session_id=sessao_id,
-                                            principal=usuario_id,
-                                            risk_level=decision.risk_level.value,
-                                            action_id=call_id,
+                                    timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
+                                    try:
+                                        # Execução mediada exclusivamente pelo AuthorityKernel com proteção contra bloqueio do event loop
+                                        # (executors síncronos rodam via asyncio.to_thread no pool do Kernel e timeout gerenciado por asyncio.wait_for)
+                                        k_res = await asyncio.wait_for(
+                                            authority_kernel.execute_async(
+                                                tool_name=func_name,
+                                                args=args,
+                                                session_id=sessao_id,
+                                                user_id=usuario_id,
+                                                timeout_s=timeout_ferramenta,
+                                                direct_loop_tools=_TOOLS_MUTANTES,
+                                                thread_semaphore=_SEM_TOOL_THREADS,
+                                                require_issued_session=True,
+                                            ),
+                                            timeout=timeout_ferramenta,
                                         )
-                                        ok_cap, cap_err = authority_kernel.consume_capability(
-                                            cap.capability_id,
-                                            tool_name=func_name,
-                                            args=args,
-                                            session_id=sessao_id,
-                                            principal=usuario_id,
-                                        )
-                                        if not ok_cap:
-                                            res = {"sucesso": False, "erro": cap_err}
+                                        if k_res.allowed and k_res.status == "executed":
+                                            res = k_res.result
                                         else:
-                                            timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
-                                            try:
-                                                if inspect.iscoroutinefunction(executor):
-                                                    res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
-                                                elif func_name in _TOOLS_MUTANTES:
-                                                    res = executor(**args)
-                                                else:
-                                                    with _SEM_TOOL_THREADS:
-                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
-                                            except asyncio.TimeoutError:
-                                                res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
-                                            except Exception as exc:
-                                                res = {"sucesso": False, "erro": str(exc)}
-                                    else:
-                                        res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
+                                            res = k_res.result if isinstance(k_res.result, dict) else {
+                                                "sucesso": False,
+                                                "erro": k_res.reason or "Falha de autorização ou execução no AuthorityKernel."
+                                            }
+                                    except asyncio.TimeoutError:
+                                        res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
+                                    except Exception as exc:
+                                        res = {"sucesso": False, "erro": str(exc)}
 
                                 # Serializável e dentro do limite antes de chegar ao modelo, ao HUD e à auditoria
                                 res = limitar_resultado(res)

@@ -87,6 +87,35 @@ def guarda_computador(
     return None
 
 
+def pos_execucao_computador(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any
+) -> Optional[dict]:
+    """Registra a conclusão de ações de navegador no journal causal do AuthorityKernel."""
+    try:
+        from authority_kernel import authority_kernel
+        session_id, user_id = identidade_da_sessao(tool_context, padrao="")
+        tool_name = getattr(tool, "name", getattr(tool, "__name__", "browser_action"))
+        sucesso = True
+        err_msg = None
+        if isinstance(tool_response, dict):
+            if tool_response.get("status") in ("bloqueado", "erro", "falha"):
+                sucesso = False
+                err_msg = str(tool_response.get("motivo") or tool_response.get("mensagem") or "")
+        authority_kernel.record_tool_completion(
+            tool_name=tool_name,
+            args=args or {},
+            session_id=session_id,
+            principal=user_id or session_id,
+            success=sucesso,
+            result=tool_response if sucesso else None,
+            error=err_msg,
+            metadata={"source": "computer_use"},
+        )
+    except Exception as exc:
+        logger.warning("Falha ao registrar execução de computer_use no AuthorityKernel: %s", exc)
+    return None
+
+
 def criar_agente_computer_use(modelo: Optional[str] = None) -> Agent:
     """Agente single-tool: ComputerUseToolset sobre Playwright local."""
     toolset = ComputerUseToolset(computer=PlaywrightComputer())
@@ -97,4 +126,5 @@ def criar_agente_computer_use(modelo: Optional[str] = None) -> Agent:
         instruction=INSTRUCAO_COMPUTADOR,
         tools=[toolset],
         before_tool_callback=guarda_computador,
+        after_tool_callbacks=[pos_execucao_computador],
     )

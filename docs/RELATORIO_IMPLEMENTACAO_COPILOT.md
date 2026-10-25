@@ -43,5 +43,37 @@ Nenhuma funcionalidade simulada foi declarada como integração real:
     - `geracao_imagens.py`: galeria por usuário, linhagem de revisões (`root_asset_id`, `parent_asset_id`, `revision_number`), validação de imagem de referência, metadados de proveniência e status `UNAVAILABLE_PROVIDER` honesto quando sem provedor configurado.
 11. **F10 — Compras e Espaço de Saúde Isolado (`bea4a77`)**:
     - `compras_e_saude.py`: comparação estruturada de ofertas com moeda/timestamp/URL verificada e bloqueio de compra autônoma; espaço informativo de saúde opt-in com disclaimer clínico obrigatório e isolamento total da memória geral.
-12. **F11 — UX Unificada, CI e Homologação Final**:
+12. **F11 — UX Unificada, CI e Homologação Final (`3248595`, `a25d246`)**:
     - Endpoint `/api/copilot/capabilities` (`/api/copilot/workspace`), seletores de modo no HUD/Widget e atualização completa do pipeline `.github/workflows/ci.yml`.
+
+---
+
+## 3. Resolução da Auditoria de Homologação (P0 & P1 Blockers)
+
+Em 25/10/2026, a auditoria formal apontou bloqueios arquiteturais e de segurança que foram integralmente corrigidos e testados:
+
+1. **Emissão Estrita de Sessão sem Autocadastro (P0)**:
+   - `servidor/seguranca.py`: `EXIGIR_SESSAO_EMITIDA = True` tornado padrão ativo (`JARVIS_STRICT_SESSION_ISSUANCE=1`).
+   - `sessao_aceita()` agora delega estritamente a `validar_sessao_emitida()`, eliminando o autocadastro de identificadores de sessão enviados pelo cliente.
+2. **Mediação Exclusiva de Execução no AuthorityKernel (P0/P1)**:
+   - `servidor/live_nativo.py`: execução de ferramentas NON_BLOCKING unificada via `authority_kernel.execute_async()`, integrando validação de sessão emitida, consumo de autorização one-shot, execução gerenciada e registro no journal causal único.
+   - `agentes/assistente.py` & `agentes/computer_use/agente.py`: governança e registro de conclusões/falhas integrados ao journal causal do `AuthorityKernel`.
+3. **Integração Estrita da Gemini Bridge ao Kernel (P0)**:
+   - `gemini_bridge.py`: comandos recebidos pela pasta `gemini/input.txt` exigem que o emissor seja o dono comprovado da lease ativa do Modo IDE e executam exclusivamente através de `authority_kernel.execute_sync("antigravity_run_prompt", ..., require_issued_session=True)`.
+4. **Conectores OAuth Seguros e Realistas (P1)**:
+   - `conectores_oauth.py`: `complete_authorization_flow()` rejeita expressamente ausência de token real com `ValueError`, proibindo geração de tokens simulados (`ya29...`).
+   - `execute_action()` responde com `UNAVAILABLE_EXTERNAL_INTEGRATION` quando não há adaptador de transporte configurado, sem simular sucesso.
+5. **Geração de Imagens sem Falha por Assert (P1)**:
+   - `geracao_imagens.py`: eliminados os `assert self.provider_adapter is not None`. Implementado adaptador real padrão para Google GenAI Imagen (`imagen-3.0-generate-002`) quando `JARVIS_IMAGE_PROVIDER_KEY` está presente; na ausência de provedor ou em caso de erro, responde com `UNAVAILABLE_PROVIDER` ou `PROVIDER_ERROR` de forma limpa e estruturada.
+6. **Disparo Automático do CI no GitHub Actions**:
+   - `.github/workflows/ci.yml`: configurado com `on.push.branches: [ "main", "feat/**" ]`, garantindo que os checks `validate-and-test` rodem na branch `feat/copilot-capabilities-20261024`.
+
+---
+
+## 4. Evidência de Testes Locais
+
+- **Pytest Suite Completa**: 180 testes aprovados (`180 passed, 0 failed, 9 warnings in 9.11s`).
+- **Fase P0 (Segurança e Arquitetura)**: `python monitoring/test_suite.py --p0` aprovado com 100% de sucesso.
+- **Google ADK & Policy Gate**: `python monitoring/test_adk.py` com 14 cenários 100% conformes.
+- **F1-F10 Copilot Parity**: 32/32 testes aprovados.
+- **Diagnóstico do Sistema**: 19 ok, 2 avisos de hardware/ambiente, 0 erros.

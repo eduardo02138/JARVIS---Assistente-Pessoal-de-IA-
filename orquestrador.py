@@ -777,3 +777,4 @@ class JarvisOrchestrator:
 
 # Instância global do Orquestrador
 jarvis_orchestrator = JarvisOrchestrator()
+orchestrator = jarvis_orchestrator

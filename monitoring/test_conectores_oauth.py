@@ -79,7 +79,23 @@ def test_oauth_pkce_state_e_escopos(tmp_path):
             code_verifier="verifier_invalido_com_mais_de_43_caracteres_1234567890",
         )
 
-    # 4. Fluxo legítimo conclui e persiste cofre com permissão 0600
+    # 4. Tentativa sem token do provedor -> rejeitada (proibição de tokens forjados)
+    flow_sem_tok = mgr.start_authorization_flow(
+        user_id=uid,
+        provider_id="gmail",
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        code_challenge_override=challenge,
+    )
+    with pytest.raises(ValueError, match="Token de acesso real não fornecido"):
+        mgr.complete_authorization_flow(
+            user_id=uid,
+            provider_id="gmail",
+            state=flow_sem_tok["state"],
+            code="auth_code_valido_999",
+            code_verifier=verifier,
+        )
+
+    # 5. Fluxo legítimo conclui e persiste cofre com permissão 0600
     flow2 = mgr.start_authorization_flow(
         user_id=uid,
         provider_id="gmail",
@@ -92,13 +108,14 @@ def test_oauth_pkce_state_e_escopos(tmp_path):
         state=flow2["state"],
         code="auth_code_valido_999",
         code_verifier=verifier,
+        access_token_from_provider="ya29.test_real_oauth_token_123",
     )
     assert tok.provider_id == "gmail"
     assert vault_file.exists()
     mode = stat.S_IMODE(os.stat(vault_file).st_mode)
     assert mode == 0o600, f"Cofre de tokens deve ter permissão 0600, encontrado {oct(mode)}"
 
-    # 5. Leitura funciona com escopo readonly, mas envio falha por falta de escopo gmail.send
+    # 6. Leitura funciona com escopo readonly, mas envio falha por falta de escopo gmail.send
     res_read = mgr.execute_action(user_id=uid, provider_id="gmail", action="list_messages", params={"q": "is:unread"})
     assert res_read["status"] == "ok"
 
@@ -130,6 +147,7 @@ def test_revogacao_bloqueia_acesso_imediato(tmp_path):
         state=flow["state"],
         code="code_drive_123",
         code_verifier=flow["code_verifier"],
+        access_token_from_provider="ya29.test_drive_token_456",
     )
 
     # Leitura antes da revogação funciona
@@ -174,6 +192,7 @@ def test_envio_email_ou_evento_exige_confirmacao(tmp_path):
         state=flow["state"],
         code="code_cal_456",
         code_verifier=flow["code_verifier"],
+        access_token_from_provider="ya29.test_calendar_token_789",
     )
 
     event_params = {"title": "Reunião de Arquitetura", "start": "2026-10-26T14:00:00-03:00"}
@@ -216,3 +235,28 @@ def test_envio_email_ou_evento_exige_confirmacao(tmp_path):
     r_list = client.get(f"/api/connectors?sessao={uid}", headers=_headers())
     assert r_list.status_code == 200
     assert len(r_list.json()["connectors"]) == 7
+
+
+def test_sem_adaptador_transporte_retorna_unavailable(tmp_path):
+    """
+    Garante que na ausência de transporte configurado, execute_action
+    responde explicitamente com UNAVAILABLE_EXTERNAL_INTEGRATION sem simular sucesso.
+    """
+    vault = TokenVault(vault_path=tmp_path / "vault_notransport.json")
+    mgr = OAuthConnectorManager(vault=vault, transport_adapter=None)
+    uid = emitir_sessao("user_notransport_f7")
+
+    flow = mgr.start_authorization_flow(user_id=uid, provider_id="google_drive")
+    mgr.complete_authorization_flow(
+        user_id=uid,
+        provider_id="google_drive",
+        state=flow["state"],
+        code="code_drive_xyz",
+        code_verifier=flow["code_verifier"],
+        access_token_from_provider="ya29.test_token_live_123",
+    )
+
+    res = mgr.execute_action(user_id=uid, provider_id="google_drive", action="list_files")
+    assert res["status"] == "UNAVAILABLE_EXTERNAL_INTEGRATION"
+    assert res["executed"] is False
+    assert "não registrado" in res["mensagem"] or "não está configurada" in res["mensagem"]
