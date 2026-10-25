@@ -392,3 +392,139 @@ async def consultar_journal_autoridade(
     )
     return {"status": "ok", "sessao": sessao, "entradas": entradas}
 
+
+# ---------------- Orquestrador Estruturado (Fase F2: Planner -> Router -> Executor -> Verifier) ----------------
+
+
+@router.post("/api/orchestrator/route")
+async def diagnosticar_roteamento(payload: dict, _=Depends(verify_jarvis_token)):
+    """Avalia o JarvisRouter para um prompt e modo conversacional."""
+    from orquestrador import jarvis_orchestrator
+
+    prompt = (payload.get("texto") or payload.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"status": "erro", "mensagem": "Texto vazio."}, status_code=400)
+    modo = payload.get("modo") or payload.get("mode") or "smart"
+    untrusted = bool(payload.get("untrusted_input", False))
+    decisao = jarvis_orchestrator.router.route(prompt, requested_mode=modo, untrusted_input=untrusted)
+    return {"status": "ok", "roteamento": decisao.model_dump(mode="json")}
+
+
+@router.post("/api/orchestrator/tasks")
+async def criar_tarefa_orquestrada(payload: dict, _=Depends(verify_jarvis_token)):
+    """Cria (e opcionalmente executa) uma tarefa estruturada no Orquestrador."""
+    from orquestrador import TaskBudget, jarvis_orchestrator
+
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=400,
+        )
+    goal = (payload.get("goal") or payload.get("objetivo") or payload.get("texto") or "").strip()
+    if not goal:
+        return JSONResponse({"status": "erro", "mensagem": "Objetivo ('goal') vazio."}, status_code=400)
+
+    modo = payload.get("modo") or payload.get("mode") or "smart"
+    steps = payload.get("steps") or payload.get("explicit_steps")
+    raw_budget = payload.get("budget")
+    budget = TaskBudget.model_validate(raw_budget) if isinstance(raw_budget, dict) else None
+
+    task = jarvis_orchestrator.submit_task(
+        goal=goal,
+        session_id=sessao,
+        user_id=sessao,
+        mode=modo,
+        explicit_steps=steps,
+        budget=budget,
+    )
+    if payload.get("executar_imediato", True):
+        task = jarvis_orchestrator.run_task(task.task_id, session_id=sessao)
+
+    return {"status": "ok", "task": task.model_dump(mode="json")}
+
+
+@router.get("/api/orchestrator/tasks")
+async def listar_tarefas_orquestradas(
+    sessao: Optional[str] = Query(None),
+    estado: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    """Lista tarefas da sessão com isolamento estrito."""
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=403,
+        )
+    from orquestrador import TaskState, jarvis_orchestrator
+
+    filtro_estado = TaskState(estado) if estado else None
+    tarefas = jarvis_orchestrator.list_tasks(session_id=sessao, state=filtro_estado)
+    return {
+        "status": "ok",
+        "sessao": sessao,
+        "tarefas": [t.model_dump(mode="json") for t in tarefas],
+    }
+
+
+@router.get("/api/orchestrator/tasks/{task_id}")
+async def obter_tarefa_orquestrada(
+    task_id: str,
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=403,
+        )
+    from orquestrador import jarvis_orchestrator
+
+    task = jarvis_orchestrator.get_task(task_id, session_id=sessao)
+    if not task:
+        return JSONResponse({"status": "erro", "mensagem": "Tarefa não encontrada nesta sessão."}, status_code=404)
+    return {"status": "ok", "task": task.model_dump(mode="json")}
+
+
+@router.post("/api/orchestrator/tasks/{task_id}/run")
+async def retomar_tarefa_orquestrada(
+    task_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    """Executa ou retoma (resume) uma tarefa a partir do último checkpoint concluído."""
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=400,
+        )
+    from orquestrador import jarvis_orchestrator
+
+    try:
+        task = jarvis_orchestrator.run_task(task_id, session_id=sessao)
+        return {"status": "ok", "task": task.model_dump(mode="json")}
+    except KeyError:
+        return JSONResponse({"status": "erro", "mensagem": "Tarefa não encontrada nesta sessão."}, status_code=404)
+
+
+@router.post("/api/orchestrator/tasks/{task_id}/cancel")
+async def cancelar_tarefa_orquestrada(
+    task_id: str,
+    payload: dict,
+    _=Depends(verify_jarvis_token),
+):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=400,
+        )
+    from orquestrador import jarvis_orchestrator
+
+    task = jarvis_orchestrator.cancel_task(task_id, session_id=sessao)
+    if not task:
+        return JSONResponse({"status": "erro", "mensagem": "Tarefa não encontrada nesta sessão."}, status_code=404)
+    return {"status": "ok", "task": task.model_dump(mode="json")}
+
+

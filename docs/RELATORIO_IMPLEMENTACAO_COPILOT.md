@@ -31,6 +31,19 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
 
 ---
 
+### Ciclo F2 — Orquestração e Contratos (P0)
+- **Tarefa**: `T-F2.1`
+- **Base SHA**: `1ded004ff6b98104a93e73a76fb9c643f225c29b`
+- **Entregas**:
+  1. Criação de `orquestrador.py` separando formalmente `JarvisPlanner`, `JarvisRouter`, `Executor` (via `AuthorityKernel`) e `JarvisVerifier` com modelos Pydantic (`OrchestratedTask`, `PlanStep`, `TaskBudget`, `RoutingDecision`, `VerificationReport`).
+  2. Persistência transacional de estado durável (`QUEUED`, `RUNNING`, `WAITING_APPROVAL`, `SUCCEEDED`, `FAILED`, `CANCELLED`, `BLOCKED`) com `checkpoint_index` e `executed_idempotency_keys`, garantindo retomada pós-reinício ou pós-aprovação humana sem duplicar efeitos colaterais já executados.
+  3. Rotas REST autenticadas e isoladas por sessão em `servidor/rotas_agente.py`: `/api/orchestrator/route`, `/api/orchestrator/tasks`, `/api/orchestrator/tasks/{task_id}`, `/api/orchestrator/tasks/{task_id}/run`, `/api/orchestrator/tasks/{task_id}/cancel`.
+  4. Suíte `monitoring/test_orquestrador.py` 100% verde.
+- **Status**: `DONE`
+
+
+---
+
 ### Ciclo F1 — Identidade e Autoridade Única (`AuthorityKernel`) (P0)
 - **Tarefas**: `T-F1.1`, `T-F1.2`
 - **Base SHA**: `50cd5b7147c7abc05ef2e4073ae5de117dac4160`
@@ -41,4 +54,17 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   4. Defesa contra Prompt Injection Indireto (`untrusted_context=True`): bloqueia ferramentas `PRIVILEGED` e exige confirmação explícita em `LOW_WRITE`.
   5. Suíte adversarial `monitoring/test_authority_kernel.py` (6 cenários adversariais, incluindo corrida de 10 threads simultâneas).
 - **Status**: `DONE`
+
+---
+
+### Ciclo F2 — Orquestração e Contratos (P0)
+- **Tarefa**: `T-F2.1`
+- **Base SHA**: `1ded004ff6b98104a93e73a76fb9c643f225c29b`
+- **Entregas**:
+  1. Criação de `orquestrador.py` separando formalmente `JarvisPlanner`, `JarvisRouter`, `Executor` (via `AuthorityKernel`) e `JarvisVerifier` com modelos Pydantic (`OrchestratedTask`, `PlanStep`, `TaskBudget`, `RoutingDecision`, `VerificationReport`).
+  2. Persistência transacional de estado durável (`QUEUED`, `RUNNING`, `WAITING_APPROVAL`, `SUCCEEDED`, `FAILED`, `CANCELLED`, `BLOCKED`) com `checkpoint_index` e `executed_idempotency_keys`, garantindo retomada pós-reinício ou pós-aprovação humana sem duplicar efeitos colaterais já executados.
+  3. Rotas REST autenticadas e isoladas por sessão em `servidor/rotas_agente.py`: `/api/orchestrator/route`, `/api/orchestrator/tasks`, `/api/orchestrator/tasks/{task_id}`, `/api/orchestrator/tasks/{task_id}/run`, `/api/orchestrator/tasks/{task_id}/cancel`.
+  4. Suíte `monitoring/test_orquestrador.py` 100% verde.
+- **Status**: `DONE`
+
 
