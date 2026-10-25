@@ -26,18 +26,108 @@ if not JARVIS_SECRET_TOKEN:
 
 # Sessões emitidas por /api/auth/session (identidade server-side).
 SESSOES_EMITIDAS: Dict[str, float] = {}
+SESSOES_REVOGADAS: set[str] = set()
 _SESSOES_LOCK = threading.RLock()
 SESSO_TTL_S = int(os.environ.get("JARVIS_SESSAO_TTL_S", "43200"))
+EXIGIR_SESSAO_EMITIDA: bool = os.environ.get("JARVIS_STRICT_SESSION_ISSUANCE", "").strip().lower() in (
+    "1", "true", "sim", "yes"
+)
+NOMES_SESSAO_RESERVADOS = frozenset({
+    "sessao-principal",
+    "default",
+    "anonymous",
+    "anonimo",
+    "global",
+    "all",
+    "*",
+})
 
 
-def sessao_aceita(sessao: Optional[str]) -> bool:
-    """Fail-closed: sessão explícita e qualquer exceto os nomes reservados.
+def emitir_sessao(sessao_id: Optional[str] = None, ttl_s: float = SESSO_TTL_S) -> str:
+    """Emite e registra uma sessão server-side com TTL monotônico em SESSOES_EMITIDAS."""
+    sid = (sessao_id or secrets.token_urlsafe(24)).strip()
+    if not sid or sid in NOMES_SESSAO_RESERVADOS:
+        raise ValueError("Identificador de sessão inválido ou reservado.")
+    with _SESSOES_LOCK:
+        SESSOES_REVOGADAS.discard(sid)
+        SESSOES_EMITIDAS[sid] = time.monotonic() + float(ttl_s)
+    return sid
 
-    'sessao-principal' e 'default' nunca são aceitos como identidade client-claimed:
-    obrigam o fluxo de confirmação a usar sessões reais (emitidas ou arbitrárias do
-    frontend), impedindo que duas conexões colidam em uma sessão mágica global.
+
+def revogar_sessao(sessao: str) -> None:
+    """Revoga imediatamente uma sessão emitida e libera eventuais leases associadas."""
+    if not sessao:
+        return
+    with _SESSOES_LOCK:
+        SESSOES_REVOGADAS.add(sessao)
+        SESSOES_EMITIDAS.pop(sessao, None)
+    liberar_controle_da_sessao(sessao)
+
+
+def expirar_sessao(sessao: str) -> None:
+    """Marca uma sessão em SESSOES_EMITIDAS como expirada monotonicamente."""
+    if not sessao:
+        return
+    with _SESSOES_LOCK:
+        SESSOES_EMITIDAS[sessao] = time.monotonic() - 1.0
+
+
+def validar_sessao_emitida(sessao: Optional[str]) -> bool:
+    """Valida estritamente se a sessão foi emitida pelo servidor, não foi revogada e está dentro do TTL."""
+    if not sessao or not isinstance(sessao, str):
+        return False
+    sid = sessao.strip()
+    if not sid or sid in NOMES_SESSAO_RESERVADOS:
+        return False
+    with _SESSOES_LOCK:
+        if sid in SESSOES_REVOGADAS:
+            return False
+        expira_em = SESSOES_EMITIDAS.get(sid)
+        if expira_em is None:
+            return False
+        if time.monotonic() > expira_em:
+            return False
+        return True
+
+
+def sessao_aceita(sessao: Optional[str], exigir_emissao: Optional[bool] = None) -> bool:
+    """Fail-closed: rejeita sessões vazias, reservadas, revogadas, expiradas ou não emitidas (quando exigido).
+
+    - 'sessao-principal', 'default', 'anonymous', 'global', '*' nunca são aceitos.
+    - Qualquer sessão registrada em SESSOES_EMITIDAS tem seu TTL monotônico verificado obrigatoriamente;
+      se expirada, é rejeitada imediatamente.
+    - Quando exigir_emissao=True (ou EXIGIR_SESSAO_EMITIDA / JARVIS_STRICT_SESSION_ISSUANCE=1),
+      exige presença prévia e válida em SESSOES_EMITIDAS.
     """
-    return bool(sessao) and sessao not in ("sessao-principal", "default")
+    if not sessao or not isinstance(sessao, str):
+        return False
+    sid = sessao.strip()
+    if not sid or sid in NOMES_SESSAO_RESERVADOS:
+        return False
+
+    with _SESSOES_LOCK:
+        if sid in SESSOES_REVOGADAS:
+            return False
+        expira_em = SESSOES_EMITIDAS.get(sid)
+        if expira_em is not None:
+            if time.monotonic() > expira_em:
+                return False
+            return True
+
+        estrita = (
+            exigir_emissao
+            if exigir_emissao is not None
+            else (
+                EXIGIR_SESSAO_EMITIDA
+                or os.environ.get("JARVIS_STRICT_SESSION_ISSUANCE", "").strip().lower() in ("1", "true", "sim", "yes")
+            )
+        )
+        if estrita:
+            return False
+
+        # Registra a sessão ativa com TTL monotônico na primeira validação autenticada
+        SESSOES_EMITIDAS[sid] = time.monotonic() + SESSO_TTL_S
+        return True
 
 
 def liberar_controle_da_sessao(session_id: str) -> None:

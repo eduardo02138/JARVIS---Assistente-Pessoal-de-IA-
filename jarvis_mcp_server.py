@@ -246,8 +246,9 @@ def _registrar_ferramentas_de_plugins():
 
             def _criar_wrapper(tool_spec):
                 def _wrapper(**kwargs):
-                    # A política vigente decide a cada chamada (defesa em profundidade)
-                    decisao = policy_engine.evaluate(tool_spec.name, kwargs, session_id="mcp", user_id="mcp")
+                    # Executa via AuthorityKernel + PolicyEngine a cada chamada (defesa em profundidade)
+                    from authority_kernel import authority_kernel
+                    decisao = policy_engine.evaluate(tool_spec.name, kwargs, session_id="mcp-stdio", user_id="mcp")
                     if not decisao.allowed or decisao.requires_confirmation:
                         return json.dumps({
                             "sucesso": False,
@@ -255,8 +256,21 @@ def _registrar_ferramentas_de_plugins():
                             "erro": f"Bloqueada pelo Policy Engine: {decisao.reason} Confirme esta ação pelo próprio JARVIS.",
                         }, indent=2, ensure_ascii=False)
                     try:
-                        resultado = tool_spec.handler(**kwargs)
-                        return json.dumps(resultado, indent=2, ensure_ascii=False, default=str)
+                        authority_kernel.register_executor(tool_spec.name, tool_spec.handler, source="mcp_plugin")
+                        kres = authority_kernel.execute_sync(
+                            tool_spec.name,
+                            kwargs,
+                            session_id="mcp-stdio",
+                            user_id="mcp",
+                            require_issued_session=False,
+                        )
+                        if not kres.allowed:
+                            return json.dumps({
+                                "sucesso": False,
+                                "ferramenta": tool_spec.name,
+                                "erro": kres.reason,
+                            }, indent=2, ensure_ascii=False)
+                        return json.dumps(kres.result, indent=2, ensure_ascii=False, default=str)
                     except Exception as e:
                         return json.dumps({
                             "sucesso": False,

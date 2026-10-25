@@ -1802,6 +1802,9 @@ TOOL_REGISTRY = {
 BASE_TOOL_REGISTRY = dict(TOOL_REGISTRY)
 BASE_GEMINI_FUNCTION_DECLARATIONS = list(GEMINI_FUNCTION_DECLARATIONS)
 
+from authority_kernel import authority_kernel
+authority_kernel.sync_executors(TOOL_REGISTRY, source="system_tools")
+
 def rebuild_registry(dynamic_tools: list):
     """
     Restaura o registro base do sistema e injeta exclusivamente as ferramentas
@@ -1823,6 +1826,28 @@ def rebuild_registry(dynamic_tools: list):
                 "parameters": t.parameters
             })
             existing_names.add(t.name)
+
+    authority_kernel.sync_executors(TOOL_REGISTRY, source="system_tools")
+
+
+def execute_tool(
+    tool_name: str,
+    args: Optional[dict] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    untrusted_context: bool = False,
+    require_issued_session: Optional[bool] = None,
+):
+    """Executa uma ferramenta obrigatoriamente pelo AuthorityKernel (catálogo fechado + Policy Gate)."""
+    return authority_kernel.execute_sync(
+        tool_name=tool_name,
+        args=args or {},
+        session_id=session_id,
+        user_id=user_id,
+        untrusted_context=untrusted_context,
+        require_issued_session=require_issued_session,
+    )
+
 
 
 

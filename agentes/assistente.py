@@ -87,49 +87,46 @@ def guarda_de_ferramentas(
 ) -> Optional[dict]:
     """Bloqueia ferramentas que exigem confirmação explícita do usuário.
 
-    Reutiliza o PolicyEngine oficial do J.A.R.V.I.S. A autorização é estritamente
-    one-shot com TTL e hash de argumentos: uma vez executada, a permissão é revogada.
-    O LLM não pode se auto-autorizar.
+    Opera obrigatoriamente pelo AuthorityKernel + PolicyEngine. A autorização é
+    estritamente one-shot com TTL monotônico, digest SHA-256 de argumentos,
+    capability token efêmero e journal causal. O LLM não pode se auto-autorizar.
     """
     if isinstance(tool, AgentTool):
         return None
 
+    from authority_kernel import authority_kernel
+
     session_id, user_id = identidade_da_sessao(tool_context)
-    decision = policy_engine.evaluate(tool.name, args, session_id=session_id, user_id=user_id)
+    untrusted = bool(getattr(tool_context, "untrusted_context", False))
+    res = authority_kernel.authorize_tool_call(
+        tool.name,
+        args,
+        session_id=session_id,
+        user_id=user_id,
+        untrusted_context=untrusted,
+    )
 
-    if not decision.allowed:
-        return {
-            "status": "negado_por_politica",
-            "motivo": decision.reason,
-        }
+    if res.allowed:
+        return None
 
-    if decision.requires_confirmation:
-        # Verifica se há autorização one-shot aprovada pelo usuário para esta chamada
-        if policy_engine.consume_authorization(tool.name, args, session_id=session_id, user_id=user_id):
-            return None  # Autorizado e consumido!
-
-        # Bloqueado: cria solicitação pendente com TTL de 60s com isolamento de sessão e usuário
-        pending = policy_engine.create_pending_action(
-            tool_name=tool.name,
-            args=args,
-            session_id=session_id,
-            user_id=user_id,
-            ttl=60.0
-        )
+    if res.status == "pending_confirmation":
         return {
             "status": "bloqueado_aguardando_confirmacao",
             "acao": tool.name,
-            "id_confirmacao": pending.action_id,
+            "id_confirmacao": res.action_id,
             "argumentos": args,
-            "motivo": decision.reason,
+            "motivo": res.reason,
             "mensagem": (
                 f"A ferramenta sensível '{tool.name}' foi bloqueada pelo Policy Engine aguardando aprovação explícita do usuário. "
                 "Informe ao usuário a ação e solicite que ele confirme (digitando 'sim' ou autorizando na interface). "
-                f"ID da pendência: {pending.action_id}."
+                f"ID da pendência: {res.action_id}."
             ),
         }
 
-    return None
+    return {
+        "status": "negado_por_politica",
+        "motivo": res.reason,
+    }
 
 
 def registrar_autoridade_dos_modos(

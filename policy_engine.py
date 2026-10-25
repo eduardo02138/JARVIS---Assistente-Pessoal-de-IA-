@@ -612,19 +612,47 @@ class PolicyEngine:
         logger.info(f"Ação aprovada pelo usuário: {action_id} -> {pending.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
         return True
 
+    def has_ambiguous_pending(
+        self,
+        session_id: str,
+        user_id: Optional[str] = None
+    ) -> list[PendingAction]:
+        """Retorna a lista de ações pendentes caso haja 2 ou mais simultâneas na mesma sessão/usuário."""
+        if not session_id:
+            return []
+        with self._lock:
+            self.cleanup_expired_actions()
+            now = time.monotonic()
+            candidatas = []
+            for action in self._pending_actions.values():
+                if action.status == "pending" and now <= action.expires_at:
+                    if action.session_id != session_id:
+                        continue
+                    if action.user_id and not user_id:
+                        continue
+                    if action.user_id and user_id and action.user_id != user_id:
+                        continue
+                    candidatas.append(action)
+            return candidatas if len(candidatas) > 1 else []
+
     def approve_latest_pending(
         self,
         session_id: str,
         user_id: Optional[str] = None
     ) -> Optional[PendingAction]:
-        """Aprova a pendência mais recente pertencente EXCLUSIVAMENTE à sessão e usuário fornecidos.
-        session_id é OBRIGATÓRIO para impedir aprovação indevida de ações de outras sessões ou globais.
+        """Aprova a pendência ativa pertencente EXCLUSIVAMENTE à sessão e usuário fornecidos.
+
+        Regra anti-ambiguidade (F1):
+        - session_id é OBRIGATÓRIO.
+        - Se houver 2 ou mais ações pendentes simultaneamente para a mesma sessão/usuário,
+          um 'sim' genérico sem action_id é recusado (retorna None), exigindo desambiguação.
         """
         if not session_id:
             logger.warning("Tentativa de approve_latest_pending sem session_id obrigatório.")
             return None
         with self._lock:
             now = time.monotonic()
+            candidatas: list[PendingAction] = []
             for action_id in reversed(list(self._pending_actions.keys())):
                 action = self._pending_actions[action_id]
                 if action.status == "pending" and now <= action.expires_at:
@@ -634,10 +662,45 @@ class PolicyEngine:
                         continue
                     if action.user_id and user_id and action.user_id != user_id:
                         continue
-                    action.status = "approved"
-                    logger.info(f"Última ação pendente aprovada: {action_id} -> {action.tool_name} (Sessão: {session_id}, Usuário: {user_id})")
-                    return action
-            return None
+                    candidatas.append(action)
+
+            if not candidatas:
+                return None
+
+            if len(candidatas) > 1:
+                logger.warning(
+                    "Ambiguidade detectada: %d ações pendentes simultâneas na sessão '%s'. "
+                    "Recusando 'sim' genérico; exija id_confirmacao explícito.",
+                    len(candidatas),
+                    session_id,
+                )
+                try:
+                    from authority_kernel import authority_kernel
+                    authority_kernel._append_journal(
+                        phase="AMBIGUITY_DETECTED",
+                        principal=user_id or session_id,
+                        session_id=session_id,
+                        tool_name=",".join(a.tool_name for a in candidatas),
+                        args_digest="",
+                        risk_level="PRIVILEGED",
+                        outcome="DENIED_AMBIGUOUS",
+                        reason=f"Múltiplas pendências ({len(candidatas)}) exigem action_id explícito.",
+                        metadata={"pending_ids": [a.action_id for a in candidatas]},
+                    )
+                except Exception:
+                    pass
+                return None
+
+            action = candidatas[0]
+            action.status = "approved"
+            logger.info(
+                "Ação pendente única aprovada: %s -> %s (Sessão: %s, Usuário: %s)",
+                action.action_id,
+                action.tool_name,
+                session_id,
+                user_id,
+            )
+            return action
 
     def reject_action(
         self,

@@ -195,6 +195,14 @@ async def live_adk(
             elif tipo in ("texto", "text"):
                 texto_msg = (msg.get("texto") or msg.get("text") or "").strip()
                 if palavra_confirma(texto_msg):
+                    ambiguas = policy_engine.has_ambiguous_pending(session_id=sessao, user_id=usuario)
+                    if ambiguas:
+                        await safe_send_json({
+                            "tipo": "confirmacao_ambigua",
+                            "pendentes": [a.action_id for a in ambiguas],
+                            "mensagem": "Múltiplas ações pendentes nesta sessão. Confirme explicitamente pelo ID.",
+                        })
+                        continue
                     pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
                     if pending:
                         logger.info("Ação pendente %s (%s) aprovada por DIGITAÇÃO no Live ADK!", pending.action_id, pending.tool_name)
@@ -259,20 +267,28 @@ async def live_adk(
                 )
                 # Hook de aprovação verbal por voz na sessão Live
                 if palavra_confirma(transcricao_usuario):
-                    pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
-                    if pending:
-                        logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
+                    ambiguas = policy_engine.has_ambiguous_pending(session_id=sessao, user_id=usuario)
+                    if ambiguas:
                         await safe_send_json({
-                            "tipo": "acao_aprovada",
-                            "origem": "voz",
-                            "action_id": pending.action_id,
-                            "tool_name": pending.tool_name,
-                            "mensagem": f"Ação '{pending.tool_name}' autorizada por comando de voz!"
+                            "tipo": "confirmacao_ambigua",
+                            "pendentes": [a.action_id for a in ambiguas],
+                            "mensagem": "Múltiplas ações pendentes nesta sessão. Confirme explicitamente pelo ID.",
                         })
-                        fila.send_content(types.Content(
-                            role="user",
-                            parts=[types.Part(text=f"O usuário confirmou expressamente por voz: 'sim'. Execute a ferramenta '{pending.tool_name}' agora.")]
-                        ))
+                    else:
+                        pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
+                        if pending:
+                            logger.info("Ação pendente %s (%s) aprovada por COMANDO DE VOZ no Live!", pending.action_id, pending.tool_name)
+                            await safe_send_json({
+                                "tipo": "acao_aprovada",
+                                "origem": "voz",
+                                "action_id": pending.action_id,
+                                "tool_name": pending.tool_name,
+                                "mensagem": f"Ação '{pending.tool_name}' autorizada por comando de voz!"
+                            })
+                            fila.send_content(types.Content(
+                                role="user",
+                                parts=[types.Part(text=f"O usuário confirmou expressamente por voz: 'sim'. Execute a ferramenta '{pending.tool_name}' agora.")]
+                            ))
             if evento.output_transcription and evento.output_transcription.text:
                 await safe_send_json(
                     {"tipo": "texto", "texto": evento.output_transcription.text}

@@ -388,16 +388,24 @@ async def websocket_live_endpoint(websocket: WebSocket):
                             })
                             # Aprovação por comando de voz no WebSocket nativo (parser único de live_protocolo)
                             if palavra_confirma(texto):
-                                for cid, fut in list(pending_confirmations.items()):
-                                    if not fut.done():
-                                        fut.set_result(True)
-                                        logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", texto)
-                                        record_event("user_confirmed_via_voice", {"text": texto})
-                                        await safe_send_json({
-                                            "type": "policy_verbal_confirmation_approved",
-                                            "call_id": cid,
-                                            "text": texto
-                                        })
+                                ativas = [(cid, fut) for cid, fut in list(pending_confirmations.items()) if not fut.done()]
+                                if len(ativas) == 1:
+                                    cid, fut = ativas[0]
+                                    fut.set_result(True)
+                                    logger.info("✅ [POLICY CONFIRMED BY VOICE]: '%s'", texto)
+                                    record_event("user_confirmed_via_voice", {"text": texto})
+                                    await safe_send_json({
+                                        "type": "policy_verbal_confirmation_approved",
+                                        "call_id": cid,
+                                        "text": texto
+                                    })
+                                elif len(ativas) > 1:
+                                    logger.warning("Ambiguidade no Live: %d confirmações pendentes. Exigindo aprovação explícita por ID.", len(ativas))
+                                    await safe_send_json({
+                                        "type": "policy_confirmation_ambiguous",
+                                        "call_ids": [cid for cid, _ in ativas],
+                                        "message": "Múltiplas ações aguardando confirmação. Por segurança, confirme individualmente no painel."
+                                    })
                         except Exception:
                             pass
 
@@ -541,18 +549,27 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     # Se houver autorização pendente, palavras de confirmação/rejeição resolvem imediatamente
                                     if pending_confirmations:
                                         txt_lower = user_text.lower().strip()
+                                        ativas = [(cid, fut) for cid, fut in list(pending_confirmations.items()) if not fut.done()]
                                         if palavra_confirma(user_text):
-                                            for cid, fut in list(pending_confirmations.items()):
-                                                if not fut.done():
-                                                    fut.set_result(True)
-                                            logger.info(f"✅ [POLICY CONFIRMED BY TEXT]: '{user_text}'")
-                                            record_event("user_confirmed_via_text", {"text": user_text})
-                                            if txt_lower in PALAVRAS_SIM:
-                                                continue
+                                            if len(ativas) == 1:
+                                                cid, fut = ativas[0]
+                                                fut.set_result(True)
+                                                logger.info(f"✅ [POLICY CONFIRMED BY TEXT]: '{user_text}'")
+                                                record_event("user_confirmed_via_text", {"text": user_text})
+                                                if txt_lower in PALAVRAS_SIM:
+                                                    continue
+                                            elif len(ativas) > 1:
+                                                logger.warning("Ambiguidade no texto Live: %d confirmações pendentes.", len(ativas))
+                                                await safe_send_json({
+                                                    "type": "policy_confirmation_ambiguous",
+                                                    "call_ids": [cid for cid, _ in ativas],
+                                                    "message": "Múltiplas ações pendentes. Confirme individualmente pelo ID."
+                                                })
+                                                if txt_lower in PALAVRAS_SIM:
+                                                    continue
                                         elif palavra_recusa(user_text):
-                                            for cid, fut in list(pending_confirmations.items()):
-                                                if not fut.done():
-                                                    fut.set_result(False)
+                                            for cid, fut in ativas:
+                                                fut.set_result(False)
                                             logger.info(f"❌ [POLICY DENIED BY TEXT]: '{user_text}'")
                                             record_event("user_denied_via_text", {"text": user_text})
                                             if eh_recusa_pura(user_text):
@@ -659,21 +676,41 @@ async def websocket_live_endpoint(websocket: WebSocket):
                                     res = {"sucesso": False, "erro": "Execução negada: o usuário não confirmou esta ação."}
                                     record_event("policy_denied_by_user", {"name": func_name, "risk": decision.risk_level.value, "args": args})
                                 else:
-                                    executor = system_tools.TOOL_REGISTRY.get(func_name)
+                                    from authority_kernel import authority_kernel
+                                    authority_kernel.sync_executors(system_tools.TOOL_REGISTRY, source="system_tools")
+                                    executor = authority_kernel.get_executor(func_name)
                                     if executor:
-                                        timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
-                                        try:
-                                            if inspect.iscoroutinefunction(executor):
-                                                res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
-                                            elif func_name in _TOOLS_MUTANTES:
-                                                res = executor(**args)
-                                            else:
-                                                with _SEM_TOOL_THREADS:
-                                                    res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
-                                        except asyncio.TimeoutError:
-                                            res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
-                                        except Exception as exc:
-                                            res = {"sucesso": False, "erro": str(exc)}
+                                        cap = authority_kernel.issue_capability(
+                                            tool_name=func_name,
+                                            args=args,
+                                            session_id=sessao_id,
+                                            principal=usuario_id,
+                                            risk_level=decision.risk_level.value,
+                                            action_id=call_id,
+                                        )
+                                        ok_cap, cap_err = authority_kernel.consume_capability(
+                                            cap.capability_id,
+                                            tool_name=func_name,
+                                            args=args,
+                                            session_id=sessao_id,
+                                            principal=usuario_id,
+                                        )
+                                        if not ok_cap:
+                                            res = {"sucesso": False, "erro": cap_err}
+                                        else:
+                                            timeout_ferramenta = 90.0 if func_name in ("antigravity_run_prompt", "deep_research_start") else 30.0
+                                            try:
+                                                if inspect.iscoroutinefunction(executor):
+                                                    res = await asyncio.wait_for(executor(**args), timeout=timeout_ferramenta)
+                                                elif func_name in _TOOLS_MUTANTES:
+                                                    res = executor(**args)
+                                                else:
+                                                    with _SEM_TOOL_THREADS:
+                                                        res = await asyncio.wait_for(asyncio.to_thread(executor, **args), timeout=timeout_ferramenta)
+                                            except asyncio.TimeoutError:
+                                                res = {"sucesso": False, "erro": f"Timeout ({int(timeout_ferramenta)}s) na execução da ferramenta {func_name}."}
+                                            except Exception as exc:
+                                                res = {"sucesso": False, "erro": str(exc)}
                                     else:
                                         res = {"sucesso": False, "erro": f"Ferramenta {func_name} desconhecida."}
 

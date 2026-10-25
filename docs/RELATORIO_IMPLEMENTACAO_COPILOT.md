@@ -28,3 +28,17 @@ Este relatório registra, de forma auditável e contínua, cada ciclo de engenha
   3. Cinco plug-ins (`google_finance`, `smart_home`, `social_feed`, `live_stream`, `ginjutsu_studio`) + `deep_research` + `google_workspace` estão marcados como `simulated: true`.
   4. O VAD do cliente (`gemini-live-widget/widget.js`) usa `vadThreshold = 0.007` e `maxHoldover = 0.8s`, causando disparos prematuros de `audio_stream_end` em ambientes com ruído de ventoinha/GPU.
 - **Status**: `DONE`
+
+---
+
+### Ciclo F1 — Identidade e Autoridade Única (`AuthorityKernel`) (P0)
+- **Tarefas**: `T-F1.1`, `T-F1.2`
+- **Base SHA**: `50cd5b7147c7abc05ef2e4073ae5de117dac4160`
+- **Entregas**:
+  1. Criação de `authority_kernel.py` implementando registro fechado de executores, `CapabilityToken` one-shot com consumo atômico sob `RLock`, rastreamento de `effect_uncertain` para evitar retry cego em falhas externas e `CausalJournalEntry` persistido em `monitoring/logs/authority_journal.jsonl`.
+  2. Endurecimento de `servidor/seguranca.py`: verificação monotônica de TTL em `SESSOES_EMITIDAS`, revogação imediata (`SESSOES_REVOGADAS`) e modo estrito de emissão (`JARVIS_STRICT_SESSION_ISSUANCE` / `exigir_emissao=True`).
+  3. Proteção contra ambiguidade em `policy_engine.py`, `servidor/rotas_agente.py`, `servidor/live_adk.py` e `servidor/live_nativo.py`: quando há 2+ ações pendentes simultaneamente na mesma sessão, confirmações genéricas (`"sim"`) sem `action_id` são recusadas com código `confirmacao_ambigua` (`409`).
+  4. Defesa contra Prompt Injection Indireto (`untrusted_context=True`): bloqueia ferramentas `PRIVILEGED` e exige confirmação explícita em `LOW_WRITE`.
+  5. Suíte adversarial `monitoring/test_authority_kernel.py` (6 cenários adversariais, incluindo corrida de 10 threads simultâneas).
+- **Status**: `DONE`
+

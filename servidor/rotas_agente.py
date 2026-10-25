@@ -72,6 +72,17 @@ async def confirmar_acao(payload: dict, _=Depends(verify_jarvis_token)):
     user_id = session_id
 
     if not action_id:
+        ambiguas = policy_engine.has_ambiguous_pending(session_id=session_id, user_id=user_id)
+        if ambiguas:
+            return JSONResponse(
+                {
+                    "status": "erro",
+                    "codigo": "confirmacao_ambigua",
+                    "mensagem": "Múltiplas ações pendentes nesta sessão. Informe 'id_confirmacao' explicitamente para desambiguar.",
+                    "pendentes": [a.action_id for a in ambiguas],
+                },
+                status_code=409,
+            )
         pending = policy_engine.approve_latest_pending(session_id=session_id, user_id=user_id)
         if pending:
             return {"status": "ok", "action_id": pending.action_id, "tool_name": pending.tool_name}
@@ -223,6 +234,29 @@ async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]
     # Executa apenas no caminho com runner (ferramentas): no branch OmniRoute
     # (text-only) a aprovação ficaria órfã — pendência aprovada sem consumível.
     if palavra_confirma(texto):
+        ambiguas = policy_engine.has_ambiguous_pending(session_id=sessao, user_id=usuario)
+        if ambiguas:
+            logger.warning(
+                "Confirmação genérica '%s' recusada por ambiguidade (%d pendências na sessão '%s').",
+                texto,
+                len(ambiguas),
+                sessao,
+            )
+            return JSONResponse(
+                {
+                    "status": "confirmacao_ambigua",
+                    "codigo": "confirmacao_ambigua",
+                    "mensagem": (
+                        f"Existem {len(ambiguas)} ações pendentes simultaneamente nesta sessão. "
+                        "Por segurança, aprove explicitamente pelo ID da pendência (/api/confirmar_acao)."
+                    ),
+                    "pendentes": [
+                        {"id": a.action_id, "ferramenta": a.tool_name, "argumentos": a.args}
+                        for a in ambiguas
+                    ],
+                },
+                status_code=409,
+            )
         pending = policy_engine.approve_latest_pending(session_id=sessao, user_id=usuario)
         if pending:
             logger.info("Usuário confirmou verbalmente a ação pendente: %s (%s)", pending.action_id, pending.tool_name)
@@ -334,3 +368,27 @@ async def _turno_de_chat(texto: str, sessao: str, caminho_forcado: Optional[str]
         "resposta": resposta.strip(),
         "ferramentas": ferramentas_executadas,
     }
+
+
+@router.get("/api/authority/journal")
+async def consultar_journal_autoridade(
+    sessao: Optional[str] = Query(None),
+    ferramenta: Optional[str] = Query(None),
+    limite: int = Query(50),
+    _=Depends(verify_jarvis_token),
+):
+    """Consulta o journal causal do AuthorityKernel filtrado estritamente pela sessão requisitante."""
+    if not sessao_aceita(sessao):
+        return JSONResponse(
+            {"status": "erro", "mensagem": "Parâmetro 'sessao' explícito e válido é obrigatório."},
+            status_code=403,
+        )
+    from authority_kernel import authority_kernel
+
+    entradas = authority_kernel.get_journal(
+        session_id=sessao,
+        tool_name=ferramenta,
+        limit=max(1, min(int(limite or 50), 200)),
+    )
+    return {"status": "ok", "sessao": sessao, "entradas": entradas}
+
