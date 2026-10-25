@@ -1770,6 +1770,94 @@ async def excluir_ativo_imagem(
     return {"status": "ok", "excluido": asset_id}
 
 
+# ---------------------------------------------------------------------------
+# F10: Rotas de Assistente de Compras e Espaço Informativo de Saúde
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/shopping/compare")
+async def comparar_produtos_shopping(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    query = (payload.get("query") or payload.get("produto") or "").strip()
+    if not query:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'query' obrigatório."}, status_code=400)
+    from compras_e_saude import shopping_assistant
+
+    report = shopping_assistant.compare_offers(
+        query=query,
+        raw_offers=payload.get("offers") or [],
+        currency=str(payload.get("currency") or "BRL"),
+    )
+    return {"status": "ok", "comparison": report.model_dump(mode="json")}
+
+
+@router.post("/api/shopping/checkout")
+async def solicitar_checkout_shopping(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from compras_e_saude import shopping_assistant
+
+    res = shopping_assistant.request_checkout_or_purchase(
+        user_id=sessao,
+        offer_id=str(payload.get("offer_id") or ""),
+        merchant=str(payload.get("merchant") or "Loja"),
+        price=float(payload.get("price") or 0.0),
+        currency=str(payload.get("currency") or "BRL"),
+        source_url=str(payload.get("source_url") or ""),
+    )
+    return res
+
+
+@router.post("/api/health_assistant/opt_in")
+async def configurar_opt_in_saude(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    from compras_e_saude import health_space
+
+    res = health_space.set_opt_in(user_id=sessao, enabled=bool(payload.get("enabled", True)))
+    return {"status": "ok", **res}
+
+
+@router.post("/api/health_assistant/query")
+async def consultar_espaco_saude(payload: dict, _=Depends(verify_jarvis_token)):
+    sessao = payload.get("sessao") or payload.get("session_id")
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=400)
+    question = (payload.get("question") or payload.get("pergunta") or "").strip()
+    if not question:
+        return JSONResponse({"status": "erro", "mensagem": "Campo 'question' obrigatório."}, status_code=400)
+    from compras_e_saude import health_space
+
+    try:
+        res = health_space.query_health_information(
+            user_id=sessao,
+            question=question,
+            sources=payload.get("sources"),
+            requested_clinical_action=payload.get("requested_clinical_action"),
+        )
+    except PermissionError as exc:
+        return JSONResponse({"status": "bloqueado", "mensagem": str(exc)}, status_code=403)
+    return res
+
+
+@router.delete("/api/health_assistant/history")
+async def limpar_historico_saude(
+    sessao: Optional[str] = Query(None),
+    _=Depends(verify_jarvis_token),
+):
+    if not sessao_aceita(sessao):
+        return JSONResponse({"status": "erro", "mensagem": "Sessão inválida."}, status_code=403)
+    from compras_e_saude import health_space
+
+    removidos = health_space.purge_health_data(user_id=sessao)
+    return {"status": "ok", "registros_removidos": removidos}
+
+
+
 
 
 
